@@ -1,0 +1,266 @@
+package main
+
+import (
+	"context"
+	"flag"
+	"fmt"
+	"log/slog"
+	"net"
+	"os"
+	"os/signal"
+	"path/filepath"
+	"runtime"
+	"syscall"
+	"time"
+
+	mresolver "github.com/metacubex/mihomo/component/resolver"
+	"github.com/punchproxy/punch/internal/api"
+	"github.com/punchproxy/punch/internal/assets"
+	"github.com/punchproxy/punch/internal/config"
+	pdns "github.com/punchproxy/punch/internal/dns"
+	"github.com/punchproxy/punch/internal/eventbus"
+	"github.com/punchproxy/punch/internal/relay"
+	"github.com/punchproxy/punch/internal/session"
+	"github.com/punchproxy/punch/internal/tun"
+)
+
+var (
+	version = "dev"
+	dataDir = flag.String("data-dir", "", "override directory that holds punch.db (default: $PUNCH_DATA_DIR or platform-specific path)")
+	debug   = flag.Bool("debug", false, "force debug log level, overriding the stored config")
+	showVer = flag.Bool("version", false, "show version and exit")
+)
+
+func main() {
+	flag.Parse()
+
+	if *showVer {
+		fmt.Printf("punch %s\n", version)
+		os.Exit(0)
+	}
+
+	dir, err := resolveDataDir(*dataDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		fmt.Fprintf(os.Stderr, "error: create data dir %s: %v\n", dir, err)
+		os.Exit(1)
+	}
+	dbPath := filepath.Join(dir, "punch.db")
+
+	st, err := config.Open(dbPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: open store: %v\n", err)
+		os.Exit(1)
+	}
+	defer st.Close()
+
+	// Load configuration into the process-wide config cache.
+	if err := config.Init(st); err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+	cfg, err := config.Snapshot()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Configure logging
+	logLevel := cfg.LogLevel
+	if *debug {
+		logLevel = "debug"
+	}
+	setupLogging(logLevel, cfg.LogFile)
+	slog.Info("Punch starting", "version", version, "data_dir", dir)
+
+	// Initialize event bus
+	bus := eventbus.New()
+
+	// Initialize session manager
+	sessions := session.NewManager(bus, cfg.Sessions.HistoryLimit)
+
+	var selector *relay.Selector
+	var dnsResolver *pdns.ServerResolver
+	directDNSDialContext := func(ctx context.Context, network, address string) (net.Conn, error) {
+		if dnsResolver == nil {
+			return nil, fmt.Errorf("dns resolver is not initialized")
+		}
+		return dnsResolver.DialContext(ctx, network, address)
+	}
+	assetDialContext := func(ctx context.Context, network, address string) (net.Conn, error) {
+		if selector != nil {
+			return selector.DialContext(ctx, network, address)
+		}
+		return directDNSDialContext(ctx, network, address)
+	}
+
+	assetManager, err := assets.New(st, time.Duration(cfg.AssetRefreshInterval)*time.Second, assetDialContext, directDNSDialContext)
+	if err != nil {
+		slog.Error("failed to initialize asset manager", "error", err)
+		os.Exit(1)
+	}
+
+	// Initialize DNS server
+	dnsServer, err := pdns.NewServer(assetManager)
+	if err != nil {
+		slog.Error("failed to create DNS server", "error", err)
+		os.Exit(1)
+	}
+	dnsResolver = pdns.NewServerResolver(dnsServer)
+	mresolver.DefaultResolver = dnsResolver
+	mresolver.ProxyServerHostResolver = dnsResolver
+	mresolver.DirectHostResolver = dnsResolver
+
+	if err := dnsServer.LoadInitialRules(); err != nil {
+		slog.Error("failed to load DNS rules", "error", err)
+		os.Exit(1)
+	}
+
+	// Initialize relay selector
+	selector, err = relay.NewSelector(cfg.Relay, assetManager, directDNSDialContext, st, bus, dnsServer.ResolveRelayDomain)
+	if err != nil {
+		slog.Error("failed to create relay selector", "error", err)
+		os.Exit(1)
+	}
+	bus.Subscribe(eventbus.EventRelayChange, func(eventbus.Event) {
+		assetManager.RetryFailedAsync()
+	})
+
+	// Initialize TUN engine
+	tunEngine := tun.NewEngine(cfg.TUN, dnsServer, selector, sessions, assetManager)
+
+	apiServer := api.NewServer(cfg.API, st, dnsServer, selector, sessions)
+	apiServer.SetVersion(version)
+
+	// --- Start all components ---
+
+	// 1. Start DNS server
+	if err := dnsServer.Start(); err != nil {
+		slog.Error("failed to start DNS server", "error", err)
+		os.Exit(1)
+	}
+
+	// 2. Start relay selector (health checks)
+	selector.Start()
+
+	// 3. Start TUN engine
+	if err := tunEngine.Start(); err != nil {
+		slog.Error("failed to start TUN engine", "error", err)
+		selector.Stop()
+		if stopErr := dnsServer.Stop(); stopErr != nil {
+			slog.Error("DNS shutdown error", "error", stopErr)
+		}
+		os.Exit(1)
+	}
+
+	// 4. Start API
+	if err := apiServer.Start(); err != nil {
+		slog.Error("failed to start API", "error", err)
+		os.Exit(1)
+	}
+
+	assetManager.MarkReady()
+	slog.Info("Punch is ready",
+		"dns", cfg.DNS.Listen,
+		"api", cfg.API.Listen,
+	)
+
+	// Wait for shutdown signal
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+
+	// Also handle SIGHUP for config reload
+	reloadCh := make(chan os.Signal, 1)
+	signal.Notify(reloadCh, syscall.SIGHUP)
+
+	for {
+		select {
+		case sig := <-sigCh:
+			slog.Info("received signal, shutting down", "signal", sig)
+			goto shutdown
+		case <-reloadCh:
+			slog.Info("received SIGHUP, reloading config")
+			// TODO: implement hot reload of rule lists
+		}
+	}
+
+shutdown:
+	// Graceful shutdown in reverse order
+	slog.Info("shutting down...")
+
+	if err := apiServer.Stop(); err != nil {
+		slog.Error("API shutdown error", "error", err)
+	}
+	if err := tunEngine.Stop(); err != nil {
+		slog.Error("TUN shutdown error", "error", err)
+	}
+	selector.Stop()
+	if err := dnsServer.Stop(); err != nil {
+		slog.Error("DNS shutdown error", "error", err)
+	}
+
+	slog.Info("Punch stopped")
+}
+
+// resolveDataDir picks the directory that will hold punch.db. Precedence:
+// explicit flag, $PUNCH_DATA_DIR, platform default.
+func resolveDataDir(flagVal string) (string, error) {
+	if flagVal != "" {
+		return filepath.Abs(flagVal)
+	}
+	if env := os.Getenv("PUNCH_DATA_DIR"); env != "" {
+		return filepath.Abs(env)
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("determine home dir: %w", err)
+	}
+	switch runtime.GOOS {
+	case "darwin":
+		return filepath.Join(home, "Library", "Application Support", "punch"), nil
+	case "windows":
+		if base := os.Getenv("APPDATA"); base != "" {
+			return filepath.Join(base, "punch"), nil
+		}
+		return filepath.Join(home, "AppData", "Roaming", "punch"), nil
+	default:
+		if base := os.Getenv("XDG_CONFIG_HOME"); base != "" {
+			return filepath.Join(base, "punch"), nil
+		}
+		return filepath.Join(home, ".config", "punch"), nil
+	}
+}
+
+func setupLogging(level, file string) {
+	var logLevel slog.Level
+	switch level {
+	case "debug":
+		logLevel = slog.LevelDebug
+	case "warn":
+		logLevel = slog.LevelWarn
+	case "error":
+		logLevel = slog.LevelError
+	default:
+		logLevel = slog.LevelInfo
+	}
+
+	opts := &slog.HandlerOptions{Level: logLevel}
+
+	var handler slog.Handler
+	if file != "" {
+		f, err := os.OpenFile(file, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "warning: cannot open log file %s: %v\n", file, err)
+			handler = slog.NewTextHandler(os.Stderr, opts)
+		} else {
+			handler = slog.NewTextHandler(f, opts)
+		}
+	} else {
+		handler = slog.NewTextHandler(os.Stderr, opts)
+	}
+
+	slog.SetDefault(slog.New(handler))
+}
