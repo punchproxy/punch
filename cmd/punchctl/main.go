@@ -11,6 +11,8 @@ import (
 
 const defaultAPIAddr = "http://127.0.0.1:28854"
 
+var version = "dev"
+
 func main() {
 	cmd := newRootCommand(commandConfig{
 		out:    os.Stdout,
@@ -31,7 +33,9 @@ func newRootCommand(cfg commandConfig) *cobra.Command {
 		Short:         "Interact with a Punch server",
 		SilenceUsage:  true,
 		SilenceErrors: true,
+		Version:       version,
 	}
+	root.SetVersionTemplate("punchctl {{.Version}}\n")
 	root.SetOut(cfg.out)
 	root.SetErr(cfg.errOut)
 	root.PersistentFlags().StringVar(&cfg.addr, "addr", cfg.addr, "Punch API address")

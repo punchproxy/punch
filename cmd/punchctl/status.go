@@ -91,7 +91,8 @@ func fetchStatus(ctx context.Context, cfg commandConfig) (statusInfo, error) {
 
 func writeStatus(w io.Writer, status statusInfo) error {
 	fmt.Fprintln(w, "General:")
-	fmt.Fprintf(w, "  Version:       %s\n", formatOptional(status.General.Version))
+	fmt.Fprintf(w, "  Client Version: %s\n", formatOptional(version))
+	fmt.Fprintf(w, "  Server Version: %s\n", formatOptional(status.General.Version))
 	fmt.Fprintf(w, "  Architecture:  %s\n", formatOptional(status.General.Architecture))
 	fmt.Fprintf(w, "  Uptime:        %s\n", formatDurationSeconds(status.General.UptimeSeconds))
 	fmt.Fprintf(w, "  Started:       %s\n", formatTime(status.General.StartedAt))
