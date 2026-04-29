@@ -5,11 +5,10 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/metacubex/mihomo"><img alt="Use at your own risk" src="https://img.shields.io/badge/vibeshit-100%25-FF6B35?style=for-the-badge"></a>
-  <a href="https://github.com/punchproxy/punch/actions/workflows/build.yaml"><img alt="Build" src="https://img.shields.io/github/actions/workflow/status/punchproxy/punch/build.yaml?branch=main&style=for-the-badge&label=build"></a>
+  <img alt="Use at your own risk" src="https://img.shields.io/badge/vibeshit-100%25-ebc034?style=for-the-badge">
   <a href="https://github.com/punchproxy/punch"><img alt="Go version" src="https://img.shields.io/badge/go-1.25+-00ADD8?style=for-the-badge&logo=go&logoColor=white"></a>
   <a href="https://github.com/spf13/cobra"><img alt="CLI" src="https://img.shields.io/badge/cli-cobra-6E40C9?style=for-the-badge"></a>
-  <a href="https://github.com/metacubex/mihomo"><img alt="Mihomo powered" src="https://img.shields.io/badge/relay-mihomo-FF6B35?style=for-the-badge"></a>
+  <a href="https://github.com/metacubex/mihomo"><img alt="Mihomo powered" src="https://img.shields.io/badge/poweredby-mihomo-FF6B35?style=for-the-badge"></a>
 </p>
 
 Punch is a local network proxy daemon designed around three moving pieces:
