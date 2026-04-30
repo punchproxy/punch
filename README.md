@@ -13,7 +13,7 @@
 
 Punch is a local network proxy daemon designed around three moving pieces:
 
-- `punch`, the long-running daemon that starts DNS, TUN, relay selection, session tracking, and the local HTTP API.
+- `punchd`, the long-running daemon that starts DNS, TUN, relay selection, session tracking, and the local HTTP API.
 - `punchctl`, the operator CLI for inspecting and changing a running Punch instance.
 - A SQLite-backed runtime store, seeded with sensible defaults on first launch and updated through the API or CLI.
 
@@ -54,20 +54,20 @@ punchctl -> Punch API :28854 -> config, DNS, relays, sessions, status
 Build both binaries:
 
 ```sh
-go build -o punch ./cmd/punch
+go build -o punchd ./cmd/punchd
 go build -o punchctl ./cmd/punchctl
 ```
 
 Start Punch:
 
 ```sh
-sudo ./punch
+sudo ./punchd
 ```
 
 Punch stores `punch.db` in a platform-specific data directory by default. Override it when developing:
 
 ```sh
-sudo ./punch -data-dir ./data -debug
+sudo ./punchd -data-dir ./data -debug
 ```
 
 Check the daemon from another terminal:
@@ -86,14 +86,14 @@ If the API is listening somewhere else or requires a token:
 ./punchctl --addr http://127.0.0.1:28854 --token "$PUNCH_TOKEN" status
 ```
 
-## punch
+## punchd
 
-`punch` is the runtime daemon. It opens the local store, loads or seeds configuration, starts DNS, starts relay health checking, brings up the TUN engine, then exposes the API.
+`punchd` is the runtime daemon. It opens the local store, loads or seeds configuration, starts DNS, starts relay health checking, brings up the TUN engine, then exposes the API.
 
 ```sh
-./punch -version
-./punch -data-dir ./data
-./punch -debug
+./punchd -version
+./punchd -data-dir ./data
+./punchd -debug
 ```
 
 Default listeners:
@@ -239,7 +239,7 @@ Useful package map:
 
 | Path               | Purpose                                              |
 | ------------------ | ---------------------------------------------------- |
-| `cmd/punch`        | Daemon entry point                                   |
+| `cmd/punchd`       | Daemon entry point                                   |
 | `cmd/punchctl`     | Cobra CLI                                            |
 | `internal/api`     | Local HTTP API                                       |
 | `internal/config`  | SQLite-backed runtime config                         |

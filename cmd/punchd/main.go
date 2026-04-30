@@ -35,7 +35,7 @@ func main() {
 	flag.Parse()
 
 	if *showVer {
-		fmt.Printf("punch %s\n", version)
+		fmt.Printf("punchd %s\n", version)
 		os.Exit(0)
 	}
 

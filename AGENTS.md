@@ -2,15 +2,15 @@
 
 ## Project Structure & Module Organization
 
-This is a Go module (`github.com/punchproxy/punch`) for a local proxy daemon and CLI. Entry points live under `cmd/`: `cmd/punch` builds the daemon and `cmd/punchctl` builds the operator CLI. Core packages are in `internal/`: `api`, `config`, `dns`, `dnsrule`, `fakeip`, `relay`, `session`, and `tun` cover the API, SQLite config, DNS, relay selection, sessions, and platform networking. Tests sit beside the packages they cover as `*_test.go` files. Repository documentation starts in `README.md`.
+This is a Go module (`github.com/punchproxy/punch`) for a local proxy daemon and CLI. Entry points live under `cmd/`: `cmd/punchd` builds the daemon and `cmd/punchctl` builds the operator CLI. Core packages are in `internal/`: `api`, `config`, `dns`, `dnsrule`, `fakeip`, `relay`, `session`, and `tun` cover the API, SQLite config, DNS, relay selection, sessions, and platform networking. Tests sit beside the packages they cover as `*_test.go` files. Repository documentation starts in `README.md`.
 
 ## Build, Test, and Development Commands
 
 - `go build ./...` builds every package and catches compile errors across both binaries.
 - `go test ./...` runs the full test suite.
-- `go build -o punch ./cmd/punch` builds the daemon binary.
+- `go build -o punchd ./cmd/punchd` builds the daemon binary.
 - `go build -o punchctl ./cmd/punchctl` builds the CLI binary.
-- `sudo ./punch -data-dir ./data -debug` starts a local development daemon with an explicit data directory.
+- `sudo ./punchd -data-dir ./data -debug` starts a local development daemon with an explicit data directory.
 
 Use `./punchctl status` from a second terminal to inspect a running daemon.
 

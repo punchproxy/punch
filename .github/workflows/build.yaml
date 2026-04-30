@@ -73,13 +73,13 @@ jobs:
           go env
           LDFLAGS="-X main.version=${VERSION}"
 
-          go build -v -ldflags "$LDFLAGS" -o "punch${EXT}" ./cmd/punch
+          go build -v -ldflags "$LDFLAGS" -o "punchd${EXT}" ./cmd/punchd
           go build -v -ldflags "$LDFLAGS" -o "punchctl${EXT}" ./cmd/punchctl
 
           ASSET="punch-${{ matrix.jobs.goos }}-${{ matrix.jobs.output }}-${VERSION}"
 
           mkdir "$ASSET"
-          cp "punch${EXT}" "$ASSET/"
+          cp "punchd${EXT}" "$ASSET/"
           cp "punchctl${EXT}" "$ASSET/"
 
           if [ "${{ matrix.jobs.goos }}" = "windows" ]; then
