@@ -13,6 +13,7 @@ type cacheEntry struct {
 	name     string
 	qtype    string
 	msg      *dns.Msg
+	upstream string
 	expireAt time.Time
 	storedAt time.Time
 }
@@ -21,6 +22,7 @@ type CacheSnapshotEntry struct {
 	Name          string    `json:"name"`
 	QType         string    `json:"qtype"`
 	Result        string    `json:"result"`
+	Upstream      string    `json:"upstream,omitempty"`
 	StoredAt      time.Time `json:"stored_at"`
 	ExpiresAt     time.Time `json:"expires_at"`
 	LazyExpiresAt time.Time `json:"lazy_expires_at"`
@@ -123,8 +125,8 @@ func (c *Cache) Get(name string, qtype uint16) (msg *dns.Msg, stale bool) {
 	return cloned, false
 }
 
-// Put stores a DNS response in the cache.
-func (c *Cache) Put(name string, qtype uint16, msg *dns.Msg) {
+// Put stores a DNS response and the upstream that produced it in the cache.
+func (c *Cache) Put(name string, qtype uint16, msg *dns.Msg, upstream string) {
 	if msg == nil || len(msg.Answer) == 0 {
 		return
 	}
@@ -151,6 +153,7 @@ func (c *Cache) Put(name string, qtype uint16, msg *dns.Msg) {
 		name:     name,
 		qtype:    dns.TypeToString[qtype],
 		msg:      msg.Copy(),
+		upstream: upstream,
 		expireAt: now.Add(ttl),
 		storedAt: now,
 	}
@@ -237,6 +240,7 @@ func (c *Cache) entrySnapshotLocked(entry *cacheEntry, now time.Time) CacheSnaps
 		Name:          entry.name,
 		QType:         entry.qtype,
 		Result:        summarizeCacheResult(entry.msg),
+		Upstream:      entry.upstream,
 		StoredAt:      entry.storedAt,
 		ExpiresAt:     entry.expireAt,
 		LazyExpiresAt: entry.expireAt.Add(c.lazyTTL),

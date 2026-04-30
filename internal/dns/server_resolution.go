@@ -29,7 +29,7 @@ func (s *Server) resolveAndClassifyWithResolver(ctx context.Context, r *dns.Msg,
 		return nil, DecisionIgnore, "resolve-failed", ""
 	}
 
-	s.cache.Put(domain, qtype, resp)
+	s.cache.Put(domain, qtype, resp, upstream)
 	return s.processUpstreamResponse(r, domain, qtype, disableFakeIP, resp, upstream)
 }
 
@@ -47,7 +47,7 @@ func (s *Server) resolveAndCacheWithResolver(ctx context.Context, r *dns.Msg, do
 
 	resp, upstream := s.resolveUpstreamWithResolver(ctx, r, resolverOverride)
 	if resp != nil {
-		s.cache.Put(domain, qtype, resp)
+		s.cache.Put(domain, qtype, resp, upstream)
 	}
 	return resp, upstream
 }
@@ -120,11 +120,11 @@ func (s *Server) refreshCacheWithResolver(domain string, qtype uint16, r *dns.Ms
 	if err != nil {
 		return
 	}
-	s.cache.Put(domain, qtype, result.Msg)
+	s.cache.Put(domain, qtype, result.Msg, result.Upstream)
 }
 
 func (s *Server) FakeIPPool() *fakeip.Pool { return s.fakeIPPool }
-func (s *Server) Cache() *Cache           { return s.cache }
+func (s *Server) Cache() *Cache            { return s.cache }
 
 func (s *Server) UpstreamStats() []UpstreamStats {
 	return s.currentResolver().UpstreamStats()

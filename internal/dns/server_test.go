@@ -60,7 +60,7 @@ func TestServerStaleCacheRefreshDoesNotStampede(t *testing.T) {
 	defer closeUpstream()
 
 	cache := NewCache(10, 0, 60)
-	cache.Put("stale.example", mdns.TypeA, cacheTestAResponse("stale.example.", "203.0.113.1", 60))
+	cache.Put("stale.example", mdns.TypeA, cacheTestAResponse("stale.example.", "203.0.113.1", 60), "cache-test")
 	setCacheEntryTimes(t, cache, "stale.example", mdns.TypeA, time.Now().Add(-2*time.Second), time.Now().Add(-1*time.Second))
 
 	server := &Server{

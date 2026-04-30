@@ -16,6 +16,7 @@ type cacheEntry struct {
 	Name          string    `json:"name"`
 	QType         string    `json:"qtype"`
 	Result        string    `json:"result"`
+	Upstream      string    `json:"upstream"`
 	StoredAt      time.Time `json:"stored_at"`
 	ExpiresAt     time.Time `json:"expires_at"`
 	LazyExpiresAt time.Time `json:"lazy_expires_at"`
@@ -28,6 +29,7 @@ type cacheRow struct {
 	State         string `json:"state" yaml:"state"`
 	TTL           string `json:"ttl" yaml:"ttl"`
 	Result        string `json:"result,omitempty" yaml:"result,omitempty"`
+	Upstream      string `json:"upstream,omitempty" yaml:"upstream,omitempty"`
 	StoredAt      string `json:"stored_at,omitempty" yaml:"stored_at,omitempty"`
 	ExpiresAt     string `json:"expires_at,omitempty" yaml:"expires_at,omitempty"`
 	LazyExpiresAt string `json:"lazy_expires_at,omitempty" yaml:"lazy_expires_at,omitempty"`
@@ -106,8 +108,8 @@ func writeCache(w io.Writer, entries []cacheEntry, flags listFlags) error {
 		flags.output = ""
 	}
 	printer, err := klo.PrinterFromFlag(flags.output, &klo.Specs{
-		DefaultColumnSpec: "NAME:{.Name},QTYPE:{.QType},STATE:{.State},TTL:{.TTL}",
-		WideColumnSpec:    "NAME:{.Name},QTYPE:{.QType},STATE:{.State},TTL:{.TTL},RESULT:{.Result},STORED:{.StoredAt},EXPIRES:{.ExpiresAt},LAZY-EXPIRES:{.LazyExpiresAt}",
+		DefaultColumnSpec: "NAME:{.Name},QTYPE:{.QType},STATE:{.State},TTL:{.TTL},UPSTREAM:{.Upstream}",
+		WideColumnSpec:    "NAME:{.Name},QTYPE:{.QType},STATE:{.State},TTL:{.TTL},RESULT:{.Result},UPSTREAM:{.Upstream},STORED:{.StoredAt},EXPIRES:{.ExpiresAt},LAZY-EXPIRES:{.LazyExpiresAt}",
 		GoTemplateArg:     flags.template,
 	})
 	if err != nil {
@@ -130,6 +132,7 @@ func cacheRows(entries []cacheEntry) []cacheRow {
 			State:         entry.State,
 			TTL:           formatRemaining(now, entry.ExpiresAt),
 			Result:        formatOptional(entry.Result),
+			Upstream:      formatOptional(entry.Upstream),
 			StoredAt:      formatTime(entry.StoredAt),
 			ExpiresAt:     formatTime(entry.ExpiresAt),
 			LazyExpiresAt: formatTime(entry.LazyExpiresAt),

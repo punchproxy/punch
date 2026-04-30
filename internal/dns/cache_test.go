@@ -12,7 +12,7 @@ func TestCacheGetReturnsCopyWithAdjustedTTL(t *testing.T) {
 	cache := NewCache(2, 0, 60)
 	msg := cacheTestAResponse("example.com.", "203.0.113.1", 120)
 
-	cache.Put("example.com", mdns.TypeA, msg)
+	cache.Put("example.com", mdns.TypeA, msg, "")
 	msg.Answer[0].Header().Ttl = 1
 
 	backdateCacheEntry(t, cache, "example.com", mdns.TypeA, 10*time.Second, 50*time.Second)
@@ -43,12 +43,12 @@ func TestCacheEvictsLeastRecentlyUsed(t *testing.T) {
 		events = append(events, ev)
 	})
 
-	cache.Put("a.example", mdns.TypeA, cacheTestAResponse("a.example.", "203.0.113.1", 60))
-	cache.Put("b.example", mdns.TypeA, cacheTestAResponse("b.example.", "203.0.113.2", 60))
+	cache.Put("a.example", mdns.TypeA, cacheTestAResponse("a.example.", "203.0.113.1", 60), "")
+	cache.Put("b.example", mdns.TypeA, cacheTestAResponse("b.example.", "203.0.113.2", 60), "")
 	if _, stale := cache.Get("a.example", mdns.TypeA); stale {
 		t.Fatal("a.example unexpectedly stale")
 	}
-	cache.Put("c.example", mdns.TypeA, cacheTestAResponse("c.example.", "203.0.113.3", 60))
+	cache.Put("c.example", mdns.TypeA, cacheTestAResponse("c.example.", "203.0.113.3", 60), "")
 
 	if got, _ := cache.Get("b.example", mdns.TypeA); got != nil {
 		t.Fatal("b.example remained in cache after LRU eviction")
@@ -73,6 +73,19 @@ func TestCacheEvictsLeastRecentlyUsed(t *testing.T) {
 	}
 }
 
+func TestCacheSnapshotIncludesUpstream(t *testing.T) {
+	cache := NewCache(2, 0, 60)
+	cache.Put("example.com", mdns.TypeA, cacheTestAResponse("example.com.", "203.0.113.1", 60), "https://dns.example/dns-query")
+
+	snapshot := cache.Snapshot()
+	if len(snapshot) != 1 {
+		t.Fatalf("Snapshot() length = %d, want 1", len(snapshot))
+	}
+	if snapshot[0].Upstream != "https://dns.example/dns-query" {
+		t.Fatalf("Snapshot()[0].Upstream = %q, want upstream URL", snapshot[0].Upstream)
+	}
+}
+
 func TestCacheStaleAndLazyExpiry(t *testing.T) {
 	cache := NewCache(2, 0, 10)
 	var events []CacheEvent
@@ -80,7 +93,7 @@ func TestCacheStaleAndLazyExpiry(t *testing.T) {
 		events = append(events, ev)
 	})
 
-	cache.Put("stale.example", mdns.TypeA, cacheTestAResponse("stale.example.", "203.0.113.10", 60))
+	cache.Put("stale.example", mdns.TypeA, cacheTestAResponse("stale.example.", "203.0.113.10", 60), "")
 	setCacheEntryTimes(t, cache, "stale.example", mdns.TypeA, time.Now().Add(-2*time.Second), time.Now().Add(-1*time.Second))
 
 	got, stale := cache.Get("stale.example", mdns.TypeA)
@@ -111,7 +124,7 @@ func TestCacheSnapshotPrunesExpiredEntries(t *testing.T) {
 		events = append(events, ev)
 	})
 
-	cache.Put("expired.example", mdns.TypeA, cacheTestAResponse("expired.example.", "203.0.113.20", 60))
+	cache.Put("expired.example", mdns.TypeA, cacheTestAResponse("expired.example.", "203.0.113.20", 60), "")
 	setCacheEntryTimes(t, cache, "expired.example", mdns.TypeA, time.Now().Add(-3*time.Second), time.Now().Add(-2*time.Second))
 
 	snapshot := cache.Snapshot()
@@ -133,7 +146,7 @@ func TestCacheFlushClearsEntriesAndPublishesFlush(t *testing.T) {
 		events = append(events, ev)
 	})
 
-	cache.Put("a.example", mdns.TypeA, cacheTestAResponse("a.example.", "203.0.113.1", 60))
+	cache.Put("a.example", mdns.TypeA, cacheTestAResponse("a.example.", "203.0.113.1", 60), "")
 	cache.Flush()
 
 	if cache.Size() != 0 {

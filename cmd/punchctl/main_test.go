@@ -442,6 +442,7 @@ func TestDNSCacheCommand(t *testing.T) {
 			Name:          "example.com.",
 			QType:         "A",
 			Result:        "93.184.216.34",
+			Upstream:      "https://dns.example/dns-query",
 			State:         "live",
 			StoredAt:      now.Add(-30 * time.Second),
 			ExpiresAt:     now.Add(60 * time.Second),
@@ -462,7 +463,7 @@ func TestDNSCacheCommand(t *testing.T) {
 		t.Fatalf("Execute() error = %v", err)
 	}
 	text := out.String()
-	for _, want := range []string{"NAME", "QTYPE", "STATE", "TTL", "example.com.", "live"} {
+	for _, want := range []string{"NAME", "QTYPE", "STATE", "TTL", "UPSTREAM", "example.com.", "live", "https://dns.example/dns-query"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("output missing %q:\n%s", want, text)
 		}
@@ -479,6 +480,7 @@ func TestDNSCacheCommandWideShowsResult(t *testing.T) {
 			Name:      "wide.example.",
 			QType:     "AAAA",
 			Result:    "2606:2800::1",
+			Upstream:  "https://dns.example/dns-query",
 			State:     "stale",
 			StoredAt:  now.Add(-time.Hour),
 			ExpiresAt: now.Add(-time.Minute),
@@ -498,7 +500,7 @@ func TestDNSCacheCommandWideShowsResult(t *testing.T) {
 		t.Fatalf("Execute() error = %v", err)
 	}
 	text := out.String()
-	for _, want := range []string{"RESULT", "EXPIRES", "2606:2800::1", "stale", "expired"} {
+	for _, want := range []string{"RESULT", "UPSTREAM", "EXPIRES", "2606:2800::1", "https://dns.example/dns-query", "stale", "expired"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("wide output missing %q:\n%s", want, text)
 		}
