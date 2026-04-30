@@ -44,6 +44,7 @@ func newRootCommand(cfg commandConfig) *cobra.Command {
 
 	root.AddCommand(newConfigCommand(&cfg))
 	root.AddCommand(newStatusCommand(&cfg))
+	root.AddCommand(newSystemCommand(&cfg))
 	root.AddCommand(newDNSCommand(&cfg))
 	root.AddCommand(newRelayGroupsCommand(&cfg))
 	root.AddCommand(newRelaysCommand(&cfg))

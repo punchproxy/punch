@@ -15,6 +15,7 @@ import (
 	"github.com/punchproxy/punch/internal/dnsrule"
 	"github.com/punchproxy/punch/internal/relay"
 	"github.com/punchproxy/punch/internal/session"
+	"github.com/punchproxy/punch/internal/tun"
 )
 
 type Server struct {
@@ -24,6 +25,7 @@ type Server struct {
 	dns        *pdns.Server
 	selector   *relay.Selector
 	sessions   *session.Manager
+	tun        *tun.Engine
 	startedAt  time.Time
 	version    string
 }
@@ -38,6 +40,10 @@ func NewServer(cfg config.API, st *config.Store, dns *pdns.Server, selector *rel
 		startedAt: time.Now(),
 		version:   "dev",
 	}
+}
+
+func (s *Server) SetTUNEngine(engine *tun.Engine) {
+	s.tun = engine
 }
 
 func (s *Server) SetVersion(version string) {
@@ -58,6 +64,7 @@ func (s *Server) Start() error {
 
 	r.Route("/api", func(r chi.Router) {
 		r.Get("/status", s.handleStatus)
+		r.Get("/system", s.handleSystem)
 		r.Get("/config", s.handleConfig)
 		r.Put("/config/{key}", s.handleSetConfigValue)
 		r.Get("/dns/queries/stream", s.handleDNSQueryStream)

@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/netip"
 	"strings"
+	"sync"
 
 	"github.com/metacubex/mihomo/constant"
 	LC "github.com/metacubex/mihomo/listener/config"
@@ -18,6 +19,8 @@ import (
 
 // Engine manages the TUN interface and proxies traffic through it.
 type Engine struct {
+	mu sync.RWMutex
+
 	cfg       config.TUN
 	dnsServer *pdns.Server
 	selector  *relay.Selector
@@ -29,8 +32,15 @@ type Engine struct {
 	tunAddress   netip.Prefix
 	routeAddress []netip.Prefix
 	ifaceName    string
-	restoreDNS   func() error
+	dnsOverride  *systemDNSOverride
 	started      bool
+}
+
+type SystemInfo struct {
+	TUNInterfaceName string          `json:"tun_interface_name"`
+	TUNAddress       string          `json:"tun_address"`
+	ExtraTUNRoutes   []string        `json:"extra_tun_routes"`
+	SystemDNS        []SystemDNSInfo `json:"system_dns"`
 }
 
 func NewEngine(cfg config.TUN, dns *pdns.Server, sel *relay.Selector, sess *session.Manager, assetManager *assets.Manager) *Engine {
@@ -44,11 +54,14 @@ func NewEngine(cfg config.TUN, dns *pdns.Server, sel *relay.Selector, sess *sess
 }
 
 func (e *Engine) Start() error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
 	if e.started {
 		return nil
 	}
 
-	opts, fakeRange, err := e.buildTunOptions()
+	opts, fakeRange, dnsServerAddress, err := e.buildTunOptions()
 	if err != nil {
 		return err
 	}
@@ -88,12 +101,12 @@ func (e *Engine) Start() error {
 		e.ifaceName = ""
 		return fmt.Errorf("configure interface routes: %w", err)
 	}
-	restoreDNS, err := overrideSystemDNS(e.tunAddress.Addr().String(), e.ifaceName)
+	dnsOverride, err := overrideSystemDNS(dnsServerAddress.String(), e.ifaceName)
 	if err != nil {
-		slog.Warn("failed to override system DNS", "dns", e.tunAddress.Addr().String(), "interface", e.ifaceName, "error", err)
-	} else if restoreDNS != nil {
-		e.restoreDNS = restoreDNS
-		slog.Info("system DNS overridden", "dns", e.tunAddress.Addr().String(), "interface", e.ifaceName)
+		slog.Warn("failed to override system DNS", "dns", dnsServerAddress.String(), "interface", e.ifaceName, "error", err)
+	} else if dnsOverride != nil {
+		e.dnsOverride = dnsOverride
+		slog.Info("system DNS overridden", "dns", dnsServerAddress.String(), "interface", e.ifaceName)
 	}
 	e.started = true
 
@@ -107,13 +120,16 @@ func (e *Engine) Start() error {
 }
 
 func (e *Engine) Stop() error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
 	if !e.started {
 		return nil
 	}
 
 	var firstErr error
-	if e.restoreDNS != nil {
-		if err := e.restoreDNS(); err != nil {
+	if e.dnsOverride != nil {
+		if err := e.dnsOverride.StopAndRestore(); err != nil {
 			slog.Warn("failed to restore system DNS", "error", err)
 			if firstErr == nil {
 				firstErr = err
@@ -139,7 +155,7 @@ func (e *Engine) Stop() error {
 	e.tunAddress = netip.Prefix{}
 	e.routeAddress = nil
 	e.ifaceName = ""
-	e.restoreDNS = nil
+	e.dnsOverride = nil
 	e.started = false
 	slog.Info("TUN engine stopped")
 	return firstErr
@@ -147,14 +163,55 @@ func (e *Engine) Stop() error {
 
 // IsRunning returns whether the TUN engine is currently active.
 func (e *Engine) IsRunning() bool {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
 	return e.started
 }
 
-func (e *Engine) buildTunOptions() (LC.Tun, netip.Prefix, error) {
+func (e *Engine) SystemInfo() SystemInfo {
+	e.mu.RLock()
+	ifaceName := e.ifaceName
+	tunAddress := ""
+	if e.tunAddress.IsValid() {
+		tunAddress = e.tunAddress.String()
+	}
+	extraRoutes := append([]string(nil), e.cfg.Routes...)
+	dnsOverride := e.dnsOverride
+	e.mu.RUnlock()
+
+	info := SystemInfo{
+		TUNInterfaceName: ifaceName,
+		TUNAddress:       tunAddress,
+		ExtraTUNRoutes:   extraRoutes,
+	}
+	if dnsOverride != nil {
+		info.SystemDNS = dnsOverride.Snapshot()
+		return info
+	}
+	states, err := currentSystemDNS(ifaceName)
+	if err != nil {
+		slog.Warn("failed to inspect system DNS", "error", err)
+		return info
+	}
+	info.SystemDNS = make([]SystemDNSInfo, 0, len(states))
+	for _, state := range states {
+		info.SystemDNS = append(info.SystemDNS, SystemDNSInfo{
+			Name:    state.Name,
+			Current: cloneStrings(state.Servers),
+		})
+	}
+	return info
+}
+
+func (e *Engine) buildTunOptions() (LC.Tun, netip.Prefix, netip.Addr, error) {
 	fakeRange := e.dnsServer.FakeIPPool().IPNet()
 	tunAddress, err := buildTunAddress(fakeRange)
 	if err != nil {
-		return LC.Tun{}, netip.Prefix{}, err
+		return LC.Tun{}, netip.Prefix{}, netip.Addr{}, err
+	}
+	dnsServerAddress, err := buildDNSServerAddress(fakeRange)
+	if err != nil {
+		return LC.Tun{}, netip.Prefix{}, netip.Addr{}, err
 	}
 
 	routes := []netip.Prefix{fakeRange}
@@ -188,7 +245,7 @@ func (e *Engine) buildTunOptions() (LC.Tun, netip.Prefix, error) {
 		MTU:                 1500,
 		Inet4Address:        []netip.Prefix{tunAddress},
 		RouteAddress:        routes,
-	}, fakeRange, nil
+	}, fakeRange, dnsServerAddress, nil
 }
 
 func buildTunAddress(fakeRange netip.Prefix) (netip.Prefix, error) {
@@ -196,6 +253,17 @@ func buildTunAddress(fakeRange netip.Prefix) (netip.Prefix, error) {
 		return netip.Prefix{}, fmt.Errorf("fake-ip range must be IPv4, got %s", fakeRange)
 	}
 	return netip.PrefixFrom(fakeRange.Addr().Next(), 30), nil
+}
+
+func buildDNSServerAddress(fakeRange netip.Prefix) (netip.Addr, error) {
+	if !fakeRange.Addr().Is4() {
+		return netip.Addr{}, fmt.Errorf("fake-ip range must be IPv4, got %s", fakeRange)
+	}
+	addr := fakeRange.Addr().Next().Next()
+	if !fakeRange.Contains(addr) {
+		return netip.Addr{}, fmt.Errorf("dns server address %s is outside fake-ip range %s", addr, fakeRange)
+	}
+	return addr, nil
 }
 
 func buildCleanupRoutes(routeAddress []netip.Prefix, inet4Address []netip.Prefix) []netip.Prefix {

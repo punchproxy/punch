@@ -8,11 +8,28 @@ import (
 	"strings"
 )
 
-func overrideSystemDNS(serverIP, _ string) (func() error, error) {
+func overrideSystemDNS(serverIP, _ string) (*systemDNSOverride, error) {
 	if _, err := exec.LookPath("networksetup"); err != nil {
 		return nil, fmt.Errorf("networksetup not found: %w", err)
 	}
 
+	states, err := currentSystemDNS("")
+	if err != nil {
+		return nil, err
+	}
+	if len(states) == 0 {
+		return nil, fmt.Errorf("no active network services found")
+	}
+	if err := darwinApplyDNSOverride(states, serverIP); err != nil {
+		return nil, err
+	}
+
+	return newSystemDNSOverride(serverIP, states, func() ([]systemDNSState, error) {
+		return currentSystemDNS("")
+	}, darwinApplyDNSOverride, darwinRestoreDNS), nil
+}
+
+func currentSystemDNS(_ string) ([]systemDNSState, error) {
 	services, err := darwinNetworkServices()
 	if err != nil {
 		return nil, err
@@ -21,43 +38,44 @@ func overrideSystemDNS(serverIP, _ string) (func() error, error) {
 		return nil, fmt.Errorf("no active network services found")
 	}
 
-	snapshots := make([]darwinDNSState, 0, len(services))
+	states := make([]systemDNSState, 0, len(services))
 	for _, service := range services {
 		servers, empty, err := darwinGetDNSServers(service)
 		if err != nil {
 			return nil, fmt.Errorf("get dns servers for %s: %w", service, err)
 		}
-		snapshots = append(snapshots, darwinDNSState{
-			Service: service,
+		states = append(states, systemDNSState{
+			Name:    service,
 			Servers: servers,
 			Empty:   empty,
 		})
-		if out, err := exec.Command("networksetup", "-setdnsservers", service, serverIP).CombinedOutput(); err != nil {
-			return nil, fmt.Errorf("set dns servers for %s: %s: %w", service, strings.TrimSpace(string(out)), err)
-		}
 	}
-
-	return func() error {
-		var firstErr error
-		for _, state := range snapshots {
-			args := []string{"-setdnsservers", state.Service}
-			if state.Empty || len(state.Servers) == 0 {
-				args = append(args, "empty")
-			} else {
-				args = append(args, state.Servers...)
-			}
-			if out, err := exec.Command("networksetup", args...).CombinedOutput(); err != nil && firstErr == nil {
-				firstErr = fmt.Errorf("restore dns servers for %s: %s: %w", state.Service, strings.TrimSpace(string(out)), err)
-			}
-		}
-		return firstErr
-	}, nil
+	return states, nil
 }
 
-type darwinDNSState struct {
-	Service string
-	Servers []string
-	Empty   bool
+func darwinApplyDNSOverride(states []systemDNSState, serverIP string) error {
+	for _, state := range states {
+		if out, err := exec.Command("networksetup", "-setdnsservers", state.Name, serverIP).CombinedOutput(); err != nil {
+			return fmt.Errorf("set dns servers for %s: %s: %w", state.Name, strings.TrimSpace(string(out)), err)
+		}
+	}
+	return nil
+}
+
+func darwinRestoreDNS(states []systemDNSState) error {
+	var firstErr error
+	for _, state := range states {
+		args := []string{"-setdnsservers", state.Name}
+		if state.Empty || len(state.Servers) == 0 {
+			args = append(args, "empty")
+		} else {
+			args = append(args, state.Servers...)
+		}
+		if out, err := exec.Command("networksetup", args...).CombinedOutput(); err != nil && firstErr == nil {
+			firstErr = fmt.Errorf("restore dns servers for %s: %s: %w", state.Name, strings.TrimSpace(string(out)), err)
+		}
+	}
+	return firstErr
 }
 
 func darwinNetworkServices() ([]string, error) {

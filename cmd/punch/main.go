@@ -133,6 +133,7 @@ func main() {
 	tunEngine := tun.NewEngine(cfg.TUN, dnsServer, selector, sessions, assetManager)
 
 	apiServer := api.NewServer(cfg.API, st, dnsServer, selector, sessions)
+	apiServer.SetTUNEngine(tunEngine)
 	apiServer.SetVersion(version)
 
 	// --- Start all components ---
