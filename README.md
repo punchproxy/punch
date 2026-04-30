@@ -207,11 +207,24 @@ Provider files use Mihomo-style proxy entries:
 proxies:
   - name: hk-1
     type: ss
-    server: 203.0.113.10
+    server: hk-1.relay.example
     port: 8388
     cipher: aes-128-gcm
     password: example
+
+  - name: sg-1
+    type: ss
+    server: sg-1.relay.example
+    port: 8388
+    cipher: aes-128-gcm
+    password: example
+
+resolvers:
+  - url: https://hk-resolver.example/dns-query
+    bootstrap: 223.5.5.5
 ```
+
+`resolvers` are an optional field and used only for resolving relay `server` hostnames from the provider.
 
 Do not commit real relay credentials or private subscription URLs.
 
