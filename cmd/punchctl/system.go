@@ -3,17 +3,25 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"strconv"
 	"strings"
+	"text/tabwriter"
+	"time"
 
 	"github.com/spf13/cobra"
 )
 
+var errCtlSystemRouteNotFound = errors.New("system route not found")
+
 type systemInfo struct {
 	TUNInterfaceName string          `json:"tun_interface_name"`
 	TUNAddress       string          `json:"tun_address"`
+	TUNIPv6Address   string          `json:"tun_ipv6_address,omitempty"`
 	ExtraTUNRoutes   []string        `json:"extra_tun_routes"`
 	SystemDNS        []systemDNSInfo `json:"system_dns"`
 }
@@ -24,8 +32,26 @@ type systemDNSInfo struct {
 	OverriddenFrom []string `json:"overridden_from,omitempty"`
 }
 
+type systemRoute struct {
+	Index       int       `json:"index" yaml:"index"`
+	Route       string    `json:"route" yaml:"route"`
+	LastUpdated time.Time `json:"last_updated,omitempty" yaml:"last_updated,omitempty"`
+	NextUpdate  time.Time `json:"next_update,omitempty" yaml:"next_update,omitempty"`
+}
+
+type systemRouteRow struct {
+	Route       string `json:"route" yaml:"route"`
+	LastUpdated string `json:"last_updated,omitempty" yaml:"last_updated,omitempty"`
+	NextUpdate  string `json:"next_update,omitempty" yaml:"next_update,omitempty"`
+}
+
+type systemRoutePayload struct {
+	Route string `json:"route"`
+	Index *int   `json:"index,omitempty"`
+}
+
 func newSystemCommand(cfg *commandConfig) *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "system",
 		Short: "Show system network configuration",
 		Args:  cobra.NoArgs,
@@ -37,6 +63,8 @@ func newSystemCommand(cfg *commandConfig) *cobra.Command {
 			return writeSystem(c.OutOrStdout(), info)
 		},
 	}
+	cmd.AddCommand(newSystemRoutesCommand(cfg))
+	return cmd
 }
 
 func fetchSystem(ctx context.Context, cfg commandConfig) (systemInfo, error) {
@@ -62,6 +90,9 @@ func writeSystem(w io.Writer, info systemInfo) error {
 	fmt.Fprintln(w, "TUN:")
 	fmt.Fprintf(w, "  Interface:    %s\n", formatOptional(info.TUNInterfaceName))
 	fmt.Fprintf(w, "  Address:      %s\n", formatOptional(info.TUNAddress))
+	if strings.TrimSpace(info.TUNIPv6Address) != "" {
+		fmt.Fprintf(w, "  IPv6 Address: %s\n", info.TUNIPv6Address)
+	}
 	fmt.Fprintf(w, "  Extra Routes: %s\n", formatStringList(info.ExtraTUNRoutes))
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "System DNS:")
@@ -91,4 +122,204 @@ func formatStringList(values []string) string {
 		return "-"
 	}
 	return strings.Join(clean, ", ")
+}
+
+func newSystemRoutesCommand(cfg *commandConfig) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "routes",
+		Short: "Manage TUN extra routes",
+		Args:  cobra.NoArgs,
+		RunE: func(c *cobra.Command, args []string) error {
+			routes, err := fetchSystemRoutes(c.Context(), *cfg)
+			if err != nil {
+				return err
+			}
+			return writeSystemRoutes(c.OutOrStdout(), routes)
+		},
+	}
+	cmd.AddCommand(newSystemRouteCreateCommand(cfg))
+	cmd.AddCommand(newSystemRouteDeleteCommand(cfg))
+	cmd.AddCommand(newSystemRouteRefreshCommand(cfg))
+	return cmd
+}
+
+func newSystemRouteCreateCommand(cfg *commandConfig) *cobra.Command {
+	var index int
+	cmd := &cobra.Command{
+		Use:   "create ROUTE",
+		Short: "Create a TUN extra route",
+		Long: `Create a TUN extra route.
+
+ROUTE is a CIDR such as "1.1.1.0/24" or a URL/file source containing CIDRs.
+Use --index to insert at a specific position; defaults to appending at the end.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(c *cobra.Command, args []string) error {
+			payload := systemRoutePayload{Route: args[0]}
+			if c.Flags().Changed("index") {
+				idx := index
+				payload.Index = &idx
+			}
+			route, err := createSystemRoute(c.Context(), *cfg, payload)
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(c.OutOrStdout(), "route %q created\n", route)
+			return nil
+		},
+	}
+	cmd.Flags().IntVar(&index, "index", 0, "position to insert at (0-based)")
+	return cmd
+}
+
+func newSystemRouteDeleteCommand(cfg *commandConfig) *cobra.Command {
+	return &cobra.Command{
+		Use:   "delete INDEX|ROUTE",
+		Short: "Delete a TUN extra route",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(c *cobra.Command, args []string) error {
+			target := args[0]
+			if err := deleteSystemRoute(c.Context(), *cfg, target); err != nil {
+				if errors.Is(err, errCtlSystemRouteNotFound) {
+					return fmt.Errorf("route %q not found", target)
+				}
+				return err
+			}
+			fmt.Fprintf(c.OutOrStdout(), "route %q deleted\n", target)
+			return nil
+		},
+	}
+}
+
+func newSystemRouteRefreshCommand(cfg *commandConfig) *cobra.Command {
+	return &cobra.Command{
+		Use:   "refresh URL",
+		Short: "Refresh a remote TUN extra route source",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(c *cobra.Command, args []string) error {
+			if err := refreshSystemRoute(c.Context(), *cfg, args[0]); err != nil {
+				if errors.Is(err, errCtlSystemRouteNotFound) {
+					return fmt.Errorf("route %q not found", args[0])
+				}
+				return err
+			}
+			fmt.Fprintf(c.OutOrStdout(), "route %q refreshed\n", args[0])
+			return nil
+		},
+	}
+}
+
+func fetchSystemRoutes(ctx context.Context, cfg commandConfig) ([]systemRoute, error) {
+	ctx, cancel := context.WithTimeout(ctx, cfg.timeout)
+	defer cancel()
+	endpoint, err := apiURL(cfg.addr, "/api/system/routes")
+	if err != nil {
+		return nil, err
+	}
+	resp, err := doRequest(ctx, cfg, http.MethodGet, endpoint, nil, http.StatusOK)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	var routes []systemRoute
+	if err := json.NewDecoder(resp.Body).Decode(&routes); err != nil {
+		return nil, fmt.Errorf("decode system routes: %w", err)
+	}
+	return routes, nil
+}
+
+func createSystemRoute(ctx context.Context, cfg commandConfig, payload systemRoutePayload) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, cfg.timeout)
+	defer cancel()
+	endpoint, err := apiURL(cfg.addr, "/api/system/routes")
+	if err != nil {
+		return "", err
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return "", err
+	}
+	resp, err := doRequest(ctx, cfg, http.MethodPost, endpoint, strings.NewReader(string(body)), http.StatusCreated, http.StatusOK)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	var result struct {
+		Route string `json:"route"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", fmt.Errorf("decode created route: %w", err)
+	}
+	if result.Route == "" {
+		result.Route = payload.Route
+	}
+	return result.Route, nil
+}
+
+func deleteSystemRoute(ctx context.Context, cfg commandConfig, target string) error {
+	ctx, cancel := context.WithTimeout(ctx, cfg.timeout)
+	defer cancel()
+	reqURL := &url.URL{Path: "/api/system/routes"}
+	query := reqURL.Query()
+	if idx, err := strconv.Atoi(target); err == nil && idx >= 0 {
+		query.Set("index", strconv.Itoa(idx))
+	} else {
+		query.Set("route", target)
+	}
+	reqURL.RawQuery = query.Encode()
+	endpoint, err := apiURL(cfg.addr, reqURL.String())
+	if err != nil {
+		return err
+	}
+	resp, err := doRequest(ctx, cfg, http.MethodDelete, endpoint, nil, http.StatusOK)
+	if err != nil {
+		if errors.Is(err, errAPINotFound) {
+			return errCtlSystemRouteNotFound
+		}
+		return err
+	}
+	resp.Body.Close()
+	return nil
+}
+
+func refreshSystemRoute(ctx context.Context, cfg commandConfig, route string) error {
+	ctx, cancel := context.WithTimeout(ctx, cfg.timeout)
+	defer cancel()
+	endpoint, err := apiURL(cfg.addr, "/api/system/routes/refresh")
+	if err != nil {
+		return err
+	}
+	body, err := json.Marshal(systemRoutePayload{Route: route})
+	if err != nil {
+		return err
+	}
+	resp, err := doRequest(ctx, cfg, http.MethodPost, endpoint, strings.NewReader(string(body)), http.StatusOK)
+	if err != nil {
+		if errors.Is(err, errAPINotFound) {
+			return errCtlSystemRouteNotFound
+		}
+		return err
+	}
+	resp.Body.Close()
+	return nil
+}
+
+func writeSystemRoutes(w io.Writer, routes []systemRoute) error {
+	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(tw, "ROUTE\tLAST-UPDATED\tNEXT-UPDATE")
+	for _, route := range systemRouteRows(routes) {
+		fmt.Fprintf(tw, "%s\t%s\t%s\n", route.Route, route.LastUpdated, route.NextUpdate)
+	}
+	return tw.Flush()
+}
+
+func systemRouteRows(routes []systemRoute) []systemRouteRow {
+	rows := make([]systemRouteRow, 0, len(routes))
+	for _, route := range routes {
+		rows = append(rows, systemRouteRow{
+			Route:       route.Route,
+			LastUpdated: formatTime(route.LastUpdated),
+			NextUpdate:  formatTime(route.NextUpdate),
+		})
+	}
+	return rows
 }

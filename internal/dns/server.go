@@ -74,7 +74,7 @@ func NewServer(assetManager *assets.Manager) (*Server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parse fake ip ttl: %w", err)
 	}
-	fakePool, err := fakeip.New(cfg.DNS.FakeIPRange, fakeIPTTL)
+	fakePool, err := fakeip.NewDualStack(cfg.DNS.FakeIPRange, cfg.DNS.FakeIPv6Range, fakeIPTTL)
 	if err != nil {
 		return nil, fmt.Errorf("create fake ip pool: %w", err)
 	}

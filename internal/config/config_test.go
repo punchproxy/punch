@@ -39,6 +39,7 @@ func TestConfigSaveLoadRoundTrip(t *testing.T) {
 	}
 	want.DNS.CacheSize = 1234
 	want.DNS.FakeIPRange = "198.19.0.0/16"
+	want.DNS.FakeIPv6Range = "fdfe:dcba:9877::/64"
 	want.DNS.FakeIPTTL = "30m"
 	want.DNS.Rules = DNSRules{
 		Domains: []DomainRule{

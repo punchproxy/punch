@@ -114,6 +114,7 @@ type configBaseModel struct {
 	DNSListen             string `gorm:"column:dns_listen;not null"`
 	DNSCacheSize          int    `gorm:"column:dns_cache_size;not null"`
 	DNSFakeIPRange        string `gorm:"column:dns_fake_ip_range;not null"`
+	DNSFakeIPv6Range      string `gorm:"column:dns_fake_ipv6_range"`
 	DNSFakeIPTTL          string `gorm:"column:dns_fakeip_ttl;not null;default:1h"`
 	TUNDevice             string `gorm:"column:tun_device;not null"`
 	RelaySelect           string `gorm:"column:relay_select;not null"`

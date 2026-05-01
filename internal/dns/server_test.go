@@ -55,6 +55,47 @@ func TestServerQueryTraceDoesNotUseEventBus(t *testing.T) {
 
 }
 
+func TestRelayAAAAAllocatesIPv6FakeIP(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.DNS.CacheSize = 10
+	cfg.DNS.FakeIPRange = "198.18.0.0/24"
+	cfg.DNS.FakeIPv6Range = "fdfe:dcba:9876::/120"
+	cfg.DNS.FakeIPTTL = "1h"
+	cfg.DNS.Rules.Domains = []config.DomainRule{{Decision: config.DecisionRelay, Source: "domain:example.com"}}
+	useConfig(t, cfg)
+
+	server, err := NewServer(nil)
+	if err != nil {
+		t.Fatalf("NewServer() error = %v", err)
+	}
+	if err := server.LoadInitialRules(); err != nil {
+		t.Fatalf("LoadInitialRules() error = %v", err)
+	}
+
+	query := new(mdns.Msg)
+	query.SetQuestion("www.example.com.", mdns.TypeAAAA)
+	resp, decision, rule, result, err := server.serveMsg(context.Background(), query, "test")
+	if err != nil {
+		t.Fatalf("serveMsg() error = %v", err)
+	}
+	if decision != DecisionRelay || rule != "relay-domain" {
+		t.Fatalf("decision/rule = %s/%s, want %s/relay-domain", decision, rule, DecisionRelay)
+	}
+	if result != "fdfe:dcba:9876::4" {
+		t.Fatalf("result = %q, want fdfe:dcba:9876::4", result)
+	}
+	if len(resp.Answer) != 1 {
+		t.Fatalf("answer length = %d, want 1", len(resp.Answer))
+	}
+	aaaa, ok := resp.Answer[0].(*mdns.AAAA)
+	if !ok {
+		t.Fatalf("answer type = %T, want AAAA", resp.Answer[0])
+	}
+	if got := aaaa.AAAA.String(); got != "fdfe:dcba:9876::4" {
+		t.Fatalf("AAAA = %s, want fdfe:dcba:9876::4", got)
+	}
+}
+
 func TestServerStaleCacheRefreshDoesNotStampede(t *testing.T) {
 	upstreamAddr, closeUpstream, requests := startSlowDNSUpstream(t, 250*time.Millisecond)
 	defer closeUpstream()

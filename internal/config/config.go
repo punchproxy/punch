@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/netip"
 	"net/url"
 	"regexp"
 	"strconv"
@@ -30,13 +31,14 @@ type Config struct {
 }
 
 type DNS struct {
-	Listen      string      `json:"listen"`
-	Upstream    []Upstream  `json:"upstream"`
-	CacheSize   int         `json:"cache_size"`
-	FakeIPRange string      `json:"fakeip_range"`
-	FakeIPTTL   string      `json:"fakeip_ttl"`
-	Options     *DNSOptions `json:"options,omitempty"`
-	Rules       DNSRules    `json:"rules"`
+	Listen        string      `json:"listen"`
+	Upstream      []Upstream  `json:"upstream"`
+	CacheSize     int         `json:"cache_size"`
+	FakeIPRange   string      `json:"fakeip_range"`
+	FakeIPv6Range string      `json:"fakeipv6_range,omitempty"`
+	FakeIPTTL     string      `json:"fakeip_ttl"`
+	Options       *DNSOptions `json:"options,omitempty"`
+	Rules         DNSRules    `json:"rules"`
 }
 
 type Upstream struct {
@@ -46,9 +48,10 @@ type Upstream struct {
 }
 
 type DNSOptions struct {
-	CacheSize   int    `json:"cache_size"`
-	FakeIPRange string `json:"fake_ip_range"`
-	FakeIPTTL   string `json:"fakeip_ttl,omitempty"`
+	CacheSize     int    `json:"cache_size"`
+	FakeIPRange   string `json:"fake_ip_range"`
+	FakeIPv6Range string `json:"fake_ipv6_range,omitempty"`
+	FakeIPTTL     string `json:"fakeip_ttl,omitempty"`
 }
 
 type DNSRules struct {
@@ -153,6 +156,7 @@ var scalarKeys = []string{
 	"dns.listen",
 	"dns.cache_size",
 	"dns.fakeip_range",
+	"dns.fakeipv6_range",
 	"dns.fakeip_ttl",
 	"tun.device",
 	"relay.select",
@@ -294,6 +298,8 @@ func getValue(cfg *Config, key string) (string, error) {
 		return strconv.Itoa(cfg.DNS.CacheSize), nil
 	case "dns.fakeip_range":
 		return cfg.DNS.FakeIPRange, nil
+	case "dns.fakeipv6_range":
+		return cfg.DNS.FakeIPv6Range, nil
 	case "dns.fakeip_ttl":
 		return cfg.DNS.FakeIPTTL, nil
 	case "tun.device":
@@ -343,6 +349,8 @@ func setValue(cfg *Config, key, value string) error {
 		cfg.DNS.CacheSize = parsed
 	case "dns.fakeip_range":
 		cfg.DNS.FakeIPRange = value
+	case "dns.fakeipv6_range":
+		cfg.DNS.FakeIPv6Range = value
 	case "dns.fakeip_ttl":
 		cfg.DNS.FakeIPTTL = value
 	case "tun.device":
@@ -474,10 +482,11 @@ func loadTables(s *Store) (*Config, error) {
 		LogFile:              base.LogFile,
 		AssetRefreshInterval: base.AssetRefreshInterval,
 		DNS: DNS{
-			Listen:      base.DNSListen,
-			CacheSize:   base.DNSCacheSize,
-			FakeIPRange: base.DNSFakeIPRange,
-			FakeIPTTL:   base.DNSFakeIPTTL,
+			Listen:        base.DNSListen,
+			CacheSize:     base.DNSCacheSize,
+			FakeIPRange:   base.DNSFakeIPRange,
+			FakeIPv6Range: base.DNSFakeIPv6Range,
+			FakeIPTTL:     base.DNSFakeIPTTL,
 		},
 		TUN: TUN{
 			Device: base.TUNDevice,
@@ -662,6 +671,7 @@ func saveTables(s *Store, cfg *Config) error {
 			DNSListen:             cfg.DNS.Listen,
 			DNSCacheSize:          cfg.DNS.CacheSize,
 			DNSFakeIPRange:        cfg.DNS.FakeIPRange,
+			DNSFakeIPv6Range:      cfg.DNS.FakeIPv6Range,
 			DNSFakeIPTTL:          cfg.DNS.FakeIPTTL,
 			TUNDevice:             cfg.TUN.Device,
 			RelaySelect:           cfg.Relay.Select,
@@ -913,9 +923,10 @@ func Default() *Config {
 				{URL: "https://doh.pub/dns-query", Bootstrap: "119.29.29.29"},
 				{URL: "https://dns.alidns.com/dns-query", Bootstrap: "223.5.5.5"},
 			},
-			CacheSize:   100000,
-			FakeIPRange: "198.18.0.0/15",
-			FakeIPTTL:   "1h",
+			CacheSize:     100000,
+			FakeIPRange:   "198.18.0.0/15",
+			FakeIPv6Range: "fdfe:dcba:9876::/64",
+			FakeIPTTL:     "1h",
 			Rules: DNSRules{
 				Domains: []DomainRule{
 					{Decision: DecisionReject, Source: "qtype:ptr"},
@@ -970,6 +981,9 @@ func applyDefaults(cfg *Config) {
 	if cfg.DNS.FakeIPRange == "" {
 		cfg.DNS.FakeIPRange = "198.18.0.0/15"
 	}
+	if cfg.DNS.FakeIPv6Range == "" {
+		cfg.DNS.FakeIPv6Range = "fdfe:dcba:9876::/64"
+	}
 	if cfg.DNS.FakeIPTTL == "" {
 		cfg.DNS.FakeIPTTL = "1h"
 	}
@@ -1017,6 +1031,9 @@ func applyLegacyDNSOptions(cfg *Config) {
 	if cfg.DNS.FakeIPRange == "" {
 		cfg.DNS.FakeIPRange = cfg.DNS.Options.FakeIPRange
 	}
+	if cfg.DNS.FakeIPv6Range == "" {
+		cfg.DNS.FakeIPv6Range = cfg.DNS.Options.FakeIPv6Range
+	}
 	if cfg.DNS.FakeIPTTL == "" {
 		cfg.DNS.FakeIPTTL = cfg.DNS.Options.FakeIPTTL
 	}
@@ -1024,6 +1041,12 @@ func applyLegacyDNSOptions(cfg *Config) {
 }
 
 func validateConfig(cfg *Config) error {
+	if err := validateFakeIPRange("dns.fakeip_range", cfg.DNS.FakeIPRange, false); err != nil {
+		return err
+	}
+	if err := validateFakeIPRange("dns.fakeipv6_range", cfg.DNS.FakeIPv6Range, true); err != nil {
+		return err
+	}
 	if cfg.DNS.FakeIPTTL != "" {
 		ttl, err := time.ParseDuration(cfg.DNS.FakeIPTTL)
 		if err != nil {
@@ -1044,6 +1067,23 @@ func validateConfig(cfg *Config) error {
 				return fmt.Errorf("relay.groups[%d].relay_domain_resolver[%d]: %w", i, j, err)
 			}
 		}
+	}
+	return nil
+}
+
+func validateFakeIPRange(key, cidr string, wantIPv6 bool) error {
+	if cidr == "" {
+		return nil
+	}
+	prefix, err := netip.ParsePrefix(cidr)
+	if err != nil {
+		return fmt.Errorf("%s: %w", key, err)
+	}
+	if wantIPv6 && !prefix.Addr().Is6() {
+		return fmt.Errorf("%s must be an IPv6 CIDR", key)
+	}
+	if !wantIPv6 && !prefix.Addr().Is4() {
+		return fmt.Errorf("%s must be an IPv4 CIDR", key)
 	}
 	return nil
 }

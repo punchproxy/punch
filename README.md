@@ -140,6 +140,12 @@ punchctl dns cache
 punchctl dns cache flush
 punchctl dns fakeips
 
+# Manage TUN extra routes
+punchctl system routes
+punchctl system routes create 1.1.1.0/24
+punchctl system routes create https://core.telegram.org/resources/cidr.txt
+punchctl system routes delete 1.1.1.0/24
+
 # Manage relay groups and relays
 punchctl relaygroups create main --url https://example.com/provider.yaml --select auto
 punchctl relaygroups refresh main
@@ -168,7 +174,7 @@ punchctl sessions -o custom-columns=ID:.id,DEST:.destination,RELAY:.relay
 Punch persists configuration in `punch.db`, not in a hand-edited YAML file. On first launch it seeds defaults including:
 
 - DNS upstreams: `https://doh.pub/dns-query` and `https://dns.alidns.com/dns-query`
-- Fake IP range: `198.18.0.0/15`
+- Fake IP ranges: `198.18.0.0/15` and `fdfe:dcba:9876::/64`
 - DNS cache size: `100000`
 - TUN device: `punch0`
 - Relay selection: `auto`

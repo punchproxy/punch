@@ -1625,6 +1625,7 @@ func TestSystemCommand(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(systemInfo{
 			TUNInterfaceName: "utun9",
 			TUNAddress:       "198.18.0.1/30",
+			TUNIPv6Address:   "fdfe:dcba:9876::1/126",
 			ExtraTUNRoutes:   []string{"1.1.1.0/24", "8.8.8.8/32"},
 			SystemDNS: []systemDNSInfo{{
 				Name:           "Wi-Fi",
@@ -1642,9 +1643,124 @@ func TestSystemCommand(t *testing.T) {
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}
-	for _, want := range []string{"Interface:", "utun9", "Extra Routes:", "1.1.1.0/24, 8.8.8.8/32", "Wi-Fi: 198.18.0.1 [overriden from 223.5.5.5, 119.29.29.29]"} {
+	for _, want := range []string{"Interface:", "utun9", "IPv6 Address:", "fdfe:dcba:9876::1/126", "Extra Routes:", "1.1.1.0/24, 8.8.8.8/32", "Wi-Fi: 198.18.0.1 [overriden from 223.5.5.5, 119.29.29.29]"} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("system output missing %q:\n%s", want, out.String())
 		}
+	}
+}
+
+func TestSystemRoutesCreateDeleteCommands(t *testing.T) {
+	var createBody systemRoutePayload
+	var deleteQuery url.Values
+	var requests []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests = append(requests, r.Method+" "+r.URL.Path)
+		if r.URL.Path != "/api/system/routes" {
+			t.Fatalf("path = %q, want /api/system/routes", r.URL.Path)
+		}
+		switch r.Method {
+		case http.MethodPost:
+			if err := json.NewDecoder(r.Body).Decode(&createBody); err != nil {
+				t.Fatalf("decode create: %v", err)
+			}
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"status":"ok","route":"1.1.1.0/24"}`))
+		case http.MethodDelete:
+			deleteQuery = r.URL.Query()
+			_, _ = w.Write([]byte(`{"status":"ok"}`))
+		default:
+			t.Fatalf("method = %s", r.Method)
+		}
+	}))
+	defer server.Close()
+
+	var out bytes.Buffer
+	cmd := newRootCommand(commandConfig{out: &out, errOut: &bytes.Buffer{}, client: server.Client()})
+	cmd.SetArgs([]string{"--addr", server.URL, "system", "routes", "create", "1.1.1.1/24", "--index", "0"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("create Execute() error = %v", err)
+	}
+
+	out.Reset()
+	cmd = newRootCommand(commandConfig{out: &out, errOut: &bytes.Buffer{}, client: server.Client()})
+	cmd.SetArgs([]string{"--addr", server.URL, "system", "routes", "delete", "1.1.1.0/24"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("delete Execute() error = %v", err)
+	}
+
+	if strings.Join(requests, ",") != "POST /api/system/routes,DELETE /api/system/routes" {
+		t.Fatalf("requests = %#v", requests)
+	}
+	if createBody.Route != "1.1.1.1/24" || createBody.Index == nil || *createBody.Index != 0 {
+		t.Fatalf("create body = %+v", createBody)
+	}
+	if deleteQuery.Get("route") != "1.1.1.0/24" {
+		t.Fatalf("delete query = %+v", deleteQuery)
+	}
+}
+
+func TestSystemRoutesListCommand(t *testing.T) {
+	now := time.Date(2026, 4, 30, 12, 0, 0, 0, time.Local)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/system/routes" {
+			t.Fatalf("path = %q, want /api/system/routes", r.URL.Path)
+		}
+		_ = json.NewEncoder(w).Encode([]systemRoute{{
+			Index:       0,
+			Route:       "https://core.telegram.org/resources/cidr.txt",
+			LastUpdated: now,
+			NextUpdate:  now.Add(time.Hour),
+		}})
+	}))
+	defer server.Close()
+
+	var out bytes.Buffer
+	cmd := newRootCommand(commandConfig{out: &out, errOut: &bytes.Buffer{}, client: server.Client()})
+	cmd.SetArgs([]string{"--addr", server.URL, "system", "routes"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if !strings.HasPrefix(out.String(), "ROUTE") {
+		t.Fatalf("system routes output should start with ROUTE:\n%s", out.String())
+	}
+	for _, want := range []string{"LAST-UPDATED", "NEXT-UPDATE", "ROUTE", formatTime(now), formatTime(now.Add(time.Hour)), "https://core.telegram.org/resources/cidr.txt"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("system routes output missing %q:\n%s", want, out.String())
+		}
+	}
+	if strings.Contains(out.String(), "INDEX") {
+		t.Fatalf("system routes output should not include index:\n%s", out.String())
+	}
+}
+
+func TestSystemRoutesRefreshCommand(t *testing.T) {
+	var gotMethod string
+	var gotPath string
+	var gotBody systemRoutePayload
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotPath = r.URL.Path
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"status": "ok"})
+	}))
+	defer server.Close()
+
+	var out bytes.Buffer
+	cmd := newRootCommand(commandConfig{out: &out, errOut: &bytes.Buffer{}, client: server.Client()})
+	cmd.SetArgs([]string{"--addr", server.URL, "system", "routes", "refresh", "https://core.telegram.org/resources/cidr.txt"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if gotMethod != http.MethodPost || gotPath != "/api/system/routes/refresh" {
+		t.Fatalf("method/path = %s %s", gotMethod, gotPath)
+	}
+	if gotBody.Route != "https://core.telegram.org/resources/cidr.txt" {
+		t.Fatalf("body = %+v", gotBody)
+	}
+	if !strings.Contains(out.String(), `route "https://core.telegram.org/resources/cidr.txt" refreshed`) {
+		t.Fatalf("output = %q", out.String())
 	}
 }

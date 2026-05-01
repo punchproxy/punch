@@ -138,11 +138,7 @@ func stripCIDRComment(line string) string {
 	if idx := strings.IndexByte(line, '#'); idx >= 0 {
 		line = line[:idx]
 	}
-	fields := strings.Fields(line)
-	if len(fields) == 0 {
-		return ""
-	}
-	return fields[0]
+	return strings.TrimSpace(line)
 }
 
 func (s *IPSet) ensureRanger() {
@@ -179,16 +175,18 @@ func LoadIPSet(source string, set *IPSet, opener SourceOpener) (int, error) {
 	count := 0
 	scanner := bufio.NewScanner(reader)
 	for scanner.Scan() {
-		line := stripCIDRComment(strings.TrimSpace(scanner.Text()))
-		if line == "" || strings.HasPrefix(line, "#") {
+		line := stripCIDRComment(scanner.Text())
+		if line == "" {
 			continue
 		}
-		prefix, ok := parseCIDRLine(line)
-		if !ok {
-			continue // skip invalid lines
+		for _, field := range strings.Fields(line) {
+			prefix, ok := parseCIDRLine(field)
+			if !ok {
+				continue // skip invalid fields
+			}
+			set.AddWithSource(prefix, source)
+			count++
 		}
-		set.AddWithSource(prefix, source)
-		count++
 	}
 	set.Sort()
 	return count, scanner.Err()

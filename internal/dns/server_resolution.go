@@ -207,7 +207,17 @@ func (s *Server) ResolveRelayDomain(ctx context.Context, groupName, host string,
 	return ips, relayExpiry, nil
 }
 
-func (s *Server) lookupFakeIP(domain string) netip.Addr {
-	result := s.fakeIPPool.LookupResult(domain)
-	return result.Mapping.IP
+func (s *Server) lookupFakeIP(domain string, qtype uint16) (netip.Addr, bool) {
+	family := fakeip.FamilyIPv4
+	if qtype == dns.TypeAAAA {
+		family = fakeip.FamilyIPv6
+	}
+	if !s.fakeIPPool.HasFamily(family) {
+		return netip.Addr{}, false
+	}
+	result := s.fakeIPPool.LookupResultForFamily(domain, family)
+	if !result.Mapping.IP.IsValid() {
+		return netip.Addr{}, false
+	}
+	return result.Mapping.IP, true
 }

@@ -1,21 +1,35 @@
-// Package fakeip provides a bidirectional mapping between domains and
-// synthetic IPv4 addresses drawn from a configurable CIDR range.
+// Package fakeip provides bidirectional mappings between domains and
+// synthetic IPv4/IPv6 addresses drawn from configurable CIDR ranges.
 package fakeip
 
 import (
 	"encoding/binary"
 	"fmt"
+	"math"
 	"net/netip"
 	"sort"
 	"sync"
 	"time"
 )
 
-// minPrefixLen is the smallest IPv4 prefix length the pool will accept;
-// /24 leaves 254 usable addresses after subtracting network/broadcast.
-const minPrefixLen = 24
+// Family identifies the address family of a fake IP allocation.
+type Family int
 
-// Mapping describes a single domain→fake-IP binding.
+const (
+	FamilyIPv4 Family = 4
+	FamilyIPv6 Family = 6
+)
+
+const (
+	// /24 leaves 252 usable IPv4 addresses after subtracting reserved helper
+	// addresses and per-/24 broadcast addresses.
+	minIPv4PrefixLen = 24
+	// /120 gives IPv6 pools the same minimum 256-address scale as IPv4 /24.
+	minIPv6PrefixLen = 120
+	reservedHead     = 4
+)
+
+// Mapping describes a single domain to fake-IP binding.
 type Mapping struct {
 	IP         netip.Addr
 	Domain     string
@@ -34,8 +48,14 @@ type LookupResult struct {
 	Evicted   *Mapping
 }
 
+type hostKey struct {
+	domain string
+	family Family
+}
+
 type entry struct {
 	ip         netip.Addr
+	family     Family
 	domain     string
 	expiresAt  time.Time
 	lastLookup time.Time
@@ -63,66 +83,129 @@ func (e *entry) mapping() Mapping {
 	}
 }
 
-// Pool manages allocation of fake IPs from a CIDR range.
+type rangeState struct {
+	family   Family
+	ipNet    netip.Prefix
+	baseHi   uint64
+	baseLo   uint64
+	gateway  netip.Addr
+	firstOff uint64
+	lastOff  uint64
+	nextOff  uint64
+	cycled   bool
+}
+
+// Pool manages allocation of fake IPs from one IPv4 range and, optionally,
+// one IPv6 range.
 //
-// IP arithmetic is performed on uint32 offsets within the configured prefix
-// rather than on netip.Addr values, which lets allocation, broadcast-skip,
-// and wrap-around checks stay in registers. Read-only paths (LookBack,
-// Contains, LastLookupTime) take only an RLock and never prune, so the
-// per-packet hot path in the TUN handler is contention-free.
+// Read-only paths (LookBack, Contains, LastLookupTime) take only an RLock and
+// never prune, so the per-packet hot path in the TUN handler is low-contention.
 type Pool struct {
 	mu sync.RWMutex
 
-	ipNet    netip.Prefix
-	baseIP   uint32 // network address as uint32
-	gateway  netip.Addr
-	firstOff uint32 // first allocatable offset (relative to baseIP)
-	lastOff  uint32 // last allocatable offset, inclusive
-	nextOff  uint32 // next offset to try
-	cycled   bool   // true once nextOff has wrapped at least once
+	ranges        map[Family]*rangeState
+	defaultFamily Family
 
-	byHost map[string]*entry
+	byHost map[hostKey]*entry
 	byIP   map[netip.Addr]*entry
 	ttl    time.Duration
 }
 
-// New constructs a Pool over the given CIDR. The prefix must be IPv4 and at
-// least /24 wide so that there are enough non-broadcast addresses to allocate.
+// New constructs a Pool over a single CIDR. IPv4 CIDRs are allocated by
+// Lookup/LookupResult; IPv6 CIDRs are supported for tests and specialized
+// callers, but normal Punch configuration should use NewDualStack.
 func New(cidr string, ttl time.Duration) (*Pool, error) {
 	prefix, err := netip.ParsePrefix(cidr)
 	if err != nil {
 		return nil, err
 	}
-	if !prefix.Addr().Is4() {
+	if prefix.Addr().Is6() {
+		return NewDualStack("", cidr, ttl)
+	}
+	return NewDualStack(cidr, "", ttl)
+}
+
+// NewDualStack constructs a Pool with IPv4 and/or IPv6 CIDRs. Either CIDR may
+// be empty, but at least one family must be enabled.
+func NewDualStack(ipv4CIDR, ipv6CIDR string, ttl time.Duration) (*Pool, error) {
+	if ttl <= 0 {
+		ttl = time.Hour
+	}
+	p := &Pool{
+		ranges: make(map[Family]*rangeState, 2),
+		byHost: make(map[hostKey]*entry),
+		byIP:   make(map[netip.Addr]*entry),
+		ttl:    ttl,
+	}
+	if ipv4CIDR != "" {
+		r, err := newRangeState(ipv4CIDR, FamilyIPv4)
+		if err != nil {
+			return nil, err
+		}
+		p.ranges[FamilyIPv4] = r
+		p.defaultFamily = FamilyIPv4
+	}
+	if ipv6CIDR != "" {
+		r, err := newRangeState(ipv6CIDR, FamilyIPv6)
+		if err != nil {
+			return nil, err
+		}
+		p.ranges[FamilyIPv6] = r
+		if p.defaultFamily == 0 {
+			p.defaultFamily = FamilyIPv6
+		}
+	}
+	if len(p.ranges) == 0 {
+		return nil, fmt.Errorf("fakeip: at least one fake IP CIDR is required")
+	}
+	return p, nil
+}
+
+func newRangeState(cidr string, family Family) (*rangeState, error) {
+	prefix, err := netip.ParsePrefix(cidr)
+	if err != nil {
+		return nil, err
+	}
+	prefix = prefix.Masked()
+	if family == FamilyIPv4 && !prefix.Addr().Is4() {
 		return nil, fmt.Errorf("fakeip: CIDR %q must be IPv4", cidr)
+	}
+	if family == FamilyIPv6 && !prefix.Addr().Is6() {
+		return nil, fmt.Errorf("fakeip: CIDR %q must be IPv6", cidr)
+	}
+
+	bitLen := prefix.Addr().BitLen()
+	minPrefixLen := minIPv4PrefixLen
+	if family == FamilyIPv6 {
+		minPrefixLen = minIPv6PrefixLen
 	}
 	if prefix.Bits() > minPrefixLen {
 		return nil, fmt.Errorf("fakeip: CIDR %q is too small, need at least /%d", cidr, minPrefixLen)
 	}
-	if ttl <= 0 {
-		ttl = time.Hour
+
+	hostBits := bitLen - prefix.Bits()
+	var totalAddrs uint64
+	if hostBits >= 64 {
+		totalAddrs = math.MaxUint64
+	} else {
+		totalAddrs = uint64(1) << uint(hostBits)
 	}
-	prefix = prefix.Masked()
+	if totalAddrs <= reservedHead {
+		return nil, fmt.Errorf("fakeip: CIDR %q does not leave allocatable addresses", cidr)
+	}
 
-	base := ipToU32(prefix.Addr())
-	hostBits := uint(32 - prefix.Bits())
-	totalAddrs := uint32(1) << hostBits
-	// Reserve .0 (network), .1 (gateway), .2/.3 (often used by helpers); start at .4.
-	const reservedHead = 4
-	firstOff := uint32(reservedHead)
-	lastOff := totalAddrs - 1 // skip the broadcast at the very end via the per-iteration check
-
-	return &Pool{
+	baseHi, baseLo := addrToParts(prefix.Addr())
+	state := &rangeState{
+		family:   family,
 		ipNet:    prefix,
-		baseIP:   base,
-		gateway:  u32ToAddr(base + 1),
-		firstOff: firstOff,
-		lastOff:  lastOff,
-		nextOff:  firstOff,
-		byHost:   make(map[string]*entry),
-		byIP:     make(map[netip.Addr]*entry),
-		ttl:      ttl,
-	}, nil
+		baseHi:   baseHi,
+		baseLo:   baseLo,
+		firstOff: reservedHead,
+		lastOff:  totalAddrs - 1,
+		nextOff:  reservedHead,
+	}
+	state.gateway = state.addrAt(1)
+	return state, nil
 }
 
 // Lookup returns a fake IP for the given host, allocating one if needed.
@@ -133,25 +216,40 @@ func (p *Pool) Lookup(host string) netip.Addr {
 // LookupResult is the full-fidelity variant of Lookup that reports whether
 // the mapping was newly created and which mapping (if any) was evicted.
 func (p *Pool) LookupResult(host string) LookupResult {
+	return p.LookupResultForFamily(host, p.defaultFamily)
+}
+
+// LookupForFamily returns a fake IP in the requested family.
+func (p *Pool) LookupForFamily(host string, family Family) netip.Addr {
+	return p.LookupResultForFamily(host, family).Mapping.IP
+}
+
+// LookupResultForFamily returns or creates a mapping in the requested family.
+func (p *Pool) LookupResultForFamily(host string, family Family) LookupResult {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	now := time.Now()
 	p.pruneExpiredLocked(now)
 
-	if e, ok := p.byHost[host]; ok {
+	key := hostKey{domain: host, family: family}
+	if e, ok := p.byHost[key]; ok {
 		e.expiresAt = now.Add(p.ttl)
 		e.lastLookup = now
 		return LookupResult{Mapping: e.mapping(), Refreshed: true}
 	}
 
-	ip, evicted := p.allocateLocked()
+	ip, evicted := p.allocateLocked(family)
+	if !ip.IsValid() {
+		return LookupResult{}
+	}
 	e := &entry{
 		ip:         ip,
+		family:     family,
 		domain:     host,
 		expiresAt:  now.Add(p.ttl),
 		lastLookup: now,
 	}
-	p.byHost[host] = e
+	p.byHost[key] = e
 	p.byIP[ip] = e
 	return LookupResult{Mapping: e.mapping(), Created: true, Evicted: evicted}
 }
@@ -161,7 +259,7 @@ func (p *Pool) LookupResult(host string) LookupResult {
 func (p *Pool) LookBack(ip netip.Addr) (string, bool) {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
-	if e, ok := p.byIP[ip]; ok {
+	if e, ok := p.byIP[ip.Unmap()]; ok {
 		return e.domain, true
 	}
 	return "", false
@@ -171,29 +269,88 @@ func (p *Pool) LookBack(ip netip.Addr) (string, bool) {
 func (p *Pool) LastLookupTime(domain string) time.Time {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
-	if e, ok := p.byHost[domain]; ok {
-		return e.lastLookup
+	var latest time.Time
+	for _, e := range p.byHost {
+		if e.domain != domain {
+			continue
+		}
+		if latest.IsZero() || e.lastLookup.After(latest) {
+			latest = e.lastLookup
+		}
 	}
-	return time.Time{}
+	return latest
 }
 
-// Contains reports whether ip is inside the pool's CIDR range.
+// Contains reports whether ip is inside any configured fake IP range.
 func (p *Pool) Contains(ip netip.Addr) bool {
-	return p.ipNet.Contains(ip)
+	ip = ip.Unmap()
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	for _, r := range p.ranges {
+		if r.ipNet.Contains(ip) {
+			return true
+		}
+	}
+	return false
 }
 
-// IPNet returns the pool's CIDR prefix.
-func (p *Pool) IPNet() netip.Prefix { return p.ipNet }
+// HasFamily reports whether the pool can allocate fake IPs for family.
+func (p *Pool) HasFamily(family Family) bool {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	_, ok := p.ranges[family]
+	return ok
+}
 
-// Gateway returns the gateway address (.1 within the prefix).
-func (p *Pool) Gateway() netip.Addr { return p.gateway }
+// IPNet returns the IPv4 pool CIDR when present, otherwise the default CIDR.
+func (p *Pool) IPNet() netip.Prefix {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	if r, ok := p.ranges[FamilyIPv4]; ok {
+		return r.ipNet
+	}
+	return p.ranges[p.defaultFamily].ipNet
+}
+
+// IPNet6 returns the IPv6 pool CIDR.
+func (p *Pool) IPNet6() (netip.Prefix, bool) {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	r, ok := p.ranges[FamilyIPv6]
+	if !ok {
+		return netip.Prefix{}, false
+	}
+	return r.ipNet, true
+}
+
+// Gateway returns the IPv4 gateway address when present, otherwise the
+// default-family gateway address.
+func (p *Pool) Gateway() netip.Addr {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	if r, ok := p.ranges[FamilyIPv4]; ok {
+		return r.gateway
+	}
+	return p.ranges[p.defaultFamily].gateway
+}
+
+// Gateway6 returns the IPv6 gateway address.
+func (p *Pool) Gateway6() (netip.Addr, bool) {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	r, ok := p.ranges[FamilyIPv6]
+	if !ok {
+		return netip.Addr{}, false
+	}
+	return r.gateway, true
+}
 
 // Acquire pins the mapping for ip to a session, preventing TTL eviction
 // while the session is alive. Returns false if no mapping exists.
 func (p *Pool) Acquire(ip netip.Addr, sessionID string) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	e, ok := p.byIP[ip]
+	e, ok := p.byIP[ip.Unmap()]
 	if !ok {
 		return false
 	}
@@ -209,7 +366,7 @@ func (p *Pool) Acquire(ip netip.Addr, sessionID string) bool {
 func (p *Pool) Release(ip netip.Addr, sessionID string) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	e, ok := p.byIP[ip]
+	e, ok := p.byIP[ip.Unmap()]
 	if !ok {
 		return false
 	}
@@ -227,7 +384,7 @@ func (p *Pool) Release(ip netip.Addr, sessionID string) bool {
 func (p *Pool) Sessions(ip netip.Addr) []string {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
-	if e, ok := p.byIP[ip]; ok {
+	if e, ok := p.byIP[ip.Unmap()]; ok {
 		return e.sessionList()
 	}
 	return nil
@@ -256,39 +413,58 @@ func (p *Pool) Snapshot() []Mapping {
 	return out
 }
 
-// allocateLocked picks the next available offset, skipping broadcast (.255)
-// addresses and evicting an existing entry if the pool has wrapped.
-func (p *Pool) allocateLocked() (netip.Addr, *Mapping) {
+func (p *Pool) allocateLocked(family Family) (netip.Addr, *Mapping) {
+	r := p.ranges[family]
+	if r == nil {
+		return netip.Addr{}, nil
+	}
 	for {
-		off := p.nextOff
-		if off > p.lastOff {
-			p.cycled = true
-			off = p.firstOff
+		off := r.nextOff
+		if off > r.lastOff || off < r.firstOff {
+			r.cycled = true
+			off = r.firstOff
 		}
-		p.nextOff = off + 1
+		if off >= r.lastOff {
+			r.nextOff = r.firstOff
+			r.cycled = true
+		} else {
+			r.nextOff = off + 1
+		}
 
-		// Skip broadcast addresses (.255 in any /24 sub-block).
-		if (p.baseIP+off)&0xFF == 0xFF {
+		// Skip IPv4 broadcast addresses (.255 in any /24 sub-block).
+		if r.family == FamilyIPv4 && uint8(r.baseLo+off) == 0xFF {
 			continue
 		}
 
-		ip := u32ToAddr(p.baseIP + off)
+		ip := r.addrAt(off)
+		if !r.ipNet.Contains(ip) {
+			continue
+		}
 
 		var evicted *Mapping
 		if existing, ok := p.byIP[ip]; ok {
-			// Only evict if we've cycled — otherwise the caller is racing
-			// with itself, which can't happen because we hold the lock.
-			if !p.cycled {
-				// Defensive: should be unreachable.
+			if !r.cycled {
 				continue
 			}
 			ev := existing.mapping()
 			evicted = &ev
-			delete(p.byHost, existing.domain)
+			delete(p.byHost, hostKey{domain: existing.domain, family: existing.family})
 			delete(p.byIP, ip)
 		}
 		return ip, evicted
 	}
+}
+
+func (r *rangeState) addrAt(off uint64) netip.Addr {
+	if r.family == FamilyIPv4 {
+		return u32ToAddr(uint32(r.baseLo + off))
+	}
+	hi := r.baseHi
+	lo := r.baseLo + off
+	if lo < r.baseLo {
+		hi++
+	}
+	return partsToIPv6(hi, lo)
 }
 
 // pruneExpiredLocked drops mappings whose TTL has lapsed and that have no
@@ -302,8 +478,23 @@ func (p *Pool) pruneExpiredLocked(now time.Time) {
 			continue
 		}
 		delete(p.byIP, ip)
-		delete(p.byHost, e.domain)
+		delete(p.byHost, hostKey{domain: e.domain, family: e.family})
 	}
+}
+
+func addrToParts(addr netip.Addr) (uint64, uint64) {
+	if addr.Is4() {
+		return 0, uint64(ipToU32(addr))
+	}
+	a16 := addr.As16()
+	return binary.BigEndian.Uint64(a16[:8]), binary.BigEndian.Uint64(a16[8:])
+}
+
+func partsToIPv6(hi, lo uint64) netip.Addr {
+	var b [16]byte
+	binary.BigEndian.PutUint64(b[:8], hi)
+	binary.BigEndian.PutUint64(b[8:], lo)
+	return netip.AddrFrom16(b)
 }
 
 func ipToU32(addr netip.Addr) uint32 {

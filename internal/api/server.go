@@ -65,6 +65,10 @@ func (s *Server) Start() error {
 	r.Route("/api", func(r chi.Router) {
 		r.Get("/status", s.handleStatus)
 		r.Get("/system", s.handleSystem)
+		r.Get("/system/routes", s.handleSystemRoutes)
+		r.Post("/system/routes", s.handleCreateSystemRoute)
+		r.Post("/system/routes/refresh", s.handleRefreshSystemRoute)
+		r.Delete("/system/routes", s.handleDeleteSystemRoute)
 		r.Get("/config", s.handleConfig)
 		r.Put("/config/{key}", s.handleSetConfigValue)
 		r.Get("/dns/queries/stream", s.handleDNSQueryStream)

@@ -120,15 +120,26 @@ func (s *Server) serveMsgWithOptions(ctx context.Context, r *dns.Msg, source str
 func (s *Server) handleRelayRule(ctx context.Context, r *dns.Msg, domain string, qtype uint16, disableFakeIP bool, resolverOverride *ResolverGroup, respectAnswerTTL bool) (*dns.Msg, string, string) {
 	switch qtype {
 	case dns.TypeAAAA:
-		resp := new(dns.Msg)
-		resp.SetReply(r)
-		return resp, "", "EMPTY(NOERROR)"
+		if disableFakeIP {
+			resp, upstream := s.resolveAndCacheWithResolver(ctx, r, domain, qtype, resolverOverride, respectAnswerTTL)
+			return resp, upstream, ""
+		}
+		fakeIP, ok := s.lookupFakeIP(domain, qtype)
+		if !ok {
+			resp := new(dns.Msg)
+			resp.SetReply(r)
+			return resp, "", "EMPTY(NOERROR)"
+		}
+		return s.buildFakeIPResponse(r, fakeIP), "", fakeIP.String()
 	case dns.TypeA:
 		if disableFakeIP {
 			resp, upstream := s.resolveAndCacheWithResolver(ctx, r, domain, qtype, resolverOverride, respectAnswerTTL)
 			return resp, upstream, ""
 		}
-		fakeIP := s.lookupFakeIP(domain)
+		fakeIP, ok := s.lookupFakeIP(domain, qtype)
+		if !ok {
+			return s.buildRejectResponse(r), "", ""
+		}
 		return s.buildFakeIPResponse(r, fakeIP), "", fakeIP.String()
 	default:
 		resp, upstream := s.resolveUpstreamWithResolver(ctx, r, resolverOverride)
@@ -152,11 +163,14 @@ func (s *Server) processUpstreamResponse(r *dns.Msg, domain string, qtype uint16
 	}
 
 	s.relayDecisions.Add(1)
-	if qtype == dns.TypeA {
-		fakeIP := s.lookupFakeIP(domain)
+	if qtype == dns.TypeA || qtype == dns.TypeAAAA {
+		fakeIP, ok := s.lookupFakeIP(domain, qtype)
+		if !ok {
+			return s.buildRejectResponse(r), DecisionRelay, "fake-ip-family-unavailable", upstream
+		}
 		return s.buildFakeIPResponse(r, fakeIP), DecisionRelay, "ip-fallback", upstream
 	}
-	return s.buildRejectResponse(r), DecisionRelay, "relay-via-ipv4", upstream
+	return s.buildRejectResponse(r), DecisionRelay, "relay-unsupported-qtype", upstream
 }
 
 func (s *Server) responseHasDirectIP(msg *dns.Msg) bool {
@@ -222,6 +236,18 @@ func (s *Server) buildFakeIPResponse(r *dns.Msg, ip netip.Addr) *dns.Msg {
 			Ttl:    300,
 		},
 		A: ip.AsSlice(),
+	}
+	if ip.Is6() {
+		resp.Answer = []dns.RR{&dns.AAAA{
+			Hdr: dns.RR_Header{
+				Name:   r.Question[0].Name,
+				Rrtype: dns.TypeAAAA,
+				Class:  dns.ClassINET,
+				Ttl:    300,
+			},
+			AAAA: ip.AsSlice(),
+		}}
+		return resp
 	}
 	resp.Answer = []dns.RR{rr}
 	return resp

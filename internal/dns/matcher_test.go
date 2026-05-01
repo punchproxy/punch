@@ -33,20 +33,27 @@ func TestLoadIPSetLoadsCIDRsAndSingleIPs(t *testing.T) {
 	set := NewIPSet()
 	count, err := LoadIPSet("test-source", set, stringSourceOpener(`
 10.0.0.0/8
-192.0.2.1
+192.0.2.1 198.51.100.0/24
 2001:db8::/32 # comment
+203.0.113.0/24 2001:db8:1::/48 # comment
 invalid
 `))
 	if err != nil {
 		t.Fatalf("LoadIPSet() error = %v", err)
 	}
-	if count != 3 {
-		t.Fatalf("LoadIPSet() count = %d, want 3", count)
+	if count != 6 {
+		t.Fatalf("LoadIPSet() count = %d, want 6", count)
 	}
 	if !set.Contains(netip.MustParseAddr("192.0.2.1")) {
 		t.Fatal("Contains() did not match loaded single IP")
 	}
+	if !set.Contains(netip.MustParseAddr("198.51.100.42")) {
+		t.Fatal("Contains() did not match whitespace-separated CIDR")
+	}
 	if !set.Contains(netip.MustParseAddr("2001:db8::1")) {
 		t.Fatal("Contains() did not match loaded IPv6 CIDR")
+	}
+	if !set.Contains(netip.MustParseAddr("2001:db8:1::1")) {
+		t.Fatal("Contains() did not match whitespace-separated IPv6 CIDR")
 	}
 }

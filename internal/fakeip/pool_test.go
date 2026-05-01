@@ -14,6 +14,12 @@ func TestNewRejectsSmallPrefix(t *testing.T) {
 	if _, err := New("198.18.0.0/24", time.Hour); err != nil {
 		t.Fatalf("New(/24) error = %v, want nil", err)
 	}
+	if _, err := New("fdfe:dcba:9876::/121", time.Hour); err == nil {
+		t.Fatal("New(IPv6 /121) error = nil, want error")
+	}
+	if _, err := New("fdfe:dcba:9876::/120", time.Hour); err != nil {
+		t.Fatalf("New(IPv6 /120) error = %v, want nil", err)
+	}
 }
 
 func TestSnapshotSortedByIP(t *testing.T) {
@@ -53,8 +59,8 @@ func TestLookupResultReportsCreationAndEviction(t *testing.T) {
 	}
 	// Force the next allocation to wrap back to the slot a.example occupies.
 	pool.mu.Lock()
-	pool.nextOff = pool.firstOff
-	pool.cycled = true
+	pool.ranges[FamilyIPv4].nextOff = pool.ranges[FamilyIPv4].firstOff
+	pool.ranges[FamilyIPv4].cycled = true
 	pool.mu.Unlock()
 
 	second := pool.LookupResult("b.example")
@@ -83,7 +89,7 @@ func TestAllocateSkipsBroadcastAddresses(t *testing.T) {
 	}
 	// Position the cursor right at the first broadcast slot (offset 255 → 198.18.0.255).
 	pool.mu.Lock()
-	pool.nextOff = 255
+	pool.ranges[FamilyIPv4].nextOff = 255
 	pool.mu.Unlock()
 	ip := pool.Lookup("first.example")
 	if ip.As4()[3] == 255 {
@@ -93,6 +99,38 @@ func TestAllocateSkipsBroadcastAddresses(t *testing.T) {
 	want := netip.MustParseAddr("198.18.1.0")
 	if ip != want {
 		t.Fatalf("Lookup() = %s, want %s", ip, want)
+	}
+}
+
+func TestLookupForFamilyAllocatesDistinctIPv4AndIPv6Mappings(t *testing.T) {
+	pool, err := NewDualStack("198.18.0.0/24", "fdfe:dcba:9876::/120", time.Hour)
+	if err != nil {
+		t.Fatalf("NewDualStack() error = %v", err)
+	}
+
+	ip4 := pool.LookupForFamily("dual.example", FamilyIPv4)
+	ip6 := pool.LookupForFamily("dual.example", FamilyIPv6)
+
+	if !ip4.Is4() {
+		t.Fatalf("IPv4 lookup returned %s", ip4)
+	}
+	if !ip6.Is6() {
+		t.Fatalf("IPv6 lookup returned %s", ip6)
+	}
+	if ip4 != netip.MustParseAddr("198.18.0.4") {
+		t.Fatalf("IPv4 lookup = %s, want 198.18.0.4", ip4)
+	}
+	if ip6 != netip.MustParseAddr("fdfe:dcba:9876::4") {
+		t.Fatalf("IPv6 lookup = %s, want fdfe:dcba:9876::4", ip6)
+	}
+	if domain, ok := pool.LookBack(ip6); !ok || domain != "dual.example" {
+		t.Fatalf("LookBack(%s) = %q, %v; want dual.example, true", ip6, domain, ok)
+	}
+	if !pool.Contains(ip4) || !pool.Contains(ip6) {
+		t.Fatalf("Contains failed for allocated addresses %s and %s", ip4, ip6)
+	}
+	if pool.Size() != 2 {
+		t.Fatalf("Size() = %d, want 2", pool.Size())
 	}
 }
 
