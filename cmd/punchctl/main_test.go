@@ -1623,10 +1623,10 @@ func TestSystemCommand(t *testing.T) {
 			t.Fatalf("path = %q, want /api/system", r.URL.Path)
 		}
 		_ = json.NewEncoder(w).Encode(systemInfo{
-			TUNInterfaceName: "utun9",
-			TUNAddress:       "198.18.0.1/30",
-			TUNIPv6Address:   "fdfe:dcba:9876::1/126",
-			ExtraTUNRoutes:   []string{"1.1.1.0/24", "8.8.8.8/32"},
+			TUNInterfaceName:    "utun9",
+			TUNAddress:          "198.18.0.1/30",
+			TUNIPv6Address:      "fdfe:dcba:9876::1/126",
+			ExtraTUNRoutesCount: 2,
 			SystemDNS: []systemDNSInfo{{
 				Name:           "Wi-Fi",
 				Current:        []string{"198.18.0.1"},
@@ -1643,7 +1643,7 @@ func TestSystemCommand(t *testing.T) {
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}
-	for _, want := range []string{"Interface:", "utun9", "IPv6 Address:", "fdfe:dcba:9876::1/126", "Extra Routes:", "1.1.1.0/24, 8.8.8.8/32", "Wi-Fi: 198.18.0.1 [overriden from 223.5.5.5, 119.29.29.29]"} {
+	for _, want := range []string{"Interface:", "utun9", "IPv6 Address:", "fdfe:dcba:9876::1/126", "Extra Routes: 2", "Wi-Fi: 198.18.0.1 [overriden from 223.5.5.5, 119.29.29.29]"} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("system output missing %q:\n%s", want, out.String())
 		}

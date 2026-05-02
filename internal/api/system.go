@@ -25,6 +25,14 @@ type systemRouteEntry struct {
 	NextUpdate  time.Time `json:"next_update,omitempty"`
 }
 
+type systemRouteDetail struct {
+	systemRouteEntry
+	Type     string   `json:"type"`
+	Prefixes []string `json:"prefixes"`
+	Applied  bool     `json:"applied"`
+	Error    string   `json:"error,omitempty"`
+}
+
 type systemRouteRequest struct {
 	Route string `json:"route"`
 	Index *int   `json:"index,omitempty"`
@@ -33,11 +41,11 @@ type systemRouteRequest struct {
 func (s *Server) handleSystem(w http.ResponseWriter, r *http.Request) {
 	if s.tun == nil {
 		writeJSON(w, http.StatusOK, map[string]any{
-			"tun_interface_name": "",
-			"tun_address":        "",
-			"tun_ipv6_address":   "",
-			"extra_tun_routes":   []string{},
-			"system_dns":         []any{},
+			"tun_interface_name":     "",
+			"tun_address":            "",
+			"tun_ipv6_address":       "",
+			"extra_tun_routes_count": 0,
+			"system_dns":             []any{},
 		})
 		return
 	}
@@ -51,6 +59,57 @@ func (s *Server) handleSystemRoutes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, s.systemRouteEntries(cfg.TUN.Routes, systemRouteRefreshInterval(s, cfg)))
+}
+
+func (s *Server) handleGetSystemRoute(w http.ResponseWriter, r *http.Request) {
+	target := strings.TrimSpace(r.URL.Query().Get("route"))
+	if target == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "missing route"})
+		return
+	}
+	route, err := normalizeSystemRoute(target)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	cfg, err := config.Snapshot()
+	if err != nil {
+		writeJSON(w, configErrorStatus(err), map[string]string{"error": err.Error()})
+		return
+	}
+	idx := systemRouteIndex(cfg.TUN.Routes, route)
+	if idx < 0 {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": errSystemRouteNotFound.Error()})
+		return
+	}
+
+	detail := systemRouteDetail{
+		systemRouteEntry: systemRouteEntry{Index: idx, Route: route},
+		Type:             "cidr",
+		Prefixes:         []string{},
+	}
+	if isRemoteSource(route) || isSystemRouteSource(route) {
+		detail.Type = "source"
+	}
+	if isRemoteSource(route) {
+		detail.LastUpdated = s.systemRouteLastUpdated(route)
+		if interval := systemRouteRefreshInterval(s, cfg); interval > 0 && !detail.LastUpdated.IsZero() {
+			detail.NextUpdate = detail.LastUpdated.Add(interval)
+		}
+	}
+	if s.tun != nil {
+		resolution := s.tun.ResolveRoute(route)
+		if resolution.Err != nil {
+			detail.Error = resolution.Err.Error()
+		}
+		prefixes := make([]string, 0, len(resolution.Prefixes))
+		for _, p := range resolution.Prefixes {
+			prefixes = append(prefixes, p.String())
+		}
+		detail.Prefixes = prefixes
+		detail.Applied = resolution.Applied
+	}
+	writeJSON(w, http.StatusOK, detail)
 }
 
 func (s *Server) handleCreateSystemRoute(w http.ResponseWriter, r *http.Request) {

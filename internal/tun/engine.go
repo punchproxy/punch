@@ -39,11 +39,21 @@ type Engine struct {
 }
 
 type SystemInfo struct {
-	TUNInterfaceName string          `json:"tun_interface_name"`
-	TUNAddress       string          `json:"tun_address"`
-	TUNIPv6Address   string          `json:"tun_ipv6_address,omitempty"`
-	ExtraTUNRoutes   []string        `json:"extra_tun_routes"`
-	SystemDNS        []SystemDNSInfo `json:"system_dns"`
+	TUNInterfaceName    string          `json:"tun_interface_name"`
+	TUNAddress          string          `json:"tun_address"`
+	TUNIPv6Address      string          `json:"tun_ipv6_address,omitempty"`
+	ExtraTUNRoutesCount int             `json:"extra_tun_routes_count"`
+	SystemDNS           []SystemDNSInfo `json:"system_dns"`
+}
+
+// RouteResolution describes a single configured TUN route entry, the
+// concrete CIDR prefixes it resolves to, and whether those prefixes are
+// currently applied to the interface.
+type RouteResolution struct {
+	Route    string
+	Prefixes []netip.Prefix
+	Applied  bool
+	Err      error
 }
 
 func NewEngine(cfg config.TUN, dns *pdns.Server, sel *relay.Selector, sess *session.Manager, assetManager *assets.Manager) *Engine {
@@ -248,11 +258,13 @@ func (e *Engine) SystemInfo() SystemInfo {
 	dnsOverride := e.dnsOverride
 	e.mu.RUnlock()
 
+	resolved := e.buildRouteAddress(extraRoutes)
+
 	info := SystemInfo{
-		TUNInterfaceName: ifaceName,
-		TUNAddress:       tunAddress,
-		TUNIPv6Address:   tun6Address,
-		ExtraTUNRoutes:   extraRoutes,
+		TUNInterfaceName:    ifaceName,
+		TUNAddress:          tunAddress,
+		TUNIPv6Address:      tun6Address,
+		ExtraTUNRoutesCount: len(resolved),
 	}
 	if dnsOverride != nil {
 		info.SystemDNS = dnsOverride.Snapshot()
@@ -308,6 +320,47 @@ func (e *Engine) buildTunOptions() (LC.Tun, netip.Prefix, netip.Addr, error) {
 		Inet6Address:        inet6Address,
 		RouteAddress:        routes,
 	}, fakeRange, dnsServerAddress, nil
+}
+
+// ResolveRoute parses a single route entry (a CIDR or a URL/file source)
+// and returns the concrete prefixes it expands to, along with whether
+// every prefix is currently applied to the TUN interface.
+func (e *Engine) ResolveRoute(entry string) RouteResolution {
+	res := RouteResolution{Route: entry}
+	if isSource(entry) {
+		set := pdns.NewIPSet()
+		if _, err := pdns.LoadIPSet(entry, set, e.assets); err != nil {
+			res.Err = err
+			return res
+		}
+		res.Prefixes = set.Prefixes()
+	} else {
+		prefix, err := netip.ParsePrefix(entry)
+		if err != nil {
+			res.Err = err
+			return res
+		}
+		res.Prefixes = []netip.Prefix{prefix.Masked()}
+	}
+
+	e.mu.RLock()
+	started := e.started
+	current := make(map[netip.Prefix]struct{}, len(e.routeAddress))
+	for _, p := range e.routeAddress {
+		current[p.Masked()] = struct{}{}
+	}
+	e.mu.RUnlock()
+
+	if !started || len(res.Prefixes) == 0 {
+		return res
+	}
+	for _, p := range res.Prefixes {
+		if _, ok := current[p.Masked()]; !ok {
+			return res
+		}
+	}
+	res.Applied = true
+	return res
 }
 
 func (e *Engine) buildRouteAddress(routeEntries []string, fakeRanges ...netip.Prefix) []netip.Prefix {

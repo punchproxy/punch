@@ -19,11 +19,22 @@ import (
 var errCtlSystemRouteNotFound = errors.New("system route not found")
 
 type systemInfo struct {
-	TUNInterfaceName string          `json:"tun_interface_name"`
-	TUNAddress       string          `json:"tun_address"`
-	TUNIPv6Address   string          `json:"tun_ipv6_address,omitempty"`
-	ExtraTUNRoutes   []string        `json:"extra_tun_routes"`
-	SystemDNS        []systemDNSInfo `json:"system_dns"`
+	TUNInterfaceName    string          `json:"tun_interface_name"`
+	TUNAddress          string          `json:"tun_address"`
+	TUNIPv6Address      string          `json:"tun_ipv6_address,omitempty"`
+	ExtraTUNRoutesCount int             `json:"extra_tun_routes_count"`
+	SystemDNS           []systemDNSInfo `json:"system_dns"`
+}
+
+type systemRouteDetail struct {
+	Index       int       `json:"index"`
+	Route       string    `json:"route"`
+	Type        string    `json:"type"`
+	Prefixes    []string  `json:"prefixes"`
+	Applied     bool      `json:"applied"`
+	LastUpdated time.Time `json:"last_updated,omitempty"`
+	NextUpdate  time.Time `json:"next_update,omitempty"`
+	Error       string    `json:"error,omitempty"`
 }
 
 type systemDNSInfo struct {
@@ -93,7 +104,7 @@ func writeSystem(w io.Writer, info systemInfo) error {
 	if strings.TrimSpace(info.TUNIPv6Address) != "" {
 		fmt.Fprintf(w, "  IPv6 Address: %s\n", info.TUNIPv6Address)
 	}
-	fmt.Fprintf(w, "  Extra Routes: %s\n", formatStringList(info.ExtraTUNRoutes))
+	fmt.Fprintf(w, "  Extra Routes: %d\n", info.ExtraTUNRoutesCount)
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "System DNS:")
 	if len(info.SystemDNS) == 0 {
@@ -140,7 +151,79 @@ func newSystemRoutesCommand(cfg *commandConfig) *cobra.Command {
 	cmd.AddCommand(newSystemRouteCreateCommand(cfg))
 	cmd.AddCommand(newSystemRouteDeleteCommand(cfg))
 	cmd.AddCommand(newSystemRouteRefreshCommand(cfg))
+	cmd.AddCommand(newSystemRouteGetCommand(cfg))
 	return cmd
+}
+
+func newSystemRouteGetCommand(cfg *commandConfig) *cobra.Command {
+	return &cobra.Command{
+		Use:   "get ROUTE",
+		Short: "Show resolved CIDRs and apply status for a TUN extra route",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(c *cobra.Command, args []string) error {
+			detail, err := fetchSystemRoute(c.Context(), *cfg, args[0])
+			if err != nil {
+				if errors.Is(err, errCtlSystemRouteNotFound) {
+					return fmt.Errorf("route %q not found", args[0])
+				}
+				return err
+			}
+			return writeSystemRouteDetail(c.OutOrStdout(), detail)
+		},
+	}
+}
+
+func fetchSystemRoute(ctx context.Context, cfg commandConfig, route string) (systemRouteDetail, error) {
+	ctx, cancel := context.WithTimeout(ctx, cfg.timeout)
+	defer cancel()
+	reqURL := &url.URL{Path: "/api/system/routes/get"}
+	query := reqURL.Query()
+	query.Set("route", route)
+	reqURL.RawQuery = query.Encode()
+	endpoint, err := apiURL(cfg.addr, reqURL.String())
+	if err != nil {
+		return systemRouteDetail{}, err
+	}
+	resp, err := doRequest(ctx, cfg, http.MethodGet, endpoint, nil, http.StatusOK)
+	if err != nil {
+		if errors.Is(err, errAPINotFound) {
+			return systemRouteDetail{}, errCtlSystemRouteNotFound
+		}
+		return systemRouteDetail{}, err
+	}
+	defer resp.Body.Close()
+	var detail systemRouteDetail
+	if err := json.NewDecoder(resp.Body).Decode(&detail); err != nil {
+		return systemRouteDetail{}, fmt.Errorf("decode system route: %w", err)
+	}
+	return detail, nil
+}
+
+func writeSystemRouteDetail(w io.Writer, detail systemRouteDetail) error {
+	fmt.Fprintf(w, "Route:    %s\n", detail.Route)
+	fmt.Fprintf(w, "Index:    %d\n", detail.Index)
+	fmt.Fprintf(w, "Type:     %s\n", formatOptional(detail.Type))
+	applied := "no"
+	if detail.Applied {
+		applied = "yes"
+	}
+	fmt.Fprintf(w, "Applied:  %s\n", applied)
+	if detail.Type == "source" {
+		fmt.Fprintf(w, "Updated:  %s\n", formatTime(detail.LastUpdated))
+		fmt.Fprintf(w, "Next:     %s\n", formatTime(detail.NextUpdate))
+	}
+	if detail.Error != "" {
+		fmt.Fprintf(w, "Error:    %s\n", detail.Error)
+	}
+	fmt.Fprintf(w, "Prefixes (%d):\n", len(detail.Prefixes))
+	if len(detail.Prefixes) == 0 {
+		fmt.Fprintln(w, "  -")
+		return nil
+	}
+	for _, p := range detail.Prefixes {
+		fmt.Fprintf(w, "  %s\n", p)
+	}
+	return nil
 }
 
 func newSystemRouteCreateCommand(cfg *commandConfig) *cobra.Command {

@@ -66,6 +66,7 @@ func (s *Server) Start() error {
 		r.Get("/status", s.handleStatus)
 		r.Get("/system", s.handleSystem)
 		r.Get("/system/routes", s.handleSystemRoutes)
+		r.Get("/system/routes/get", s.handleGetSystemRoute)
 		r.Post("/system/routes", s.handleCreateSystemRoute)
 		r.Post("/system/routes/refresh", s.handleRefreshSystemRoute)
 		r.Delete("/system/routes", s.handleDeleteSystemRoute)
