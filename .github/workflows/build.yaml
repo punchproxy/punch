@@ -76,7 +76,7 @@ jobs:
           go build -v -ldflags "$LDFLAGS" -o "punchd${EXT}" ./cmd/punchd
           go build -v -ldflags "$LDFLAGS" -o "punchctl${EXT}" ./cmd/punchctl
 
-          ASSET="punch-${{ matrix.jobs.goos }}-${{ matrix.jobs.output }}-${VERSION}"
+          ASSET="punch-${{ matrix.jobs.goos }}-${{ matrix.jobs.output }}-${TAG}"
 
           mkdir "$ASSET"
           cp "punchd${EXT}" "$ASSET/"
@@ -93,5 +93,5 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release upload "${TAG}" \
-            punch-${{ matrix.jobs.goos }}-${{ matrix.jobs.output }}-${VERSION}.* \
+            punch-${{ matrix.jobs.goos }}-${{ matrix.jobs.output }}-${TAG}.* \
             --clobber
