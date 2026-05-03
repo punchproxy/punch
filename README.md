@@ -58,6 +58,39 @@ brew tap punchproxy/punch
 brew install punch
 ```
 
+### Docker
+
+Multi-arch images (`linux/amd64`, `linux/arm64`) are published to GHCR on each release:
+
+```sh
+docker pull ghcr.io/punchproxy/punch:latest
+```
+
+`punchd` needs the host TUN device and `NET_ADMIN` to bring up `punch0`, and runs most usefully on the host network so the DNS and API listeners are reachable:
+
+```sh
+docker run -d --name punch \
+  --network host \
+  --cap-add NET_ADMIN \
+  --device /dev/net/tun \
+  -v punch-data:/var/lib/punch \
+  ghcr.io/punchproxy/punch:latest
+```
+
+Run `punchctl` against the daemon from the same container:
+
+```sh
+docker exec punch punchctl status
+```
+
+Notes:
+
+- Data (including `punch.db`) lives at `/var/lib/punch` inside the container; the example mounts a named volume to persist it.
+- TUN requires `/dev/net/tun` on the host. On hosts where the module is not loaded, run `modprobe tun` first.
+- Without `--network host`, expose the API and DNS ports explicitly (`-p 127.0.0.1:28854:28854 -p 28853:28853/udp`); transparent capture via TUN still requires the host network namespace to be useful.
+- `NET_ADMIN` plus `/dev/net/tun` is enough to manage TUN; no `--privileged` is required.
+- Tags follow semver: `vX.Y.Z`, `X.Y`, `X`, plus `latest` for non-prerelease tags.
+
 ## Quick Start
 
 Build both binaries:
