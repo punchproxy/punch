@@ -49,6 +49,15 @@ applications
 punchctl -> Punch API :28854 -> config, DNS, relays, sessions, status
 ```
 
+## Installation
+
+Install via Homebrew:
+
+```sh
+brew tap punchproxy/punch
+brew install punch
+```
+
 ## Quick Start
 
 Build both binaries:
