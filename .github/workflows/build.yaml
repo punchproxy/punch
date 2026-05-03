@@ -30,8 +30,8 @@ jobs:
     strategy:
       matrix:
         jobs:
-          - { goos: linux, goarch: amd64, goamd64: v3, output: amd64 }
-          - { goos: linux, goarch: arm64, output: arm64 }
+          - { goos: linux, goarch: amd64, goamd64: v3, output: amd64, debian: amd64, rpm: x86_64 }
+          - { goos: linux, goarch: arm64, output: arm64, debian: arm64, rpm: aarch64 }
 
           - { goos: darwin, goarch: amd64, goamd64: v3, output: amd64 }
           - { goos: darwin, goarch: arm64, output: arm64 }
@@ -87,6 +87,39 @@ jobs:
           else
             tar -czf "${ASSET}.tar.gz" "$ASSET"
           fi
+
+      - name: Package DEB
+        if: matrix.jobs.debian != ''
+        run: |
+          set -xeuo pipefail
+          sudo gem install --no-document fpm
+          cp .github/release/.fpm .fpm
+
+          PKGVER="${TAG#v}"
+
+          fpm -t deb \
+            -v "${PKGVER}" \
+            -p "punch-${{ matrix.jobs.goos }}-${{ matrix.jobs.output }}-${TAG}.deb" \
+            --architecture ${{ matrix.jobs.debian }} \
+            punchd=/usr/bin/punchd \
+            punchctl=/usr/bin/punchctl
+
+      - name: Package RPM
+        if: matrix.jobs.rpm != ''
+        run: |
+          set -xeuo pipefail
+          sudo gem install --no-document fpm
+          cp .github/release/.fpm .fpm
+
+          PKGVER="${TAG#v}"
+          PKGVER="${PKGVER//-/_}"
+
+          fpm -t rpm \
+            -v "${PKGVER}" \
+            -p "punch-${{ matrix.jobs.goos }}-${{ matrix.jobs.output }}-${TAG}.rpm" \
+            --architecture ${{ matrix.jobs.rpm }} \
+            punchd=/usr/bin/punchd \
+            punchctl=/usr/bin/punchctl
 
       - name: Upload assets to release
         env:

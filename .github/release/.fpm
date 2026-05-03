@@ -1,0 +1,10 @@
+-s dir
+-n punch
+--license GPL-3.0
+--vendor "punchproxy"
+--description "punch tunneling proxy"
+--url "https://github.com/punchproxy/punch"
+--maintainer "punchproxy"
+--deb-systemd .github/release/punchd.service
+--deb-systemd-enable
+--deb-systemd-auto-start

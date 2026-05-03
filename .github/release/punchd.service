@@ -1,0 +1,11 @@
+[Unit]
+Description=punch daemon
+After=network.target
+
+[Service]
+ExecStart=/usr/bin/punchd
+Restart=on-failure
+User=root
+
+[Install]
+WantedBy=multi-user.target
