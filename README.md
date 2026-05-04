@@ -109,7 +109,7 @@ sudo ./punchd
 Punch stores `punch.db` in a platform-specific data directory by default. Override it when developing:
 
 ```sh
-sudo ./punchd -data-dir ./data -debug
+sudo ./punchd -data-dir ./data -s system.log_level=debug
 ```
 
 Check the daemon from another terminal:
@@ -135,8 +135,11 @@ If the API is listening somewhere else or requires a token:
 ```sh
 ./punchd -version
 ./punchd -data-dir ./data
-./punchd -debug
+./punchd -s system.log_level=debug
+./punchd -s dns.listen=0.0.0.0:53 -s api.listen=127.0.0.1:8080
 ```
+
+Use `-s key=value` (or `--set key=value`) to override any scalar config key on startup. The new value is written to the persisted config store, so it survives restarts. The flag may be repeated. Run `./punchctl config` to see the available keys.
 
 Default listeners:
 

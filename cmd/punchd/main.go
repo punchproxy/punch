@@ -10,6 +10,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"syscall"
 	"time"
 
@@ -24,14 +25,27 @@ import (
 	"github.com/punchproxy/punch/internal/tun"
 )
 
+type setFlag []string
+
+func (s *setFlag) String() string { return strings.Join(*s, ",") }
+func (s *setFlag) Set(v string) error {
+	if !strings.Contains(v, "=") {
+		return fmt.Errorf("expected key=value, got %q", v)
+	}
+	*s = append(*s, v)
+	return nil
+}
+
 var (
-	version = "dev"
-	dataDir = flag.String("data-dir", "", "override directory that holds punch.db (default: $PUNCH_DATA_DIR or platform-specific path)")
-	debug   = flag.Bool("debug", false, "force debug log level, overriding the stored config")
-	showVer = flag.Bool("version", false, "show version and exit")
+	version  = "dev"
+	dataDir  = flag.String("data-dir", "", "override directory that holds punch.db (default: $PUNCH_DATA_DIR or platform-specific path)")
+	showVer  = flag.Bool("version", false, "show version and exit")
+	setFlags setFlag
 )
 
 func main() {
+	flag.Var(&setFlags, "set", "override a config key and persist it (e.g. -set dns.listen=0.0.0.0:53); may be repeated")
+	flag.Var(&setFlags, "s", "shorthand for -set")
 	flag.Parse()
 
 	if *showVer {
@@ -62,18 +76,19 @@ func main() {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
+
+	if err := applySetOverrides(setFlags); err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+
 	cfg, err := config.Snapshot()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
 
-	// Configure logging
-	logLevel := cfg.LogLevel
-	if *debug {
-		logLevel = "debug"
-	}
-	setupLogging(logLevel, cfg.LogFile)
+	setupLogging(cfg.LogLevel, cfg.LogFile)
 	slog.Info("Punch starting", "version", version, "data_dir", dir)
 
 	// Initialize event bus
@@ -233,6 +248,24 @@ func resolveDataDir(flagVal string) (string, error) {
 		}
 		return filepath.Join(home, ".config", "punch"), nil
 	}
+}
+
+// applySetOverrides applies each -set key=value to the persisted config.
+func applySetOverrides(items []string) error {
+	for _, item := range items {
+		key, value, ok := strings.Cut(item, "=")
+		if !ok {
+			return fmt.Errorf("invalid -set %q: expected key=value", item)
+		}
+		key = strings.TrimSpace(key)
+		if key == "" {
+			return fmt.Errorf("invalid -set %q: empty key", item)
+		}
+		if err := config.Set(key, value); err != nil {
+			return fmt.Errorf("set %s: %w", key, err)
+		}
+	}
+	return nil
 }
 
 func setupLogging(level, file string) {
