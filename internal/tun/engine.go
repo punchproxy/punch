@@ -364,11 +364,16 @@ func (e *Engine) ResolveRoute(entry string) RouteResolution {
 }
 
 func (e *Engine) buildRouteAddress(routeEntries []string, fakeRanges ...netip.Prefix) []netip.Prefix {
+	dropIPv6 := e.dnsServer != nil && e.dnsServer.DisableIPv6FakeIP()
 	var routes []netip.Prefix
 	for _, fakeRange := range fakeRanges {
-		if fakeRange.IsValid() {
-			routes = append(routes, fakeRange.Masked())
+		if !fakeRange.IsValid() {
+			continue
 		}
+		if dropIPv6 && fakeRange.Addr().Is6() {
+			continue
+		}
+		routes = append(routes, fakeRange.Masked())
 	}
 	for _, entry := range routeEntries {
 		if isSource(entry) {
@@ -378,13 +383,22 @@ func (e *Engine) buildRouteAddress(routeEntries []string, fakeRanges ...netip.Pr
 				slog.Warn("ignoring invalid tun route source", "source", entry, "error", err)
 				continue
 			}
-			routes = append(routes, set.Prefixes()...)
+			for _, p := range set.Prefixes() {
+				if dropIPv6 && p.Addr().Is6() {
+					continue
+				}
+				routes = append(routes, p)
+			}
 			slog.Info("loaded tun route source", "source", entry, "count", n)
 			continue
 		}
 		prefix, err := netip.ParsePrefix(entry)
 		if err != nil {
 			slog.Warn("ignoring invalid tun route", "cidr", entry, "error", err)
+			continue
+		}
+		if dropIPv6 && prefix.Addr().Is6() {
+			slog.Debug("dropping ipv6 tun route while ipv6 fake-ip is disabled", "cidr", entry)
 			continue
 		}
 		routes = append(routes, prefix.Masked())

@@ -61,6 +61,8 @@ func TestRelayAAAAAllocatesIPv6FakeIP(t *testing.T) {
 	cfg.DNS.FakeIPRange = "198.18.0.0/24"
 	cfg.DNS.FakeIPv6Range = "fdfe:dcba:9876::/120"
 	cfg.DNS.FakeIPTTL = "1h"
+	disableIPv6 := false
+	cfg.DNS.DisableIPv6FakeIP = &disableIPv6
 	cfg.DNS.Rules.Domains = []config.DomainRule{{Decision: config.DecisionRelay, Source: "domain:example.com"}}
 	useConfig(t, cfg)
 

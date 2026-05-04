@@ -31,14 +31,15 @@ type Config struct {
 }
 
 type DNS struct {
-	Listen        string      `json:"listen"`
-	Upstream      []Upstream  `json:"upstream"`
-	CacheSize     int         `json:"cache_size"`
-	FakeIPRange   string      `json:"fakeip_range"`
-	FakeIPv6Range string      `json:"fakeipv6_range,omitempty"`
-	FakeIPTTL     string      `json:"fakeip_ttl"`
-	Options       *DNSOptions `json:"options,omitempty"`
-	Rules         DNSRules    `json:"rules"`
+	Listen            string      `json:"listen"`
+	Upstream          []Upstream  `json:"upstream"`
+	CacheSize         int         `json:"cache_size"`
+	FakeIPRange       string      `json:"fakeip_range"`
+	FakeIPv6Range     string      `json:"fakeipv6_range,omitempty"`
+	FakeIPTTL         string      `json:"fakeip_ttl"`
+	DisableIPv6FakeIP *bool       `json:"disable_ipv6_fakeip,omitempty"`
+	Options           *DNSOptions `json:"options,omitempty"`
+	Rules             DNSRules    `json:"rules"`
 }
 
 type Upstream struct {
@@ -158,6 +159,7 @@ var scalarKeys = []string{
 	"dns.fakeip_range",
 	"dns.fakeipv6_range",
 	"dns.fakeip_ttl",
+	"dns.disable_ipv6_fakeip",
 	"tun.device",
 	"relay.select",
 	"relay.auto_strategy.mode",
@@ -302,6 +304,8 @@ func getValue(cfg *Config, key string) (string, error) {
 		return cfg.DNS.FakeIPv6Range, nil
 	case "dns.fakeip_ttl":
 		return cfg.DNS.FakeIPTTL, nil
+	case "dns.disable_ipv6_fakeip":
+		return strconv.FormatBool(disableIPv6FakeIPValue(cfg)), nil
 	case "tun.device":
 		return cfg.TUN.Device, nil
 	case "relay.select":
@@ -353,6 +357,12 @@ func setValue(cfg *Config, key, value string) error {
 		cfg.DNS.FakeIPv6Range = value
 	case "dns.fakeip_ttl":
 		cfg.DNS.FakeIPTTL = value
+	case "dns.disable_ipv6_fakeip":
+		parsed, err := strconv.ParseBool(value)
+		if err != nil {
+			return fmt.Errorf("dns.disable_ipv6_fakeip must be a boolean")
+		}
+		cfg.DNS.DisableIPv6FakeIP = &parsed
 	case "tun.device":
 		cfg.TUN.Device = value
 	case "relay.select":
@@ -395,6 +405,19 @@ func setValue(cfg *Config, key, value string) error {
 	return nil
 }
 
+// DisableIPv6FakeIPEnabled returns true if AAAA queries that would otherwise be
+// assigned a fake IPv6 should instead receive an empty NOERROR response.
+func DisableIPv6FakeIPEnabled(cfg *Config) bool {
+	return disableIPv6FakeIPValue(cfg)
+}
+
+func disableIPv6FakeIPValue(cfg *Config) bool {
+	if cfg == nil || cfg.DNS.DisableIPv6FakeIP == nil {
+		return true
+	}
+	return *cfg.DNS.DisableIPv6FakeIP
+}
+
 func parsePositiveInt(key, value string) (int, error) {
 	parsed, err := strconv.Atoi(value)
 	if err != nil || parsed <= 0 {
@@ -413,6 +436,10 @@ func cloneConfig(cfg *Config) *Config {
 	if cfg.DNS.Options != nil {
 		options := *cfg.DNS.Options
 		out.DNS.Options = &options
+	}
+	if cfg.DNS.DisableIPv6FakeIP != nil {
+		v := *cfg.DNS.DisableIPv6FakeIP
+		out.DNS.DisableIPv6FakeIP = &v
 	}
 	out.DNS.Rules.Domains = append([]DomainRule(nil), cfg.DNS.Rules.Domains...)
 	out.DNS.Rules.CIDRs = append([]CIDRRule(nil), cfg.DNS.Rules.CIDRs...)
@@ -482,11 +509,12 @@ func loadTables(s *Store) (*Config, error) {
 		LogFile:              base.LogFile,
 		AssetRefreshInterval: base.AssetRefreshInterval,
 		DNS: DNS{
-			Listen:        base.DNSListen,
-			CacheSize:     base.DNSCacheSize,
-			FakeIPRange:   base.DNSFakeIPRange,
-			FakeIPv6Range: base.DNSFakeIPv6Range,
-			FakeIPTTL:     base.DNSFakeIPTTL,
+			Listen:            base.DNSListen,
+			CacheSize:         base.DNSCacheSize,
+			FakeIPRange:       base.DNSFakeIPRange,
+			FakeIPv6Range:     base.DNSFakeIPv6Range,
+			FakeIPTTL:         base.DNSFakeIPTTL,
+			DisableIPv6FakeIP: base.DNSDisableIPv6FakeIP,
 		},
 		TUN: TUN{
 			Device: base.TUNDevice,
@@ -673,6 +701,7 @@ func saveTables(s *Store, cfg *Config) error {
 			DNSFakeIPRange:        cfg.DNS.FakeIPRange,
 			DNSFakeIPv6Range:      cfg.DNS.FakeIPv6Range,
 			DNSFakeIPTTL:          cfg.DNS.FakeIPTTL,
+			DNSDisableIPv6FakeIP:  cfg.DNS.DisableIPv6FakeIP,
 			TUNDevice:             cfg.TUN.Device,
 			RelaySelect:           cfg.Relay.Select,
 			RelayAutoMode:         cfg.Relay.AutoStrategy.Mode,
@@ -927,6 +956,7 @@ func Default() *Config {
 			FakeIPRange:   "198.18.0.0/15",
 			FakeIPv6Range: "fdfe:dcba:9876::/64",
 			FakeIPTTL:     "1h",
+			DisableIPv6FakeIP: func() *bool { t := true; return &t }(),
 			Rules: DNSRules{
 				Domains: []DomainRule{
 					{Decision: DecisionReject, Source: "qtype:ptr"},
@@ -986,6 +1016,10 @@ func applyDefaults(cfg *Config) {
 	}
 	if cfg.DNS.FakeIPTTL == "" {
 		cfg.DNS.FakeIPTTL = "1h"
+	}
+	if cfg.DNS.DisableIPv6FakeIP == nil {
+		t := true
+		cfg.DNS.DisableIPv6FakeIP = &t
 	}
 	if cfg.AssetRefreshInterval == 0 {
 		cfg.AssetRefreshInterval = 3600

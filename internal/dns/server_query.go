@@ -124,6 +124,11 @@ func (s *Server) handleRelayRule(ctx context.Context, r *dns.Msg, domain string,
 			resp, upstream := s.resolveAndCacheWithResolver(ctx, r, domain, qtype, resolverOverride, respectAnswerTTL)
 			return resp, upstream, ""
 		}
+		if s.disableIPv6FakeIP {
+			resp := new(dns.Msg)
+			resp.SetReply(r)
+			return resp, "", "EMPTY(NOERROR)"
+		}
 		fakeIP, ok := s.lookupFakeIP(domain, qtype)
 		if !ok {
 			resp := new(dns.Msg)
@@ -163,6 +168,11 @@ func (s *Server) processUpstreamResponse(r *dns.Msg, domain string, qtype uint16
 	}
 
 	s.relayDecisions.Add(1)
+	if qtype == dns.TypeAAAA && s.disableIPv6FakeIP {
+		empty := new(dns.Msg)
+		empty.SetReply(r)
+		return empty, DecisionRelay, "ipv6-fakeip-disabled", upstream
+	}
 	if qtype == dns.TypeA || qtype == dns.TypeAAAA {
 		fakeIP, ok := s.lookupFakeIP(domain, qtype)
 		if !ok {

@@ -18,9 +18,10 @@ import (
 )
 
 type Server struct {
-	listenAddr string
-	fakeIPPool *fakeip.Pool
-	cache      *Cache
+	listenAddr        string
+	fakeIPPool        *fakeip.Pool
+	disableIPv6FakeIP bool
+	cache             *Cache
 	resolver   *ResolverGroup
 	resolverMu sync.RWMutex
 
@@ -74,7 +75,12 @@ func NewServer(assetManager *assets.Manager) (*Server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parse fake ip ttl: %w", err)
 	}
-	fakePool, err := fakeip.NewDualStack(cfg.DNS.FakeIPRange, cfg.DNS.FakeIPv6Range, fakeIPTTL)
+	disableIPv6FakeIP := config.DisableIPv6FakeIPEnabled(cfg)
+	fakeIPv6Range := cfg.DNS.FakeIPv6Range
+	if disableIPv6FakeIP {
+		fakeIPv6Range = ""
+	}
+	fakePool, err := fakeip.NewDualStack(cfg.DNS.FakeIPRange, fakeIPv6Range, fakeIPTTL)
 	if err != nil {
 		return nil, fmt.Errorf("create fake ip pool: %w", err)
 	}
@@ -82,6 +88,7 @@ func NewServer(assetManager *assets.Manager) (*Server, error) {
 	s := &Server{
 		listenAddr:         cfg.DNS.Listen,
 		fakeIPPool:         fakePool,
+		disableIPv6FakeIP:  disableIPv6FakeIP,
 		cache:              NewCache(cfg.DNS.CacheSize, 60, 86400),
 		resolver:           NewResolverGroup(buildUpstreams()),
 		domainMatcher:      dnsrule.NewMatcher(),
@@ -168,6 +175,9 @@ func (s *Server) Stop() error {
 	}
 	return nil
 }
+
+// DisableIPv6FakeIP reports whether IPv6 fake-IP allocation is disabled.
+func (s *Server) DisableIPv6FakeIP() bool { return s.disableIPv6FakeIP }
 
 func (s *Server) handleDNS(w dns.ResponseWriter, r *dns.Msg) {
 	resp, _, _, _, err := s.serveMsg(context.Background(), r, w.RemoteAddr().String())
