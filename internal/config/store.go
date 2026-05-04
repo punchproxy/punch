@@ -119,7 +119,6 @@ type configBaseModel struct {
 	DNSDisableIPv6FakeIP  *bool  `gorm:"column:dns_disable_ipv6_fakeip;default:1"`
 	TUNDevice             string `gorm:"column:tun_device;not null"`
 	RelaySelect           string `gorm:"column:relay_select;not null"`
-	RelayAutoMode         string `gorm:"column:relay_auto_mode;not null"`
 	RelayAutoURL          string `gorm:"column:relay_auto_url;not null"`
 	RelayAutoInterval     int    `gorm:"column:relay_auto_interval;not null"`
 	RelayAutoTolerance    int    `gorm:"column:relay_auto_tolerance;not null"`

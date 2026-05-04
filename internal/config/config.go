@@ -96,7 +96,6 @@ type Relay struct {
 }
 
 type AutoStrategy struct {
-	Mode             string `json:"mode,omitempty"`
 	URL              string `json:"url"`
 	Interval         int    `json:"interval"`
 	Tolerance        int    `json:"tolerance"`
@@ -162,7 +161,6 @@ var scalarKeys = []string{
 	"dns.disable_ipv6_fakeip",
 	"tun.device",
 	"relay.select",
-	"relay.auto_strategy.mode",
 	"relay.auto_strategy.url",
 	"relay.auto_strategy.interval",
 	"relay.auto_strategy.tolerance",
@@ -310,8 +308,6 @@ func getValue(cfg *Config, key string) (string, error) {
 		return cfg.TUN.Device, nil
 	case "relay.select":
 		return cfg.Relay.Select, nil
-	case "relay.auto_strategy.mode":
-		return cfg.Relay.AutoStrategy.Mode, nil
 	case "relay.auto_strategy.url":
 		return cfg.Relay.AutoStrategy.URL, nil
 	case "relay.auto_strategy.interval":
@@ -367,8 +363,6 @@ func setValue(cfg *Config, key, value string) error {
 		cfg.TUN.Device = value
 	case "relay.select":
 		cfg.Relay.Select = value
-	case "relay.auto_strategy.mode":
-		cfg.Relay.AutoStrategy.Mode = value
 	case "relay.auto_strategy.url":
 		cfg.Relay.AutoStrategy.URL = value
 	case "relay.auto_strategy.interval":
@@ -522,7 +516,6 @@ func loadTables(s *Store) (*Config, error) {
 		Relay: Relay{
 			Select: base.RelaySelect,
 			AutoStrategy: AutoStrategy{
-				Mode:             base.RelayAutoMode,
 				URL:              base.RelayAutoURL,
 				Interval:         base.RelayAutoInterval,
 				Tolerance:        base.RelayAutoTolerance,
@@ -704,7 +697,6 @@ func saveTables(s *Store, cfg *Config) error {
 			DNSDisableIPv6FakeIP:  cfg.DNS.DisableIPv6FakeIP,
 			TUNDevice:             cfg.TUN.Device,
 			RelaySelect:           cfg.Relay.Select,
-			RelayAutoMode:         cfg.Relay.AutoStrategy.Mode,
 			RelayAutoURL:          cfg.Relay.AutoStrategy.URL,
 			RelayAutoInterval:     cfg.Relay.AutoStrategy.Interval,
 			RelayAutoTolerance:    cfg.Relay.AutoStrategy.Tolerance,

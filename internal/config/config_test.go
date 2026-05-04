@@ -58,7 +58,6 @@ func TestConfigSaveLoadRoundTrip(t *testing.T) {
 	want.Relay = Relay{
 		Select: "manual",
 		AutoStrategy: AutoStrategy{
-			Mode:             "url-test",
 			URL:              "https://example.com/204",
 			Interval:         60,
 			Tolerance:        10,
