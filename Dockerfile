@@ -21,7 +21,10 @@ RUN --mount=type=cache,target=/root/.cache/go-build \
     GOOS=$TARGETOS GOARCH=$TARGETARCH \
     go build -ldflags "-s -w -X main.version=${VERSION}" -o /out/punchctl ./cmd/punchctl
 
-FROM gcr.io/distroless/static-debian12
+FROM debian:12-slim
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends iproute2 iptables ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 COPY --from=build /out/punchd /usr/bin/punchd
 COPY --from=build /out/punchctl /usr/bin/punchctl
 
