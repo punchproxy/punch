@@ -44,10 +44,11 @@ type Server struct {
 	rejectDecisions  atomic.Int64
 	defaultRuleHits  atomic.Int64
 
-	// Query log ring buffer
-	mu       sync.Mutex
-	queryLog []QueryLog
-	maxLog   int
+	// Last queried domains by DNS decision, guarded by mu.
+	mu               sync.Mutex
+	lastRelayDomain  string
+	lastDirectDomain string
+	lastRejectDomain string
 
 	queryStreamMu      sync.Mutex
 	queryStreamClients map[chan<- QueryLog]struct{}
@@ -98,7 +99,6 @@ func NewServer(assetManager *assets.Manager) (*Server, error) {
 		directIPs:          NewIPSet(),
 		rejectIPs:          NewIPSet(),
 		assets:             assetManager,
-		maxLog:             1000,
 		queryStreamClients: make(map[chan<- QueryLog]struct{}),
 		ruleLists:          make(map[string][]RuleListEntry),
 		ruleListIndex:      make(map[string]map[string]*RuleListEntry),

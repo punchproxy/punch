@@ -3,6 +3,8 @@ package dns
 import (
 	"sync"
 	"time"
+
+	"github.com/punchproxy/punch/internal/config"
 )
 
 // QueryLog records information about a DNS query.
@@ -22,9 +24,13 @@ type QueryLog struct {
 func (s *Server) addQueryLog(ql QueryLog) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.queryLog = append(s.queryLog, ql)
-	if len(s.queryLog) > s.maxLog {
-		s.queryLog = s.queryLog[len(s.queryLog)-s.maxLog:]
+	switch string(ql.Decision) {
+	case string(DecisionRelay), config.DecisionRelay:
+		s.lastRelayDomain = ql.Domain
+	case string(DecisionDirect), config.DecisionDirect:
+		s.lastDirectDomain = ql.Domain
+	case string(DecisionReject), config.DecisionReject:
+		s.lastRejectDomain = ql.Domain
 	}
 }
 
