@@ -10,41 +10,62 @@ import (
 	"strings"
 )
 
-var linuxResolvConfPath = "/etc/resolv.conf"
+var (
+	linuxResolvConfPath = "/etc/resolv.conf"
+	linuxLookPath       = exec.LookPath
+	linuxRunCommand     = func(name string, args ...string) ([]byte, error) {
+		return exec.Command(name, args...).CombinedOutput()
+	}
+)
+
+type linuxResolvectlError struct {
+	args   []string
+	output string
+	err    error
+}
+
+func (e *linuxResolvectlError) Error() string {
+	if e.output == "" {
+		return fmt.Sprintf("resolvectl %s: %v", strings.Join(e.args, " "), e.err)
+	}
+	return fmt.Sprintf("resolvectl %s: %s: %v", strings.Join(e.args, " "), e.output, e.err)
+}
+
+func (e *linuxResolvectlError) Unwrap() error {
+	return e.err
+}
 
 func overrideSystemDNS(serverIP, iface string) (*systemDNSOverride, error) {
 	if iface == "" {
 		return nil, fmt.Errorf("missing tun interface name")
 	}
-	if _, err := exec.LookPath("resolvectl"); err != nil {
-		if !errors.Is(err, exec.ErrNotFound) {
-			return nil, fmt.Errorf("look up resolvectl: %w", err)
-		}
-		states, err := linuxCurrentResolvConfDNS()
-		if err != nil {
-			return nil, err
-		}
-		if err := linuxApplyResolvConfDNSOverride(states, serverIP); err != nil {
-			return nil, err
-		}
-		return newSystemDNSOverride(serverIP, states, func() ([]systemDNSState, error) {
-			return linuxCurrentResolvConfDNS()
-		}, linuxApplyResolvConfDNSOverride, linuxRestoreResolvConfDNS), nil
+	useResolved, err := linuxHasResolvectl()
+	if err != nil {
+		return nil, err
+	}
+	if !useResolved {
+		return linuxOverrideResolvConfDNS(serverIP)
 	}
 
-	states, err := currentSystemDNS(iface)
+	states, err := linuxCurrentResolvedDNS(iface)
 	if err != nil {
+		if linuxShouldUseResolvConfFallback(err) {
+			return linuxOverrideResolvConfDNS(serverIP)
+		}
 		return nil, err
 	}
 	if len(states) == 0 {
 		states = []systemDNSState{{Name: iface, Empty: true}}
 	}
 	if err := linuxApplyDNSOverride(states, serverIP); err != nil {
+		if linuxShouldUseResolvConfFallback(err) {
+			return linuxOverrideResolvConfDNS(serverIP)
+		}
 		return nil, err
 	}
 
 	return newSystemDNSOverride(serverIP, states, func() ([]systemDNSState, error) {
-		return currentSystemDNS(iface)
+		return linuxCurrentResolvedDNS(iface)
 	}, linuxApplyDNSOverride, linuxRestoreDNS), nil
 }
 
@@ -52,17 +73,38 @@ func currentSystemDNS(iface string) ([]systemDNSState, error) {
 	if iface == "" {
 		return nil, nil
 	}
-	if _, err := exec.LookPath("resolvectl"); err != nil {
-		if !errors.Is(err, exec.ErrNotFound) {
-			return nil, fmt.Errorf("look up resolvectl: %w", err)
-		}
+	useResolved, err := linuxHasResolvectl()
+	if err != nil {
+		return nil, err
+	}
+	if !useResolved {
 		return linuxCurrentResolvConfDNS()
 	}
-	out, err := exec.Command("resolvectl", "dns", iface).CombinedOutput()
+	states, err := linuxCurrentResolvedDNS(iface)
 	if err != nil {
-		return nil, fmt.Errorf("resolvectl dns %s: %s: %w", iface, strings.TrimSpace(string(out)), err)
+		if linuxShouldUseResolvConfFallback(err) {
+			return linuxCurrentResolvConfDNS()
+		}
+		return nil, err
 	}
-	text := strings.TrimSpace(string(out))
+	return states, nil
+}
+
+func linuxHasResolvectl() (bool, error) {
+	if _, err := linuxLookPath("resolvectl"); err != nil {
+		if !errors.Is(err, exec.ErrNotFound) {
+			return false, fmt.Errorf("look up resolvectl: %w", err)
+		}
+		return false, nil
+	}
+	return true, nil
+}
+
+func linuxCurrentResolvedDNS(iface string) ([]systemDNSState, error) {
+	text, err := linuxRunResolvectl("dns", iface)
+	if err != nil {
+		return nil, err
+	}
 	if text == "" {
 		return []systemDNSState{{Name: iface, Empty: true}}, nil
 	}
@@ -75,6 +117,19 @@ func currentSystemDNS(iface string) ([]systemDNSState, error) {
 		}
 	}
 	return []systemDNSState{{Name: iface, Servers: servers, Empty: len(servers) == 0}}, nil
+}
+
+func linuxOverrideResolvConfDNS(serverIP string) (*systemDNSOverride, error) {
+	states, err := linuxCurrentResolvConfDNS()
+	if err != nil {
+		return nil, err
+	}
+	if err := linuxApplyResolvConfDNSOverride(states, serverIP); err != nil {
+		return nil, err
+	}
+	return newSystemDNSOverride(serverIP, states, func() ([]systemDNSState, error) {
+		return linuxCurrentResolvConfDNS()
+	}, linuxApplyResolvConfDNSOverride, linuxRestoreResolvConfDNS), nil
 }
 
 func linuxApplyDNSOverride(states []systemDNSState, serverIP string) error {
@@ -96,8 +151,8 @@ func linuxSetPunchDNS(iface, serverIP string) error {
 		{"default-route", iface, "yes"},
 	}
 	for _, args := range steps {
-		if out, err := exec.Command("resolvectl", args...).CombinedOutput(); err != nil {
-			return fmt.Errorf("resolvectl %s: %s: %w", strings.Join(args, " "), strings.TrimSpace(string(out)), err)
+		if _, err := linuxRunResolvectl(args...); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -110,17 +165,59 @@ func linuxRestoreDNS(states []systemDNSState) error {
 			continue
 		}
 		if state.Empty || len(state.Servers) == 0 {
-			if out, err := exec.Command("resolvectl", "revert", state.Name).CombinedOutput(); err != nil && firstErr == nil {
-				firstErr = fmt.Errorf("resolvectl revert %s: %s: %w", state.Name, strings.TrimSpace(string(out)), err)
+			if _, err := linuxRunResolvectl("revert", state.Name); err != nil && firstErr == nil {
+				firstErr = err
 			}
 			continue
 		}
 		args := append([]string{"dns", state.Name}, state.Servers...)
-		if out, err := exec.Command("resolvectl", args...).CombinedOutput(); err != nil && firstErr == nil {
-			firstErr = fmt.Errorf("resolvectl %s: %s: %w", strings.Join(args, " "), strings.TrimSpace(string(out)), err)
+		if _, err := linuxRunResolvectl(args...); err != nil && firstErr == nil {
+			firstErr = err
 		}
 	}
 	return firstErr
+}
+
+func linuxRunResolvectl(args ...string) (string, error) {
+	out, err := linuxRunCommand("resolvectl", args...)
+	text := strings.TrimSpace(string(out))
+	if err != nil {
+		return "", &linuxResolvectlError{
+			args:   append([]string(nil), args...),
+			output: text,
+			err:    err,
+		}
+	}
+	return text, nil
+}
+
+func linuxShouldUseResolvConfFallback(err error) bool {
+	var resolvectlErr *linuxResolvectlError
+	if !errors.As(err, &resolvectlErr) {
+		return false
+	}
+	if errors.Is(err, exec.ErrNotFound) {
+		return true
+	}
+	return linuxResolvectlServiceUnavailableOutput(resolvectlErr.output)
+}
+
+func linuxResolvectlServiceUnavailableOutput(output string) bool {
+	text := strings.ToLower(output)
+	if strings.Contains(text, "/run/systemd/resolve") ||
+		strings.Contains(text, "systemd-resolved is not running") {
+		return true
+	}
+	if strings.Contains(text, "sd_bus_open_system") && strings.Contains(text, "no such file") {
+		return true
+	}
+	if strings.Contains(text, "org.freedesktop.resolve1") || strings.Contains(text, "resolve1.service") {
+		return strings.Contains(text, "not found") ||
+			strings.Contains(text, "not provided") ||
+			strings.Contains(text, "could not activate") ||
+			strings.Contains(text, "activation request failed")
+	}
+	return false
 }
 
 func linuxCurrentResolvConfDNS() ([]systemDNSState, error) {
