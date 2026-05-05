@@ -104,10 +104,56 @@ func TestLastLookupTimeClearedWhenMappingPruned(t *testing.T) {
 	}
 
 	time.Sleep(5 * time.Millisecond)
+	pool.mu.Lock()
+	pool.nextPruneAt = time.Time{}
+	pool.mu.Unlock()
 	pool.Lookup("other.example")
 
 	if got := pool.LastLookupTime("expire.example"); !got.IsZero() {
 		t.Fatalf("LastLookupTime() after prune = %s, want zero", got)
+	}
+}
+
+func TestLookupDoesNotPruneUnrelatedExpiredMappingBeforeInterval(t *testing.T) {
+	pool, err := New("198.18.0.0/24", time.Millisecond)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	expiredIP := pool.Lookup("expire.example")
+	time.Sleep(5 * time.Millisecond)
+
+	pool.Lookup("other.example")
+
+	if got := pool.LastLookupTime("expire.example"); got.IsZero() {
+		t.Fatal("LastLookupTime(expire.example) = zero, want retained until scheduled prune")
+	}
+	if domain, ok := pool.LookBack(expiredIP); !ok || domain != "expire.example" {
+		t.Fatalf("LookBack(%s) = %q, %v; want retained expire.example", expiredIP, domain, ok)
+	}
+}
+
+func TestLookupExpiredRequestedMappingReallocatesBeforeScheduledPrune(t *testing.T) {
+	pool, err := New("198.18.0.0/24", time.Millisecond)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	firstIP := pool.Lookup("expire.example")
+	time.Sleep(5 * time.Millisecond)
+
+	result := pool.LookupResult("expire.example")
+	if !result.Created || result.Refreshed {
+		t.Fatalf("LookupResult() = %+v, want newly created mapping", result)
+	}
+	if result.Mapping.IP == firstIP {
+		t.Fatalf("LookupResult() reused expired IP %s, want reallocation", firstIP)
+	}
+	if _, ok := pool.LookBack(firstIP); ok {
+		t.Fatalf("LookBack(%s) succeeded after requested mapping expired", firstIP)
+	}
+	if domain, ok := pool.LookBack(result.Mapping.IP); !ok || domain != "expire.example" {
+		t.Fatalf("LookBack(%s) = %q, %v; want expire.example", result.Mapping.IP, domain, ok)
 	}
 }
 
@@ -250,7 +296,10 @@ func TestActiveMappingNotPruned(t *testing.T) {
 	pool.Acquire(ip, "sess-1")
 
 	time.Sleep(5 * time.Millisecond)
-	// Trigger a prune via a write path.
+	pool.mu.Lock()
+	pool.nextPruneAt = time.Time{}
+	pool.mu.Unlock()
+	// Trigger a scheduled prune via a write path.
 	pool.Lookup("other.example")
 
 	if _, ok := pool.LookBack(ip); !ok {

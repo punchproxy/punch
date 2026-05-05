@@ -27,6 +27,7 @@ const (
 	// /120 gives IPv6 pools the same minimum 256-address scale as IPv4 /24.
 	minIPv6PrefixLen = 120
 	reservedHead     = 4
+	pruneInterval    = 10 * time.Second
 )
 
 // Mapping describes a single domain to fake-IP binding.
@@ -111,6 +112,7 @@ type Pool struct {
 	// lastLookupByDomain keeps LastLookupTime off the connect-path linear scan.
 	lastLookupByDomain map[string]time.Time
 	ttl                time.Duration
+	nextPruneAt        time.Time
 }
 
 // New constructs a Pool over a single CIDR. IPv4 CIDRs are allocated by
@@ -232,15 +234,20 @@ func (p *Pool) LookupResultForFamily(host string, family Family) LookupResult {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	now := time.Now()
-	p.pruneExpiredLocked(now)
 
 	key := hostKey{domain: host, family: family}
 	if e, ok := p.byHost[key]; ok {
-		e.expiresAt = now.Add(p.ttl)
-		e.lastLookup = now
-		p.lastLookupByDomain[host] = now
-		return LookupResult{Mapping: e.mapping(), Refreshed: true}
+		if p.expiredUnpinnedLocked(e, now) {
+			p.deleteEntryLocked(e.ip, e)
+		} else {
+			e.expiresAt = now.Add(p.ttl)
+			e.lastLookup = now
+			p.lastLookupByDomain[host] = now
+			return LookupResult{Mapping: e.mapping(), Refreshed: true}
+		}
 	}
+
+	p.maybePruneExpiredLocked(now)
 
 	ip, evicted := p.allocateLocked(family)
 	if !ip.IsValid() {
@@ -386,15 +393,15 @@ func (p *Pool) Sessions(ip netip.Addr) []string {
 	return nil
 }
 
-// Size returns the number of live mappings (excluding any that have expired
-// since the last allocation).
+// Size returns the number of mappings currently retained by the pool. Expired,
+// unpinned mappings may remain until the next scheduled prune.
 func (p *Pool) Size() int {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	return len(p.byHost)
 }
 
-// Snapshot returns all live mappings sorted by IP.
+// Snapshot returns all mappings currently retained by the pool, sorted by IP.
 func (p *Pool) Snapshot() []Mapping {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
@@ -466,14 +473,22 @@ func (r *rangeState) addrAt(off uint64) netip.Addr {
 // active session pinning them. Called only from write paths.
 func (p *Pool) pruneExpiredLocked(now time.Time) {
 	for ip, e := range p.byIP {
-		if len(e.sessions) > 0 {
-			continue
+		if p.expiredUnpinnedLocked(e, now) {
+			p.deleteEntryLocked(ip, e)
 		}
-		if now.Before(e.expiresAt) {
-			continue
-		}
-		p.deleteEntryLocked(ip, e)
 	}
+}
+
+func (p *Pool) maybePruneExpiredLocked(now time.Time) {
+	if now.Before(p.nextPruneAt) {
+		return
+	}
+	p.pruneExpiredLocked(now)
+	p.nextPruneAt = now.Add(pruneInterval)
+}
+
+func (p *Pool) expiredUnpinnedLocked(e *entry, now time.Time) bool {
+	return len(e.sessions) == 0 && !now.Before(e.expiresAt)
 }
 
 func (p *Pool) deleteEntryLocked(ip netip.Addr, e *entry) {
