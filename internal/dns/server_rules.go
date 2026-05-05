@@ -204,6 +204,7 @@ func (s *Server) reloadRuleSource(source string) error {
 	for bucket, entries := range cidrEntries {
 		s.ruleLists[bucket] = entries
 	}
+	s.ruleListIndex = buildRuleListIndex(s.ruleLists)
 	s.rulesMu.Unlock()
 	return nil
 }
@@ -353,6 +354,7 @@ func (s *Server) loadRules(cfg *config.Config) error {
 	s.directIPs = state.directIPs
 	s.rejectIPs = state.rejectIPs
 	s.ruleLists = state.ruleLists
+	s.ruleListIndex = buildRuleListIndex(state.ruleLists)
 	s.rulesMu.Unlock()
 
 	return nil
@@ -404,11 +406,11 @@ func (s *Server) RuleListSnapshot() map[string][]RuleListEntry {
 func (s *Server) incrementRuleHit(bucket, source string) {
 	s.rulesMu.Lock()
 	defer s.rulesMu.Unlock()
-	for i := range s.ruleLists[bucket] {
-		if s.ruleLists[bucket][i].Value == source {
-			s.ruleLists[bucket][i].Hits++
-			return
-		}
+	if s.ruleListIndex == nil {
+		s.ruleListIndex = buildRuleListIndex(s.ruleLists)
+	}
+	if entry := s.ruleListIndex[bucket][source]; entry != nil {
+		entry.Hits++
 	}
 }
 
@@ -429,6 +431,21 @@ func carryRuleHits(next []RuleListEntry, previous []RuleListEntry) {
 	for i := range next {
 		next[i].Hits = hits[next[i].Value]
 	}
+}
+
+func buildRuleListIndex(ruleLists map[string][]RuleListEntry) map[string]map[string]*RuleListEntry {
+	index := make(map[string]map[string]*RuleListEntry, len(ruleLists))
+	for bucket, entries := range ruleLists {
+		bucketIndex := make(map[string]*RuleListEntry, len(entries))
+		for i := range entries {
+			entry := &entries[i]
+			if _, ok := bucketIndex[entry.Value]; !ok {
+				bucketIndex[entry.Value] = entry
+			}
+		}
+		index[bucket] = bucketIndex
+	}
+	return index
 }
 
 // isSource returns true if the entry looks like a file path or URL

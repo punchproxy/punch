@@ -22,8 +22,8 @@ type Server struct {
 	fakeIPPool        *fakeip.Pool
 	disableIPv6FakeIP bool
 	cache             *Cache
-	resolver   *ResolverGroup
-	resolverMu sync.RWMutex
+	resolver          *ResolverGroup
+	resolverMu        sync.RWMutex
 
 	domainMatcher *dnsrule.Matcher
 	directIPs     *IPSet
@@ -53,7 +53,10 @@ type Server struct {
 	queryStreamClients map[chan<- QueryLog]struct{}
 
 	ruleLists map[string][]RuleListEntry
-	rawRules  config.DNSRules
+	// ruleListIndex points into ruleLists slices and must be rebuilt after
+	// replacing any bucket.
+	ruleListIndex map[string]map[string]*RuleListEntry
+	rawRules      config.DNSRules
 
 	refreshMu    sync.Mutex
 	refreshing   map[string]struct{}
@@ -98,6 +101,7 @@ func NewServer(assetManager *assets.Manager) (*Server, error) {
 		maxLog:             1000,
 		queryStreamClients: make(map[chan<- QueryLog]struct{}),
 		ruleLists:          make(map[string][]RuleListEntry),
+		ruleListIndex:      make(map[string]map[string]*RuleListEntry),
 		rawRules:           cfg.DNS.Rules,
 		refreshing:         make(map[string]struct{}),
 	}

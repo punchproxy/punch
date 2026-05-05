@@ -253,6 +253,11 @@ func TestServerAssetReadyReloadsOnlyAffectedRuleBucket(t *testing.T) {
 	if got := snapshot["reject-domains"][0].Count; got != 2 {
 		t.Fatalf("reject rule count = %d, want updated count 2", got)
 	}
+	server.incrementRuleHit("reject-domains", rejectURL)
+	snapshot = server.RuleListSnapshot()
+	if got := snapshot["reject-domains"][0].Hits; got != 1 {
+		t.Fatalf("reject rule hits after reload = %d, want 1", got)
+	}
 	if source := server.domainMatchSource(config.DecisionReject, "www.tracker.example"); source != rejectURL {
 		t.Fatalf("reject matcher source = %q, want %q", source, rejectURL)
 	}
