@@ -53,6 +53,15 @@ type statusRelay struct {
 	DownloadBytes          int64     `json:"download_bytes"`
 	UploadBPS              int64     `json:"upload_bps"`
 	DownloadBPS            int64     `json:"download_bps"`
+	UDP                    statusUDP `json:"udp"`
+}
+
+type statusUDP struct {
+	PacketsEnqueued int64 `json:"packets_enqueued"`
+	PacketsDropped  int64 `json:"packets_dropped"`
+	QueueFullDrops  int64 `json:"queue_full_drops"`
+	ClosedDrops     int64 `json:"closed_drops"`
+	PendingDrops    int64 `json:"pending_drops"`
 }
 
 func newStatusCommand(cfg *commandConfig) *cobra.Command {
@@ -113,6 +122,13 @@ func writeStatus(w io.Writer, status statusInfo) error {
 	fmt.Fprintf(w, "  Sessions:       %d active, %d total processed\n", status.Relay.ActiveSessions, status.Relay.TotalProcessedSessions)
 	fmt.Fprintf(w, "  Download:       %s total, %s/s\n", formatBytes(status.Relay.DownloadBytes), formatBytes(status.Relay.DownloadBPS))
 	fmt.Fprintf(w, "  Upload:         %s total, %s/s\n", formatBytes(status.Relay.UploadBytes), formatBytes(status.Relay.UploadBPS))
+	fmt.Fprintf(w, "  UDP Packets:    %d enqueued, %d dropped (%d queue full, %d closed, %d pending)\n",
+		status.Relay.UDP.PacketsEnqueued,
+		status.Relay.UDP.PacketsDropped,
+		status.Relay.UDP.QueueFullDrops,
+		status.Relay.UDP.ClosedDrops,
+		status.Relay.UDP.PendingDrops,
+	)
 	return nil
 }
 

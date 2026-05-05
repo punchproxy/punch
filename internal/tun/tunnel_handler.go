@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/netip"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -23,12 +24,34 @@ import (
 
 const udpAssociationTimeout = 2 * time.Minute
 
+const (
+	udpPacketQueueSize      = 128
+	udpPacketEnqueueTimeout = 5 * time.Millisecond
+)
+
+// UDPStats reports TUN UDP queue behavior.
+type UDPStats struct {
+	PacketsEnqueued int64 `json:"packets_enqueued"`
+	PacketsDropped  int64 `json:"packets_dropped"`
+	QueueFullDrops  int64 `json:"queue_full_drops"`
+	ClosedDrops     int64 `json:"closed_drops"`
+	PendingDrops    int64 `json:"pending_drops"`
+}
+
+type udpCounters struct {
+	packetsEnqueued atomic.Int64
+	queueFullDrops  atomic.Int64
+	closedDrops     atomic.Int64
+	pendingDrops    atomic.Int64
+}
+
 type handler struct {
 	dnsServer *pdns.Server
 	selector  *relay.Selector
 	sessions  *session.Manager
 	natTable  C.NatTable
 	callbacks *utils.Callback[provider.RuleProvider]
+	udp       udpCounters
 
 	closeOnce sync.Once
 }
@@ -143,6 +166,13 @@ func (h *handler) RuleUpdateCallback() *utils.Callback[provider.RuleProvider] {
 	return h.callbacks
 }
 
+func (h *handler) UDPStats() UDPStats {
+	if h == nil {
+		return UDPStats{}
+	}
+	return h.udp.stats()
+}
+
 func (h *handler) Close() error {
 	h.closeOnce.Do(func() {
 		// NAT entries are closed by their own session lifecycle.
@@ -239,7 +269,7 @@ func newUDPSender(h *handler, key string) *udpSender {
 		key:           key,
 		ctx:           ctx,
 		cancel:        cancel,
-		ch:            make(chan C.PacketAdapter, 128),
+		ch:            make(chan C.PacketAdapter, udpPacketQueueSize),
 		sessionStatus: session.StatusClosed,
 	}
 }
@@ -267,10 +297,27 @@ func (s *udpSender) Process(_ C.PacketConn, _ C.WriteBackProxy) {
 func (s *udpSender) Send(packet C.PacketAdapter) {
 	select {
 	case <-s.ctx.Done():
-		packet.Drop()
-	case s.ch <- packet:
+		s.dropPacket(packet, udpDropClosed)
+		return
 	default:
-		packet.Drop()
+	}
+
+	select {
+	case s.ch <- packet:
+		s.recordEnqueued()
+		return
+	default:
+	}
+
+	timer := time.NewTimer(udpPacketEnqueueTimeout)
+	defer timer.Stop()
+	select {
+	case <-s.ctx.Done():
+		s.dropPacket(packet, udpDropClosed)
+	case s.ch <- packet:
+		s.recordEnqueued()
+	case <-timer.C:
+		s.dropPacket(packet, udpDropQueueFull)
 	}
 }
 
@@ -409,10 +456,54 @@ func (s *udpSender) dropPending() {
 	for {
 		select {
 		case packet := <-s.ch:
-			packet.Drop()
+			s.dropPacket(packet, udpDropPending)
 		default:
 			return
 		}
+	}
+}
+
+func (s *udpSender) recordEnqueued() {
+	if s.handler != nil {
+		s.handler.udp.packetsEnqueued.Add(1)
+	}
+}
+
+type udpDropReason int
+
+const (
+	udpDropQueueFull udpDropReason = iota
+	udpDropClosed
+	udpDropPending
+)
+
+func (s *udpSender) dropPacket(packet C.PacketAdapter, reason udpDropReason) {
+	if packet != nil {
+		packet.Drop()
+	}
+	if s.handler == nil {
+		return
+	}
+	switch reason {
+	case udpDropQueueFull:
+		s.handler.udp.queueFullDrops.Add(1)
+	case udpDropClosed:
+		s.handler.udp.closedDrops.Add(1)
+	case udpDropPending:
+		s.handler.udp.pendingDrops.Add(1)
+	}
+}
+
+func (c *udpCounters) stats() UDPStats {
+	queueFullDrops := c.queueFullDrops.Load()
+	closedDrops := c.closedDrops.Load()
+	pendingDrops := c.pendingDrops.Load()
+	return UDPStats{
+		PacketsEnqueued: c.packetsEnqueued.Load(),
+		PacketsDropped:  queueFullDrops + closedDrops + pendingDrops,
+		QueueFullDrops:  queueFullDrops,
+		ClosedDrops:     closedDrops,
+		PendingDrops:    pendingDrops,
 	}
 }
 

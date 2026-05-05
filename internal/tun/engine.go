@@ -70,6 +70,17 @@ func NewEngine(cfg config.TUN, dns *pdns.Server, sel *relay.Selector, sess *sess
 	return e
 }
 
+// UDPStats reports TUN UDP queue counters for the running engine.
+func (e *Engine) UDPStats() UDPStats {
+	if e == nil {
+		return UDPStats{}
+	}
+	e.mu.RLock()
+	tunnel := e.tunnel
+	e.mu.RUnlock()
+	return tunnel.UDPStats()
+}
+
 func (e *Engine) Start() error {
 	e.mu.Lock()
 	defer e.mu.Unlock()

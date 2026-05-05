@@ -6,6 +6,7 @@ import (
 	"time"
 
 	pdns "github.com/punchproxy/punch/internal/dns"
+	"github.com/punchproxy/punch/internal/tun"
 )
 
 type statusResponse struct {
@@ -24,18 +25,19 @@ type statusGeneralResponse struct {
 }
 
 type statusRelayResponse struct {
-	ActiveRelay            string    `json:"active_relay"`
-	Status                 string    `json:"status,omitempty"`
-	LatencyMS              int64     `json:"latency_ms,omitempty"`
-	TCPConnectLatencyMS    int64     `json:"tcp_connect_latency_ms,omitempty"`
-	URLTestLatencyMS       int64     `json:"url_test_latency_ms,omitempty"`
-	LastCheckedAt          time.Time `json:"last_checked_at,omitempty"`
-	ActiveSessions         int       `json:"active_sessions"`
-	TotalProcessedSessions int64     `json:"total_processed_sessions"`
-	UploadBytes            int64     `json:"upload_bytes"`
-	DownloadBytes          int64     `json:"download_bytes"`
-	UploadBPS              int64     `json:"upload_bps"`
-	DownloadBPS            int64     `json:"download_bps"`
+	ActiveRelay            string       `json:"active_relay"`
+	Status                 string       `json:"status,omitempty"`
+	LatencyMS              int64        `json:"latency_ms,omitempty"`
+	TCPConnectLatencyMS    int64        `json:"tcp_connect_latency_ms,omitempty"`
+	URLTestLatencyMS       int64        `json:"url_test_latency_ms,omitempty"`
+	LastCheckedAt          time.Time    `json:"last_checked_at,omitempty"`
+	ActiveSessions         int          `json:"active_sessions"`
+	TotalProcessedSessions int64        `json:"total_processed_sessions"`
+	UploadBytes            int64        `json:"upload_bytes"`
+	DownloadBytes          int64        `json:"download_bytes"`
+	UploadBPS              int64        `json:"upload_bps"`
+	DownloadBPS            int64        `json:"download_bps"`
+	UDP                    tun.UDPStats `json:"udp"`
 }
 
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
@@ -82,6 +84,9 @@ func (s *Server) relayStatus() statusRelayResponse {
 		status.ActiveSessions = s.sessions.ActiveCount()
 		status.TotalProcessedSessions = s.sessions.TotalSessions()
 		status.UploadBytes, status.DownloadBytes, status.UploadBPS, status.DownloadBPS = s.sessions.TrafficRateSnapshot()
+	}
+	if s.tun != nil {
+		status.UDP = s.tun.UDPStats()
 	}
 	return status
 }

@@ -87,6 +87,13 @@ func TestStatusCommand(t *testing.T) {
 				UploadBytes:            512 * 1024,
 				DownloadBPS:            2048,
 				UploadBPS:              1024,
+				UDP: statusUDP{
+					PacketsEnqueued: 300,
+					PacketsDropped:  7,
+					QueueFullDrops:  5,
+					ClosedDrops:     1,
+					PendingDrops:    1,
+				},
 			},
 		})
 	}))
@@ -104,7 +111,7 @@ func TestStatusCommand(t *testing.T) {
 		t.Fatalf("Execute() error = %v", err)
 	}
 	text := out.String()
-	for _, want := range []string{"General:", "Client Version: dev", "Server Version: v1.2.3", "Relay:          10 requests, last google.com", "Cache:          42 entries, 7 hits", "Active:         auto / hk-1", "Latency:        88ms (tcp 31ms, url 88ms)", "Sessions:       4 active, 99 total processed", "Download:       3.0 MB total, 2.0 KB/s"} {
+	for _, want := range []string{"General:", "Client Version: dev", "Server Version: v1.2.3", "Relay:          10 requests, last google.com", "Cache:          42 entries, 7 hits", "Active:         auto / hk-1", "Latency:        88ms (tcp 31ms, url 88ms)", "Sessions:       4 active, 99 total processed", "Download:       3.0 MB total, 2.0 KB/s", "UDP Packets:    300 enqueued, 7 dropped (5 queue full, 1 closed, 1 pending)"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("output missing %q:\n%s", want, text)
 		}
