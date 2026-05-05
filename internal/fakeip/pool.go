@@ -108,7 +108,9 @@ type Pool struct {
 
 	byHost map[hostKey]*entry
 	byIP   map[netip.Addr]*entry
-	ttl    time.Duration
+	// lastLookupByDomain keeps LastLookupTime off the connect-path linear scan.
+	lastLookupByDomain map[string]time.Time
+	ttl                time.Duration
 }
 
 // New constructs a Pool over a single CIDR. IPv4 CIDRs are allocated by
@@ -132,10 +134,11 @@ func NewDualStack(ipv4CIDR, ipv6CIDR string, ttl time.Duration) (*Pool, error) {
 		ttl = time.Hour
 	}
 	p := &Pool{
-		ranges: make(map[Family]*rangeState, 2),
-		byHost: make(map[hostKey]*entry),
-		byIP:   make(map[netip.Addr]*entry),
-		ttl:    ttl,
+		ranges:             make(map[Family]*rangeState, 2),
+		byHost:             make(map[hostKey]*entry),
+		byIP:               make(map[netip.Addr]*entry),
+		lastLookupByDomain: make(map[string]time.Time),
+		ttl:                ttl,
 	}
 	if ipv4CIDR != "" {
 		r, err := newRangeState(ipv4CIDR, FamilyIPv4)
@@ -235,6 +238,7 @@ func (p *Pool) LookupResultForFamily(host string, family Family) LookupResult {
 	if e, ok := p.byHost[key]; ok {
 		e.expiresAt = now.Add(p.ttl)
 		e.lastLookup = now
+		p.lastLookupByDomain[host] = now
 		return LookupResult{Mapping: e.mapping(), Refreshed: true}
 	}
 
@@ -251,6 +255,7 @@ func (p *Pool) LookupResultForFamily(host string, family Family) LookupResult {
 	}
 	p.byHost[key] = e
 	p.byIP[ip] = e
+	p.lastLookupByDomain[host] = now
 	return LookupResult{Mapping: e.mapping(), Created: true, Evicted: evicted}
 }
 
@@ -269,16 +274,7 @@ func (p *Pool) LookBack(ip netip.Addr) (string, bool) {
 func (p *Pool) LastLookupTime(domain string) time.Time {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
-	var latest time.Time
-	for _, e := range p.byHost {
-		if e.domain != domain {
-			continue
-		}
-		if latest.IsZero() || e.lastLookup.After(latest) {
-			latest = e.lastLookup
-		}
-	}
-	return latest
+	return p.lastLookupByDomain[domain]
 }
 
 // Contains reports whether ip is inside any configured fake IP range.
@@ -448,8 +444,7 @@ func (p *Pool) allocateLocked(family Family) (netip.Addr, *Mapping) {
 			}
 			ev := existing.mapping()
 			evicted = &ev
-			delete(p.byHost, hostKey{domain: existing.domain, family: existing.family})
-			delete(p.byIP, ip)
+			p.deleteEntryLocked(ip, existing)
 		}
 		return ip, evicted
 	}
@@ -477,9 +472,32 @@ func (p *Pool) pruneExpiredLocked(now time.Time) {
 		if now.Before(e.expiresAt) {
 			continue
 		}
-		delete(p.byIP, ip)
-		delete(p.byHost, hostKey{domain: e.domain, family: e.family})
+		p.deleteEntryLocked(ip, e)
 	}
+}
+
+func (p *Pool) deleteEntryLocked(ip netip.Addr, e *entry) {
+	delete(p.byIP, ip)
+	delete(p.byHost, hostKey{domain: e.domain, family: e.family})
+	p.refreshLastLookupLocked(e.domain)
+}
+
+func (p *Pool) refreshLastLookupLocked(domain string) {
+	var latest time.Time
+	for _, family := range []Family{FamilyIPv4, FamilyIPv6} {
+		e, ok := p.byHost[hostKey{domain: domain, family: family}]
+		if !ok {
+			continue
+		}
+		if latest.IsZero() || e.lastLookup.After(latest) {
+			latest = e.lastLookup
+		}
+	}
+	if latest.IsZero() {
+		delete(p.lastLookupByDomain, domain)
+		return
+	}
+	p.lastLookupByDomain[domain] = latest
 }
 
 func addrToParts(addr netip.Addr) (uint64, uint64) {

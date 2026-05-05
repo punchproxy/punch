@@ -67,6 +67,82 @@ func TestLookupResultReportsCreationAndEviction(t *testing.T) {
 	if !second.Created || second.Evicted == nil || second.Evicted.Domain != "a.example" {
 		t.Fatalf("second lookup = %+v, want eviction of a.example", second)
 	}
+	if got := pool.LastLookupTime("a.example"); !got.IsZero() {
+		t.Fatalf("LastLookupTime(a.example) after eviction = %s, want zero", got)
+	}
+}
+
+func TestLastLookupTimeTracksRefresh(t *testing.T) {
+	pool, err := New("198.18.0.0/24", time.Hour)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	pool.Lookup("lookup.example")
+	first := pool.LastLookupTime("lookup.example")
+	if first.IsZero() {
+		t.Fatal("LastLookupTime() after lookup = zero, want timestamp")
+	}
+
+	time.Sleep(2 * time.Millisecond)
+	pool.Lookup("lookup.example")
+	second := pool.LastLookupTime("lookup.example")
+	if !second.After(first) {
+		t.Fatalf("LastLookupTime() after refresh = %s, want after %s", second, first)
+	}
+}
+
+func TestLastLookupTimeClearedWhenMappingPruned(t *testing.T) {
+	pool, err := New("198.18.0.0/24", time.Millisecond)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	pool.Lookup("expire.example")
+	if got := pool.LastLookupTime("expire.example"); got.IsZero() {
+		t.Fatal("LastLookupTime() after lookup = zero, want timestamp")
+	}
+
+	time.Sleep(5 * time.Millisecond)
+	pool.Lookup("other.example")
+
+	if got := pool.LastLookupTime("expire.example"); !got.IsZero() {
+		t.Fatalf("LastLookupTime() after prune = %s, want zero", got)
+	}
+}
+
+func TestLastLookupTimeFallsBackToRemainingFamilyAfterEviction(t *testing.T) {
+	pool, err := NewDualStack("198.18.0.0/24", "fdfe:dcba:9876::/120", time.Hour)
+	if err != nil {
+		t.Fatalf("NewDualStack() error = %v", err)
+	}
+
+	pool.LookupForFamily("dual.example", FamilyIPv4)
+	ipv4Lookup := pool.LastLookupTime("dual.example")
+	if ipv4Lookup.IsZero() {
+		t.Fatal("LastLookupTime() after IPv4 lookup = zero, want timestamp")
+	}
+
+	time.Sleep(2 * time.Millisecond)
+	pool.LookupForFamily("dual.example", FamilyIPv6)
+	ipv6Lookup := pool.LastLookupTime("dual.example")
+	if !ipv6Lookup.After(ipv4Lookup) {
+		t.Fatalf("LastLookupTime() after IPv6 lookup = %s, want after %s", ipv6Lookup, ipv4Lookup)
+	}
+
+	// Force the next IPv6 allocation to evict the dual.example IPv6 mapping.
+	pool.mu.Lock()
+	pool.ranges[FamilyIPv6].nextOff = pool.ranges[FamilyIPv6].firstOff
+	pool.ranges[FamilyIPv6].cycled = true
+	pool.mu.Unlock()
+
+	result := pool.LookupResultForFamily("other.example", FamilyIPv6)
+	if result.Evicted == nil || result.Evicted.Domain != "dual.example" {
+		t.Fatalf("IPv6 lookup = %+v, want eviction of dual.example", result)
+	}
+	if got := pool.LastLookupTime("dual.example"); !got.Equal(ipv4Lookup) {
+		t.Fatalf("LastLookupTime() after IPv6 eviction = %s, want IPv4 timestamp %s", got, ipv4Lookup)
+	}
 }
 
 func TestUsesConfiguredTTL(t *testing.T) {
