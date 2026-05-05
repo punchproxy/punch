@@ -183,8 +183,52 @@ func (s *Server) processUpstreamResponse(r *dns.Msg, domain string, qtype uint16
 	return s.buildRejectResponse(r), DecisionRelay, "relay-unsupported-qtype", upstream
 }
 
+// processCachedResponse mirrors processUpstreamResponse but avoids materializing
+// the cached DNS message when classification will return a synthesized response.
+func (s *Server) processCachedResponse(r *dns.Msg, domain string, qtype uint16, disableFakeIP bool, hit cacheHit, upstream string) (*dns.Msg, Decision, string, string) {
+	if hit.msg == nil {
+		s.ignoreDecisions.Add(1)
+		return nil, DecisionIgnore, "no-ip-detected", upstream
+	}
+	if !answerRRsHaveIPAnswer(hit.msg.Answer) {
+		s.ignoreDecisions.Add(1)
+		return hit.message(), DecisionIgnore, "no-ip-detected", upstream
+	}
+	if s.answerRRsHaveDirectIP(hit.msg.Answer) {
+		s.directDecisions.Add(1)
+		return hit.message(), DecisionDirect, "ip-direct", upstream
+	}
+	s.defaultRuleHits.Add(1)
+	if disableFakeIP {
+		s.directDecisions.Add(1)
+		return hit.message(), DecisionDirect, "forced-direct", upstream
+	}
+
+	s.relayDecisions.Add(1)
+	if qtype == dns.TypeAAAA && s.disableIPv6FakeIP {
+		empty := new(dns.Msg)
+		empty.SetReply(r)
+		return empty, DecisionRelay, "ipv6-fakeip-disabled", upstream
+	}
+	if qtype == dns.TypeA || qtype == dns.TypeAAAA {
+		fakeIP, ok := s.lookupFakeIP(domain, qtype)
+		if !ok {
+			return s.buildRejectResponse(r), DecisionRelay, "fake-ip-family-unavailable", upstream
+		}
+		return s.buildFakeIPResponse(r, fakeIP), DecisionRelay, "ip-fallback", upstream
+	}
+	return s.buildRejectResponse(r), DecisionRelay, "relay-unsupported-qtype", upstream
+}
+
 func (s *Server) responseHasDirectIP(msg *dns.Msg) bool {
-	for _, rr := range msg.Answer {
+	if msg == nil {
+		return false
+	}
+	return s.answerRRsHaveDirectIP(msg.Answer)
+}
+
+func (s *Server) answerRRsHaveDirectIP(answer []dns.RR) bool {
+	for _, rr := range answer {
 		switch v := rr.(type) {
 		case *dns.A:
 			ip, ok := netip.AddrFromSlice(v.A)
@@ -208,7 +252,14 @@ func (s *Server) responseHasDirectIP(msg *dns.Msg) bool {
 }
 
 func responseHasIPAnswer(msg *dns.Msg) bool {
-	for _, rr := range msg.Answer {
+	if msg == nil {
+		return false
+	}
+	return answerRRsHaveIPAnswer(msg.Answer)
+}
+
+func answerRRsHaveIPAnswer(answer []dns.RR) bool {
+	for _, rr := range answer {
 		switch rr.(type) {
 		case *dns.A, *dns.AAAA:
 			return true

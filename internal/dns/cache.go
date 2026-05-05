@@ -18,6 +18,12 @@ type cacheEntry struct {
 	storedAt time.Time
 }
 
+type cacheHit struct {
+	msg     *dns.Msg
+	stale   bool
+	elapsed uint32
+}
+
 type CacheSnapshotEntry struct {
 	Name          string    `json:"name"`
 	QType         string    `json:"qtype"`
@@ -83,13 +89,23 @@ func cacheKey(name string, qtype uint16) string {
 // Get retrieves a cached entry. Returns (msg, stale) where stale indicates
 // the entry has expired but is within the lazy TTL window.
 func (c *Cache) Get(name string, qtype uint16) (msg *dns.Msg, stale bool) {
+	hit, ok := c.lookup(name, qtype)
+	if !ok {
+		return nil, false
+	}
+	return hit.message(), hit.stale
+}
+
+// lookup retrieves a cache entry as an immutable hit view. The returned view
+// may share internal cache state, so callers must not mutate h.msg or its RRs.
+func (c *Cache) lookup(name string, qtype uint16) (cacheHit, bool) {
 	key := cacheKey(name, qtype)
 	c.mu.Lock()
 
 	value, ok := c.entries.Get(key)
 	if !ok {
 		c.mu.Unlock()
-		return nil, false
+		return cacheHit{}, false
 	}
 	entry := value.(*cacheEntry)
 
@@ -102,27 +118,74 @@ func (c *Cache) Get(name string, qtype uint16) (msg *dns.Msg, stale bool) {
 		handlers := append([]CacheEventHandler(nil), c.handlers...)
 		c.mu.Unlock()
 		fireCacheEvents(handlers, []CacheEvent{{Op: CacheEventDelete, Name: entry.name, QType: entry.qtype}})
-		return nil, false
+		return cacheHit{}, false
 	}
 
 	staleEntry := now.After(entry.expireAt)
+	hit := cacheHit{
+		msg:     entry.msg,
+		stale:   staleEntry,
+		elapsed: elapsedSeconds(entry.storedAt, now),
+	}
 	c.mu.Unlock()
+	return hit, true
+}
 
-	// Clone the message and adjust TTLs
-	cloned := entry.msg.Copy()
-	elapsed := uint32(now.Sub(entry.storedAt).Seconds())
-	for _, rr := range cloned.Answer {
-		if rr.Header().Ttl > elapsed {
-			rr.Header().Ttl -= elapsed
-		} else {
-			rr.Header().Ttl = 0
+func (h cacheHit) message() *dns.Msg {
+	if h.msg == nil {
+		return nil
+	}
+	cloned := h.msg.Copy()
+	adjustAnswerTTLs(cloned.Answer, h.elapsed)
+	return cloned
+}
+
+func (h cacheHit) answerMinTTL() uint32 {
+	if h.msg == nil || len(h.msg.Answer) == 0 {
+		return 0
+	}
+	minTTL := uint32(^uint32(0))
+	for _, rr := range h.msg.Answer {
+		if ttl := adjustedTTL(rr, h.elapsed); ttl < minTTL {
+			minTTL = ttl
 		}
 	}
-
-	if staleEntry {
-		return cloned, true // stale but within lazy window
+	if minTTL == uint32(^uint32(0)) {
+		return 0
 	}
-	return cloned, false
+	return minTTL
+}
+
+func adjustAnswerTTLs(answer []dns.RR, elapsed uint32) {
+	for _, rr := range answer {
+		if rr == nil || rr.Header() == nil {
+			continue
+		}
+		rr.Header().Ttl = adjustedTTL(rr, elapsed)
+	}
+}
+
+func adjustedTTL(rr dns.RR, elapsed uint32) uint32 {
+	if rr == nil || rr.Header() == nil {
+		return 0
+	}
+	ttl := rr.Header().Ttl
+	if ttl > elapsed {
+		return ttl - elapsed
+	}
+	return 0
+}
+
+func elapsedSeconds(storedAt, now time.Time) uint32 {
+	if !now.After(storedAt) {
+		return 0
+	}
+	elapsed := now.Sub(storedAt).Seconds()
+	maxUint32 := float64(^uint32(0))
+	if elapsed >= maxUint32 {
+		return ^uint32(0)
+	}
+	return uint32(elapsed)
 }
 
 // Put stores a DNS response and the upstream that produced it in the cache.

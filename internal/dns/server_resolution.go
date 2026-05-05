@@ -13,15 +13,15 @@ import (
 )
 
 func (s *Server) resolveAndClassifyWithResolver(ctx context.Context, r *dns.Msg, domain string, qtype uint16, disableFakeIP bool, resolverOverride *ResolverGroup, respectAnswerTTL bool) (*dns.Msg, Decision, string, string) {
-	if cached, stale := s.cache.Get(domain, qtype); cached != nil {
-		if !stale && !(respectAnswerTTL && answerMinTTL(cached) == 0) {
+	if cached, ok := s.cache.lookup(domain, qtype); ok {
+		if !cached.stale && !(respectAnswerTTL && cached.answerMinTTL() == 0) {
 			s.cacheHits.Add(1)
-			return s.processUpstreamResponse(r, domain, qtype, disableFakeIP, cached, "Cache")
+			return s.processCachedResponse(r, domain, qtype, disableFakeIP, cached, "Cache")
 		}
 		if !respectAnswerTTL {
 			s.refreshCacheAsync(domain, qtype, r.Copy(), resolverOverride)
 		}
-		return s.processUpstreamResponse(r, domain, qtype, disableFakeIP, cached, "Cache (stale)")
+		return s.processCachedResponse(r, domain, qtype, disableFakeIP, cached, "Cache (stale)")
 	}
 
 	resp, upstream := s.resolveUpstreamWithResolver(ctx, r, resolverOverride)
@@ -34,14 +34,14 @@ func (s *Server) resolveAndClassifyWithResolver(ctx context.Context, r *dns.Msg,
 }
 
 func (s *Server) resolveAndCacheWithResolver(ctx context.Context, r *dns.Msg, domain string, qtype uint16, resolverOverride *ResolverGroup, respectAnswerTTL bool) (*dns.Msg, string) {
-	if cached, stale := s.cache.Get(domain, qtype); cached != nil {
-		if !stale && !(respectAnswerTTL && answerMinTTL(cached) == 0) {
+	if cached, ok := s.cache.lookup(domain, qtype); ok {
+		if !cached.stale && !(respectAnswerTTL && cached.answerMinTTL() == 0) {
 			s.cacheHits.Add(1)
-			return cached, "Cache"
+			return cached.message(), "Cache"
 		}
 		if !respectAnswerTTL {
 			s.refreshCacheAsync(domain, qtype, r.Copy(), resolverOverride)
-			return cached, "Cache (stale)"
+			return cached.message(), "Cache (stale)"
 		}
 	}
 

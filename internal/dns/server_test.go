@@ -12,6 +12,7 @@ import (
 	mdns "github.com/miekg/dns"
 	"github.com/punchproxy/punch/internal/assets"
 	"github.com/punchproxy/punch/internal/config"
+	"github.com/punchproxy/punch/internal/fakeip"
 )
 
 func TestServerQueryTraceDoesNotUseEventBus(t *testing.T) {
@@ -149,6 +150,49 @@ func TestServerStaleCacheRefreshDoesNotStampede(t *testing.T) {
 	})
 	if got := requests.Load(); got != 1 {
 		t.Fatalf("upstream refresh requests after refresh completion = %d, want 1", got)
+	}
+}
+
+func TestServerCachedRelayClassificationUsesCacheHitView(t *testing.T) {
+	fakePool, err := fakeip.New("198.18.0.0/24", time.Hour)
+	if err != nil {
+		t.Fatalf("fakeip.New() error = %v", err)
+	}
+
+	cache := NewCache(10, 0, 60)
+	cache.Put("proxy.example", mdns.TypeA, cacheTestAResponse("proxy.example.", "203.0.113.1", 60), "cache-test")
+
+	server := &Server{
+		fakeIPPool: fakePool,
+		cache:      cache,
+		directIPs:  NewIPSet(),
+		ruleLists:  make(map[string][]RuleListEntry),
+	}
+
+	query := new(mdns.Msg)
+	query.SetQuestion("proxy.example.", mdns.TypeA)
+	resp, decision, rule, upstream := server.resolveAndClassifyWithResolver(context.Background(), query, "proxy.example", mdns.TypeA, false, nil, false)
+
+	if decision != DecisionRelay || rule != "ip-fallback" || upstream != "Cache" {
+		t.Fatalf("decision/rule/upstream = %s/%s/%s, want %s/ip-fallback/Cache", decision, rule, upstream, DecisionRelay)
+	}
+	if len(resp.Answer) != 1 {
+		t.Fatalf("answer length = %d, want 1", len(resp.Answer))
+	}
+	answer, ok := resp.Answer[0].(*mdns.A)
+	if !ok {
+		t.Fatalf("answer type = %T, want A", resp.Answer[0])
+	}
+	if got := answer.A.String(); got == "203.0.113.1" {
+		t.Fatalf("response A = %s, want fake IP instead of cached upstream IP", got)
+	}
+
+	cached, stale := cache.Get("proxy.example", mdns.TypeA)
+	if stale || cached == nil {
+		t.Fatalf("cache.Get() = (%v, %v), want live cached upstream response", cached, stale)
+	}
+	if got := answerToString(cached); got != "203.0.113.1" {
+		t.Fatalf("cached answer = %q, want original upstream IP", got)
 	}
 }
 
