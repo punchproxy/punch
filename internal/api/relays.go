@@ -221,8 +221,8 @@ func (s *Server) handleCheckRelayGroups(w http.ResponseWriter, r *http.Request) 
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "relay selector unavailable"})
 		return
 	}
-	s.selector.Benchmark()
-	writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})
+	go s.selector.Benchmark()
+	writeJSON(w, http.StatusAccepted, map[string]any{"status": "started"})
 }
 
 func (s *Server) handleCheckRelayGroup(w http.ResponseWriter, r *http.Request) {
@@ -231,11 +231,16 @@ func (s *Server) handleCheckRelayGroup(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "relay selector unavailable"})
 		return
 	}
-	if err := s.selector.BenchmarkTarget(name); err != nil {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+	if !s.selector.HasBenchmarkTarget(name) {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": fmt.Sprintf("relay %q not found", name)})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "group": name})
+	go func() {
+		if err := s.selector.BenchmarkTarget(name); err != nil {
+			slog.Warn("relay benchmark failed", "target", name, "error", err)
+		}
+	}()
+	writeJSON(w, http.StatusAccepted, map[string]any{"status": "started", "group": name})
 }
 
 func (s *Server) handleRelays(w http.ResponseWriter, r *http.Request) {
@@ -427,7 +432,7 @@ func (s *Server) handleCheckRelay(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "relay selector unavailable"})
 		return
 	}
-	checked, err := s.selector.BenchmarkRelay(relayName, r.URL.Query().Get("group"))
+	checked, err := s.selector.BenchmarkRelayAsync(relayName, r.URL.Query().Get("group"))
 	if err != nil {
 		switch {
 		case errors.Is(err, relay.ErrRelaySelectionAmbiguous):
@@ -437,7 +442,7 @@ func (s *Server) handleCheckRelay(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "relay": checked})
+	writeJSON(w, http.StatusAccepted, map[string]any{"status": "started", "relay": checked})
 }
 
 func saveRelayConfig(w http.ResponseWriter, s *Server, cfg *config.Config, checkGroups ...string) bool {

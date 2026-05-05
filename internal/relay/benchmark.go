@@ -98,7 +98,55 @@ func (s *Selector) BenchmarkTarget(name string) error {
 	return s.benchmarkTargets(targets, targetGroup, benchmarkWholeGroup)
 }
 
+func (s *Selector) HasBenchmarkTarget(name string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, g := range s.groups {
+		if len(g.dialers) == 0 {
+			continue
+		}
+		if g.name == name {
+			return true
+		}
+		for _, d := range g.dialers {
+			if s.displayName(g.name, d.Name()) == name || d.Name() == name {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func (s *Selector) BenchmarkRelay(name, groupName string) (string, error) {
+	resolved, targets, err := s.lookupBenchmarkRelay(name, groupName)
+	if err != nil {
+		return "", err
+	}
+	if err := s.benchmarkTargets(targets, nil, false); err != nil {
+		return "", err
+	}
+	return resolved, nil
+}
+
+func (s *Selector) ResolveBenchmarkRelay(name, groupName string) (string, error) {
+	resolved, _, err := s.lookupBenchmarkRelay(name, groupName)
+	return resolved, err
+}
+
+func (s *Selector) BenchmarkRelayAsync(name, groupName string) (string, error) {
+	resolved, targets, err := s.lookupBenchmarkRelay(name, groupName)
+	if err != nil {
+		return "", err
+	}
+	go func() {
+		if err := s.benchmarkTargets(targets, nil, false); err != nil {
+			slog.Warn("relay benchmark failed", "relay", resolved, "error", err)
+		}
+	}()
+	return resolved, nil
+}
+
+func (s *Selector) lookupBenchmarkRelay(name, groupName string) (string, []benchmarkTarget, error) {
 	s.mu.RLock()
 	var targets []benchmarkTarget
 	for _, g := range s.groups {
@@ -117,22 +165,19 @@ func (s *Selector) BenchmarkRelay(name, groupName string) (string, error) {
 	s.mu.RUnlock()
 	if len(targets) == 0 {
 		if groupName != "" {
-			return "", fmt.Errorf("relay %q in group %q not found", name, groupName)
+			return "", nil, fmt.Errorf("relay %q in group %q not found", name, groupName)
 		}
-		return "", fmt.Errorf("relay %q not found", name)
+		return "", nil, fmt.Errorf("relay %q not found", name)
 	}
 	if len(targets) > 1 {
 		names := make([]string, 0, len(targets))
 		for _, target := range targets {
 			names = append(names, s.displayName(target.group.name, target.dialer.Name()))
 		}
-		return "", fmt.Errorf("%w: %s", ErrRelaySelectionAmbiguous, strings.Join(names, ", "))
+		return "", nil, fmt.Errorf("%w: %s", ErrRelaySelectionAmbiguous, strings.Join(names, ", "))
 	}
 	target := targets[0]
-	if err := s.benchmarkTargets(targets, nil, false); err != nil {
-		return "", err
-	}
-	return s.displayName(target.group.name, target.dialer.Name()), nil
+	return s.displayName(target.group.name, target.dialer.Name()), targets, nil
 }
 
 func (s *Selector) benchmarkTargets(targets []benchmarkTarget, targetGroup *group, benchmarkWholeGroup bool) error {

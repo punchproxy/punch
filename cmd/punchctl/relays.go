@@ -333,6 +333,8 @@ func newRelayGroupRefreshCommand(cfg *commandConfig) *cobra.Command {
 
 func newRelayGroupCheckCommand(cfg *commandConfig) *cobra.Command {
 	var all bool
+	var wait bool
+	var waitTimeout time.Duration
 	cmd := &cobra.Command{
 		Use:   "check [NAME]",
 		Short: "Check relay group health",
@@ -346,18 +348,43 @@ func newRelayGroupCheckCommand(cfg *commandConfig) *cobra.Command {
 			return cobra.ExactArgs(1)(cmd, args)
 		},
 		RunE: func(c *cobra.Command, args []string) error {
+			out := c.OutOrStdout()
+			var baseline map[string]time.Time
+			var filter func(relayHealth) bool
+			if wait {
+				snapshot, err := fetchRelays(c.Context(), *cfg)
+				if err != nil {
+					return err
+				}
+				baseline = baselineLastChecked(snapshot)
+				if all {
+					filter = func(relayHealth) bool { return true }
+				} else {
+					group := args[0]
+					filter = func(r relayHealth) bool { return r.Group == group }
+				}
+			}
 			if err := checkRelayGroups(c.Context(), *cfg, args, all); err != nil {
 				return err
 			}
 			if all {
-				fmt.Fprintln(c.OutOrStdout(), "relay groups checked")
+				fmt.Fprintln(out, "relay groups check in progress")
 			} else {
-				fmt.Fprintf(c.OutOrStdout(), "relay group %q checked\n", args[0])
+				fmt.Fprintf(out, "relay group %q check in progress\n", args[0])
 			}
-			return nil
+			if !wait {
+				return nil
+			}
+			results, err := waitForRelayChecks(c.Context(), *cfg, filter, baseline, waitTimeout)
+			if err != nil {
+				return err
+			}
+			return printCheckResults(out, results)
 		},
 	}
 	cmd.Flags().BoolVar(&all, "all", false, "check all relay groups")
+	cmd.Flags().BoolVar(&wait, "wait", false, "wait for checks to complete and print latency results")
+	cmd.Flags().DurationVar(&waitTimeout, "wait-timeout", 60*time.Second, "maximum time to wait when --wait is set")
 	return cmd
 }
 
@@ -487,16 +514,61 @@ func newRelaySelectCommand(cfg *commandConfig) *cobra.Command {
 
 func newRelayCheckCommand(cfg *commandConfig) *cobra.Command {
 	var group string
+	var all bool
+	var wait bool
+	var waitTimeout time.Duration
 	cmd := &cobra.Command{
-		Use:   "check RELAY",
+		Use:   "check [RELAY]",
 		Short: "Check relay health",
-		Args:  cobra.ExactArgs(1),
+		Args: func(cmd *cobra.Command, args []string) error {
+			if all {
+				if len(args) != 0 {
+					return fmt.Errorf("RELAY cannot be used with --all")
+				}
+				if group != "" {
+					return fmt.Errorf("--group cannot be used with --all")
+				}
+				return nil
+			}
+			return cobra.ExactArgs(1)(cmd, args)
+		},
 		RunE: func(c *cobra.Command, args []string) error {
+			out := c.OutOrStdout()
+			if all {
+				var baseline map[string]time.Time
+				if wait {
+					snapshot, err := fetchRelays(c.Context(), *cfg)
+					if err != nil {
+						return err
+					}
+					baseline = baselineLastChecked(snapshot)
+				}
+				if err := checkRelayGroups(c.Context(), *cfg, nil, true); err != nil {
+					return err
+				}
+				fmt.Fprintln(out, "relays check in progress")
+				if !wait {
+					return nil
+				}
+				results, err := waitForRelayChecks(c.Context(), *cfg, func(relayHealth) bool { return true }, baseline, waitTimeout)
+				if err != nil {
+					return err
+				}
+				return printCheckResults(out, results)
+			}
 			if err := ensureRelayNameUnambiguous(c.Context(), *cfg, args[0], group); err != nil {
 				if errors.Is(err, errRelayNotFound) {
 					return fmt.Errorf("relay %q not found", args[0])
 				}
 				return err
+			}
+			var baseline map[string]time.Time
+			if wait {
+				snapshot, err := fetchRelays(c.Context(), *cfg)
+				if err != nil {
+					return err
+				}
+				baseline = baselineLastChecked(snapshot)
 			}
 			checked, err := checkRelay(c.Context(), *cfg, args[0], group)
 			if err != nil {
@@ -505,11 +577,34 @@ func newRelayCheckCommand(cfg *commandConfig) *cobra.Command {
 				}
 				return err
 			}
-			fmt.Fprintf(c.OutOrStdout(), "relay %q checked\n", checked)
-			return nil
+			fmt.Fprintf(out, "relay %q check in progress\n", checked)
+			if !wait {
+				return nil
+			}
+			short := checked
+			if idx := strings.LastIndex(checked, "/"); idx >= 0 {
+				short = checked[idx+1:]
+			}
+			filter := func(r relayHealth) bool {
+				if r.Name == checked {
+					return true
+				}
+				if relayShortName(r.Name, r.Group) == short && (group == "" || r.Group == group) {
+					return true
+				}
+				return false
+			}
+			results, err := waitForRelayChecks(c.Context(), *cfg, filter, baseline, waitTimeout)
+			if err != nil {
+				return err
+			}
+			return printCheckResults(out, results)
 		},
 	}
 	cmd.Flags().StringVar(&group, "group", "", "relay group name when RELAY is ambiguous")
+	cmd.Flags().BoolVar(&all, "all", false, "check all relays")
+	cmd.Flags().BoolVar(&wait, "wait", false, "wait for the check to complete and print latency results")
+	cmd.Flags().DurationVar(&waitTimeout, "wait-timeout", 60*time.Second, "maximum time to wait when --wait is set")
 	return cmd
 }
 
@@ -730,7 +825,7 @@ func checkRelayGroups(ctx context.Context, cfg commandConfig, args []string, all
 	} else {
 		path = "/api/relaygroups/" + url.PathEscape(args[0]) + "/check"
 	}
-	err := sendJSON(ctx, cfg, http.MethodPost, path, nil, http.StatusOK)
+	err := sendJSON(ctx, cfg, http.MethodPost, path, nil, http.StatusOK, http.StatusAccepted)
 	if errors.Is(err, errAPINotFound) {
 		return errRelayGroupNotFound
 	}
@@ -867,7 +962,7 @@ func checkRelay(ctx context.Context, cfg commandConfig, relay, group string) (st
 	if err != nil {
 		return "", err
 	}
-	resp, err := doRequest(ctx, cfg, http.MethodPost, endpoint, nil, http.StatusOK)
+	resp, err := doRequest(ctx, cfg, http.MethodPost, endpoint, nil, http.StatusOK, http.StatusAccepted)
 	if err != nil {
 		if errors.Is(err, errAPINotFound) {
 			return "", errRelayNotFound
@@ -885,6 +980,73 @@ func checkRelay(ctx context.Context, cfg commandConfig, relay, group string) (st
 		result.Relay = relay
 	}
 	return result.Relay, nil
+}
+
+func baselineLastChecked(relays []relayHealth) map[string]time.Time {
+	out := make(map[string]time.Time, len(relays))
+	for _, r := range relays {
+		out[r.Group+"\x00"+r.Name] = r.LastCheckedAt
+	}
+	return out
+}
+
+func waitForRelayChecks(ctx context.Context, cfg commandConfig, filter func(relayHealth) bool, baseline map[string]time.Time, timeout time.Duration) ([]relayHealth, error) {
+	if timeout <= 0 {
+		timeout = 60 * time.Second
+	}
+	deadline := time.Now().Add(timeout)
+	interval := 200 * time.Millisecond
+	var last []relayHealth
+	for {
+		relays, err := fetchRelays(ctx, cfg)
+		if err != nil {
+			return nil, err
+		}
+		var matching []relayHealth
+		allUpdated := true
+		for _, r := range relays {
+			if !filter(r) {
+				continue
+			}
+			matching = append(matching, r)
+			prev := baseline[r.Group+"\x00"+r.Name]
+			if !r.LastCheckedAt.After(prev) {
+				allUpdated = false
+			}
+		}
+		last = matching
+		if len(matching) > 0 && allUpdated {
+			return matching, nil
+		}
+		if time.Now().After(deadline) {
+			return last, fmt.Errorf("timed out waiting for relay checks to complete after %s", timeout)
+		}
+		select {
+		case <-ctx.Done():
+			return last, ctx.Err()
+		case <-time.After(interval):
+		}
+	}
+}
+
+func printCheckResults(w io.Writer, relays []relayHealth) error {
+	rows := make([]relayRow, 0, len(relays))
+	for _, r := range relays {
+		rows = append(rows, relayRow{
+			Group:             r.Group,
+			Relay:             relayShortName(r.Name, r.Group),
+			Status:            formatOptional(r.Status),
+			Latency:           latencyMS(r.Latency),
+			TCPConnectLatency: latencyMS(r.TCPConnectLatency),
+		})
+	}
+	printer, err := klo.PrinterFromFlag("", &klo.Specs{
+		DefaultColumnSpec: "RELAY GROUP:{.Group},RELAY:{.Relay},STATUS:{.Status},TC LATENCY:{.TCPConnectLatency},LATENCY:{.Latency}",
+	})
+	if err != nil {
+		return err
+	}
+	return printer.Fprint(w, rows)
 }
 
 func ensureRelayNameUnambiguous(ctx context.Context, cfg commandConfig, relay, group string) error {
