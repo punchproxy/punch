@@ -31,7 +31,7 @@ func TestServerResolverUsesServerPathWithoutFakeIP(t *testing.T) {
 		domainMatcher: domainMatcher,
 		directIPs:     NewIPSet(),
 		rejectIPs:     NewIPSet(),
-		ruleLists:     make(map[string][]RuleListEntry),
+		ruleLists:     make(map[string][]*ruleListEntry),
 		refreshing:    make(map[string]struct{}),
 	}
 

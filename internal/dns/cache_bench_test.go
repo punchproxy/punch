@@ -48,7 +48,7 @@ func BenchmarkServerCachedRelayClassification(b *testing.B) {
 		fakeIPPool: fakePool,
 		cache:      cache,
 		directIPs:  NewIPSet(),
-		ruleLists:  make(map[string][]RuleListEntry),
+		ruleLists:  make(map[string][]*ruleListEntry),
 	}
 	query := new(mdns.Msg)
 	query.SetQuestion("proxy.example.", mdns.TypeA)
@@ -77,7 +77,7 @@ func BenchmarkServeMsgCachedDirectHit(b *testing.B) {
 	server := &Server{
 		cache:              cache,
 		directIPs:          directIPs,
-		ruleLists:          make(map[string][]RuleListEntry),
+		ruleLists:          make(map[string][]*ruleListEntry),
 		queryStreamClients: make(map[chan<- QueryLog]struct{}),
 	}
 	query := new(mdns.Msg)

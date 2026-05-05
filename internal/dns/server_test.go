@@ -164,7 +164,7 @@ func TestServerCachedDirectResultUsesStoredCacheResult(t *testing.T) {
 	server := &Server{
 		cache:              cache,
 		directIPs:          directIPs,
-		ruleLists:          make(map[string][]RuleListEntry),
+		ruleLists:          make(map[string][]*ruleListEntry),
 		queryStreamClients: make(map[chan<- QueryLog]struct{}),
 	}
 
@@ -195,7 +195,7 @@ func TestServerCachedRelayClassificationUsesCacheHitView(t *testing.T) {
 		fakeIPPool: fakePool,
 		cache:      cache,
 		directIPs:  NewIPSet(),
-		ruleLists:  make(map[string][]RuleListEntry),
+		ruleLists:  make(map[string][]*ruleListEntry),
 	}
 
 	query := new(mdns.Msg)
@@ -292,6 +292,47 @@ func TestServerAssetReadyReloadsOnlyAffectedRuleBucket(t *testing.T) {
 	}
 	if source := server.domainMatchSource(config.DecisionReject, "www.tracker.example"); source != rejectURL {
 		t.Fatalf("reject matcher source = %q, want %q", source, rejectURL)
+	}
+}
+
+func TestRuleHitCounterSupportsConcurrentSnapshots(t *testing.T) {
+	const (
+		goroutines = 8
+		increments = 1000
+	)
+	const (
+		bucket = "direct-domains"
+		source = "domain:direct.example"
+	)
+
+	server := &Server{
+		ruleLists: map[string][]*ruleListEntry{
+			bucket: {newRuleListEntry(source, "inline", 1)},
+		},
+	}
+	server.ruleListIndex = buildRuleListIndex(server.ruleLists)
+
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := 0; i < goroutines; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			for j := 0; j < increments; j++ {
+				server.incrementRuleHit(bucket, source)
+				if j%10 == 0 {
+					_ = server.RuleListSnapshot()
+				}
+			}
+		}()
+	}
+	close(start)
+	wg.Wait()
+
+	snapshot := server.RuleListSnapshot()
+	if got, want := snapshot[bucket][0].Hits, int64(goroutines*increments); got != want {
+		t.Fatalf("rule hits = %d, want %d", got, want)
 	}
 }
 

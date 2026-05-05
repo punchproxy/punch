@@ -53,10 +53,8 @@ type Server struct {
 	queryStreamMu      sync.Mutex
 	queryStreamClients map[chan<- QueryLog]struct{}
 
-	ruleLists map[string][]RuleListEntry
-	// ruleListIndex points into ruleLists slices and must be rebuilt after
-	// replacing any bucket.
-	ruleListIndex map[string]map[string]*RuleListEntry
+	ruleLists     map[string][]*ruleListEntry
+	ruleListIndex map[string]map[string]*ruleListEntry
 	rawRules      config.DNSRules
 
 	refreshMu    sync.Mutex
@@ -100,8 +98,8 @@ func NewServer(assetManager *assets.Manager) (*Server, error) {
 		rejectIPs:          NewIPSet(),
 		assets:             assetManager,
 		queryStreamClients: make(map[chan<- QueryLog]struct{}),
-		ruleLists:          make(map[string][]RuleListEntry),
-		ruleListIndex:      make(map[string]map[string]*RuleListEntry),
+		ruleLists:          make(map[string][]*ruleListEntry),
+		ruleListIndex:      make(map[string]map[string]*ruleListEntry),
 		rawRules:           cfg.DNS.Rules,
 		refreshing:         make(map[string]struct{}),
 	}

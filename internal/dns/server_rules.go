@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/netip"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/punchproxy/punch/internal/assets"
@@ -21,11 +22,37 @@ type RuleListEntry struct {
 	LastUpdated time.Time `json:"last_updated,omitempty"`
 }
 
+type ruleListEntry struct {
+	Value       string
+	Type        string
+	Count       int
+	hits        atomic.Int64
+	LastUpdated time.Time
+}
+
+func newRuleListEntry(value, entryType string, count int) *ruleListEntry {
+	return &ruleListEntry{
+		Value: value,
+		Type:  entryType,
+		Count: count,
+	}
+}
+
+func (e *ruleListEntry) snapshot() RuleListEntry {
+	return RuleListEntry{
+		Value:       e.Value,
+		Type:        e.Type,
+		Count:       e.Count,
+		Hits:        e.hits.Load(),
+		LastUpdated: e.LastUpdated,
+	}
+}
+
 type ruleState struct {
 	domainMatcher *dnsrule.Matcher
 	directIPs     *IPSet
 	rejectIPs     *IPSet
-	ruleLists     map[string][]RuleListEntry
+	ruleLists     map[string][]*ruleListEntry
 }
 
 func newRuleState() *ruleState {
@@ -33,7 +60,7 @@ func newRuleState() *ruleState {
 		domainMatcher: dnsrule.NewMatcher(),
 		directIPs:     NewIPSet(),
 		rejectIPs:     NewIPSet(),
-		ruleLists:     make(map[string][]RuleListEntry),
+		ruleLists:     make(map[string][]*ruleListEntry),
 	}
 }
 
@@ -162,20 +189,20 @@ func (s *Server) reloadRuleSource(source string) error {
 	}
 
 	var domainMatcher *dnsrule.Matcher
-	var domainEntries map[string][]RuleListEntry
+	var domainEntries map[string][]*ruleListEntry
 	if domainAffected {
 		domainMatcher, domainEntries = s.buildDomainMatcher(s.rawRules.Domains)
 	}
 
 	ipSets := make(map[string]*IPSet, len(cidrDecisions))
-	cidrEntries := make(map[string][]RuleListEntry, len(cidrDecisions))
+	cidrEntries := make(map[string][]*ruleListEntry, len(cidrDecisions))
 	for decision := range cidrDecisions {
 		set, entries := s.buildIPSet(decision, s.rawRules.CIDRs)
 		if set == nil {
 			continue
 		}
 		if decision == config.DecisionDirect {
-			lists := map[string][]RuleListEntry{"direct-cidrs": entries}
+			lists := map[string][]*ruleListEntry{"direct-cidrs": entries}
 			addInternalDirectCIDRs(set, lists)
 			entries = lists["direct-cidrs"]
 		}
@@ -209,9 +236,9 @@ func (s *Server) reloadRuleSource(source string) error {
 	return nil
 }
 
-func (s *Server) buildDomainMatcher(rules []config.DomainRule) (*dnsrule.Matcher, map[string][]RuleListEntry) {
+func (s *Server) buildDomainMatcher(rules []config.DomainRule) (*dnsrule.Matcher, map[string][]*ruleListEntry) {
 	matcher := dnsrule.NewMatcher()
-	ruleLists := make(map[string][]RuleListEntry)
+	ruleLists := make(map[string][]*ruleListEntry)
 	for i, rule := range rules {
 		if !validDomainDecision(rule.Decision) {
 			slog.Warn("invalid domain rule decision", "decision", rule.Decision, "source", rule.Source)
@@ -223,7 +250,7 @@ func (s *Server) buildDomainMatcher(rules []config.DomainRule) (*dnsrule.Matcher
 	return matcher, ruleLists
 }
 
-func (s *Server) buildIPSet(decision string, rules []config.CIDRRule) (*IPSet, []RuleListEntry) {
+func (s *Server) buildIPSet(decision string, rules []config.CIDRRule) (*IPSet, []*ruleListEntry) {
 	state := newRuleState()
 	set := state.ipSetFor(decision)
 	if set == nil {
@@ -241,23 +268,19 @@ func (s *Server) buildIPSet(decision string, rules []config.CIDRRule) (*IPSet, [
 	return set, state.ruleLists[bucket]
 }
 
-func (s *Server) loadDomainRule(matcher *dnsrule.Matcher, ruleLists map[string][]RuleListEntry, bucket, decision, source string, order int) {
+func (s *Server) loadDomainRule(matcher *dnsrule.Matcher, ruleLists map[string][]*ruleListEntry, bucket, decision, source string, order int) {
 	if isSource(source) {
 		n, err := dnsrule.Load(source, matcher, s.assets, decision, order)
 		if err != nil {
 			if errors.Is(err, assets.ErrNotCached) {
 				slog.Info("domain list pending async download", "decision", decision, "source", source)
-				ruleLists[bucket] = append(ruleLists[bucket], RuleListEntry{
-					Value: source,
-					Type:  "asset",
-					Count: 0,
-				})
+				ruleLists[bucket] = append(ruleLists[bucket], newRuleListEntry(source, "asset", 0))
 			} else {
 				slog.Warn("failed to load domain list", "decision", decision, "source", source, "error", err)
 			}
 			return
 		}
-		ruleEntry := RuleListEntry{Value: source, Type: "asset", Count: n}
+		ruleEntry := newRuleListEntry(source, "asset", n)
 		if s.assets != nil {
 			if status, ok := s.assets.Status(source); ok {
 				ruleEntry.LastUpdated = status.LastUpdated
@@ -275,30 +298,22 @@ func (s *Server) loadDomainRule(matcher *dnsrule.Matcher, ruleLists map[string][
 	if kind, _ := dnsrule.Split(source); kind == dnsrule.KindQType {
 		ruleType = "qtype"
 	}
-	ruleLists[bucket] = append(ruleLists[bucket], RuleListEntry{
-		Value: source,
-		Type:  ruleType,
-		Count: 1,
-	})
+	ruleLists[bucket] = append(ruleLists[bucket], newRuleListEntry(source, ruleType, 1))
 }
 
-func (s *Server) loadCIDRRule(set *IPSet, ruleLists map[string][]RuleListEntry, bucket, decision, source string) {
+func (s *Server) loadCIDRRule(set *IPSet, ruleLists map[string][]*ruleListEntry, bucket, decision, source string) {
 	if isSource(source) {
 		n, err := LoadIPSet(source, set, s.assets)
 		if err != nil {
 			if errors.Is(err, assets.ErrNotCached) {
 				slog.Info("CIDR list pending async download", "decision", decision, "source", source)
-				ruleLists[bucket] = append(ruleLists[bucket], RuleListEntry{
-					Value: source,
-					Type:  "asset",
-					Count: 0,
-				})
+				ruleLists[bucket] = append(ruleLists[bucket], newRuleListEntry(source, "asset", 0))
 			} else {
 				slog.Warn("failed to load CIDR list", "decision", decision, "source", source, "error", err)
 			}
 			return
 		}
-		ruleEntry := RuleListEntry{Value: source, Type: "asset", Count: n}
+		ruleEntry := newRuleListEntry(source, "asset", n)
 		if s.assets != nil {
 			if status, ok := s.assets.Status(source); ok {
 				ruleEntry.LastUpdated = status.LastUpdated
@@ -314,11 +329,7 @@ func (s *Server) loadCIDRRule(set *IPSet, ruleLists map[string][]RuleListEntry, 
 		return
 	}
 	set.AddWithSource(prefix, prefix.Masked().String())
-	ruleLists[bucket] = append(ruleLists[bucket], RuleListEntry{
-		Value: prefix.Masked().String(),
-		Type:  "inline",
-		Count: 1,
-	})
+	ruleLists[bucket] = append(ruleLists[bucket], newRuleListEntry(prefix.Masked().String(), "inline", 1))
 }
 
 func (s *Server) loadRules(cfg *config.Config) error {
@@ -397,20 +408,19 @@ func (s *Server) RuleListSnapshot() map[string][]RuleListEntry {
 	out := make(map[string][]RuleListEntry, len(s.ruleLists))
 	for bucket, entries := range s.ruleLists {
 		copied := make([]RuleListEntry, len(entries))
-		copy(copied, entries)
+		for i, entry := range entries {
+			copied[i] = entry.snapshot()
+		}
 		out[bucket] = copied
 	}
 	return out
 }
 
 func (s *Server) incrementRuleHit(bucket, source string) {
-	s.rulesMu.Lock()
-	defer s.rulesMu.Unlock()
-	if s.ruleListIndex == nil {
-		s.ruleListIndex = buildRuleListIndex(s.ruleLists)
-	}
+	s.rulesMu.RLock()
+	defer s.rulesMu.RUnlock()
 	if entry := s.ruleListIndex[bucket][source]; entry != nil {
-		entry.Hits++
+		entry.hits.Add(1)
 	}
 }
 
@@ -423,22 +433,21 @@ func validDomainDecision(decision string) bool {
 	}
 }
 
-func carryRuleHits(next []RuleListEntry, previous []RuleListEntry) {
+func carryRuleHits(next []*ruleListEntry, previous []*ruleListEntry) {
 	hits := make(map[string]int64, len(previous))
 	for _, entry := range previous {
-		hits[entry.Value] += entry.Hits
+		hits[entry.Value] += entry.hits.Load()
 	}
-	for i := range next {
-		next[i].Hits = hits[next[i].Value]
+	for _, entry := range next {
+		entry.hits.Store(hits[entry.Value])
 	}
 }
 
-func buildRuleListIndex(ruleLists map[string][]RuleListEntry) map[string]map[string]*RuleListEntry {
-	index := make(map[string]map[string]*RuleListEntry, len(ruleLists))
+func buildRuleListIndex(ruleLists map[string][]*ruleListEntry) map[string]map[string]*ruleListEntry {
+	index := make(map[string]map[string]*ruleListEntry, len(ruleLists))
 	for bucket, entries := range ruleLists {
-		bucketIndex := make(map[string]*RuleListEntry, len(entries))
-		for i := range entries {
-			entry := &entries[i]
+		bucketIndex := make(map[string]*ruleListEntry, len(entries))
+		for _, entry := range entries {
 			if _, ok := bucketIndex[entry.Value]; !ok {
 				bucketIndex[entry.Value] = entry
 			}
@@ -463,7 +472,7 @@ func isRemoteSource(entry string) bool {
 	return strings.HasPrefix(entry, "http://") || strings.HasPrefix(entry, "https://")
 }
 
-func addInternalDirectCIDRs(set *IPSet, ruleLists map[string][]RuleListEntry) {
+func addInternalDirectCIDRs(set *IPSet, ruleLists map[string][]*ruleListEntry) {
 	for _, cidr := range []string{
 		"10.0.0.0/8",
 		"100.64.0.0/10",
@@ -478,10 +487,6 @@ func addInternalDirectCIDRs(set *IPSet, ruleLists map[string][]RuleListEntry) {
 		prefix, _ := netip.ParsePrefix(cidr)
 		value := prefix.Masked().String()
 		set.AddWithSource(prefix, value)
-		ruleLists["direct-cidrs"] = append(ruleLists["direct-cidrs"], RuleListEntry{
-			Value: value,
-			Type:  "internal",
-			Count: 1,
-		})
+		ruleLists["direct-cidrs"] = append(ruleLists["direct-cidrs"], newRuleListEntry(value, "internal", 1))
 	}
 }
