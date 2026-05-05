@@ -2,6 +2,7 @@ package dns
 
 import (
 	"context"
+	"net/netip"
 	"testing"
 	"time"
 
@@ -52,7 +53,7 @@ func BenchmarkServerCachedRelayClassification(b *testing.B) {
 	query := new(mdns.Msg)
 	query.SetQuestion("proxy.example.", mdns.TypeA)
 
-	resp, decision, _, _ := server.resolveAndClassifyWithResolver(context.Background(), query, "proxy.example", mdns.TypeA, false, nil, false)
+	resp, decision, _, _, _ := server.resolveAndClassifyWithResolver(context.Background(), query, "proxy.example", mdns.TypeA, false, nil, false)
 	if resp == nil || decision != DecisionRelay {
 		b.Fatalf("warmup decision = %s, resp = %v; want relay response", decision, resp)
 	}
@@ -60,9 +61,39 @@ func BenchmarkServerCachedRelayClassification(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		resp, decision, _, _ := server.resolveAndClassifyWithResolver(context.Background(), query, "proxy.example", mdns.TypeA, false, nil, false)
+		resp, decision, _, _, _ := server.resolveAndClassifyWithResolver(context.Background(), query, "proxy.example", mdns.TypeA, false, nil, false)
 		if resp == nil || decision != DecisionRelay {
 			b.Fatalf("decision = %s, resp = %v; want relay response", decision, resp)
+		}
+	}
+}
+
+func BenchmarkServeMsgCachedDirectHit(b *testing.B) {
+	cache := NewCache(10, 0, 60)
+	cache.Put("direct.example", mdns.TypeA, cacheTestAResponse("direct.example.", "203.0.113.1", 60), "bench")
+
+	directIPs := NewIPSet()
+	directIPs.AddWithSource(netip.MustParsePrefix("203.0.113.1/32"), "bench-direct")
+	server := &Server{
+		cache:              cache,
+		directIPs:          directIPs,
+		ruleLists:          make(map[string][]RuleListEntry),
+		queryStreamClients: make(map[chan<- QueryLog]struct{}),
+	}
+	query := new(mdns.Msg)
+	query.SetQuestion("direct.example.", mdns.TypeA)
+
+	_, decision, _, result, err := server.serveMsgWithOptions(context.Background(), query, "bench", false, nil, false)
+	if err != nil || decision != DecisionDirect || result != "203.0.113.1" {
+		b.Fatalf("warmup = (%s, %q, %v), want direct cached result", decision, result, err)
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, decision, _, result, err := server.serveMsgWithOptions(context.Background(), query, "bench", false, nil, false)
+		if err != nil || decision != DecisionDirect || result != "203.0.113.1" {
+			b.Fatalf("serveMsgWithOptions() = (%s, %q, %v), want direct cached result", decision, result, err)
 		}
 	}
 }

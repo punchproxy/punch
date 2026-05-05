@@ -61,15 +61,15 @@ func (s *Server) serveMsgWithOptions(ctx context.Context, r *dns.Msg, source str
 			rule = "relay-domain"
 			s.relayDecisions.Add(1)
 		case config.DecisionDirect:
-			resp, upstream = s.resolveAndCacheWithResolver(ctx, r, domain, q.Qtype, resolverOverride, respectAnswerTTL)
+			resp, upstream, resultStr = s.resolveAndCacheWithResolver(ctx, r, domain, q.Qtype, resolverOverride, respectAnswerTTL)
 			decision = DecisionDirect
 			rule = "direct-domain"
 			s.directDecisions.Add(1)
 		}
 	} else if q.Qtype == dns.TypeA || q.Qtype == dns.TypeAAAA {
-		resp, decision, rule, upstream = s.resolveAndClassifyWithResolver(ctx, r, domain, q.Qtype, disableFakeIP, resolverOverride, respectAnswerTTL)
+		resp, decision, rule, upstream, resultStr = s.resolveAndClassifyWithResolver(ctx, r, domain, q.Qtype, disableFakeIP, resolverOverride, respectAnswerTTL)
 	} else {
-		resp, upstream = s.resolveAndCacheWithResolver(ctx, r, domain, q.Qtype, resolverOverride, respectAnswerTTL)
+		resp, upstream, resultStr = s.resolveAndCacheWithResolver(ctx, r, domain, q.Qtype, resolverOverride, respectAnswerTTL)
 		decision = DecisionDirect
 		rule = "passthrough"
 	}
@@ -121,8 +121,8 @@ func (s *Server) handleRelayRule(ctx context.Context, r *dns.Msg, domain string,
 	switch qtype {
 	case dns.TypeAAAA:
 		if disableFakeIP {
-			resp, upstream := s.resolveAndCacheWithResolver(ctx, r, domain, qtype, resolverOverride, respectAnswerTTL)
-			return resp, upstream, ""
+			resp, upstream, result := s.resolveAndCacheWithResolver(ctx, r, domain, qtype, resolverOverride, respectAnswerTTL)
+			return resp, upstream, result
 		}
 		if s.disableIPv6FakeIP {
 			resp := new(dns.Msg)
@@ -138,8 +138,8 @@ func (s *Server) handleRelayRule(ctx context.Context, r *dns.Msg, domain string,
 		return s.buildFakeIPResponse(r, fakeIP), "", fakeIP.String()
 	case dns.TypeA:
 		if disableFakeIP {
-			resp, upstream := s.resolveAndCacheWithResolver(ctx, r, domain, qtype, resolverOverride, respectAnswerTTL)
-			return resp, upstream, ""
+			resp, upstream, result := s.resolveAndCacheWithResolver(ctx, r, domain, qtype, resolverOverride, respectAnswerTTL)
+			return resp, upstream, result
 		}
 		fakeIP, ok := s.lookupFakeIP(domain, qtype)
 		if !ok {
@@ -152,72 +152,72 @@ func (s *Server) handleRelayRule(ctx context.Context, r *dns.Msg, domain string,
 	}
 }
 
-func (s *Server) processUpstreamResponse(r *dns.Msg, domain string, qtype uint16, disableFakeIP bool, resp *dns.Msg, upstream string) (*dns.Msg, Decision, string, string) {
+func (s *Server) processUpstreamResponse(r *dns.Msg, domain string, qtype uint16, disableFakeIP bool, resp *dns.Msg, upstream string, result string) (*dns.Msg, Decision, string, string, string) {
 	if !responseHasIPAnswer(resp) {
 		s.ignoreDecisions.Add(1)
-		return resp, DecisionIgnore, "no-ip-detected", upstream
+		return resp, DecisionIgnore, "no-ip-detected", upstream, result
 	}
 	if s.responseHasDirectIP(resp) {
 		s.directDecisions.Add(1)
-		return resp, DecisionDirect, "ip-direct", upstream
+		return resp, DecisionDirect, "ip-direct", upstream, result
 	}
 	s.defaultRuleHits.Add(1)
 	if disableFakeIP {
 		s.directDecisions.Add(1)
-		return resp, DecisionDirect, "forced-direct", upstream
+		return resp, DecisionDirect, "forced-direct", upstream, result
 	}
 
 	s.relayDecisions.Add(1)
 	if qtype == dns.TypeAAAA && s.disableIPv6FakeIP {
 		empty := new(dns.Msg)
 		empty.SetReply(r)
-		return empty, DecisionRelay, "ipv6-fakeip-disabled", upstream
+		return empty, DecisionRelay, "ipv6-fakeip-disabled", upstream, "EMPTY(NOERROR)"
 	}
 	if qtype == dns.TypeA || qtype == dns.TypeAAAA {
 		fakeIP, ok := s.lookupFakeIP(domain, qtype)
 		if !ok {
-			return s.buildRejectResponse(r), DecisionRelay, "fake-ip-family-unavailable", upstream
+			return s.buildRejectResponse(r), DecisionRelay, "fake-ip-family-unavailable", upstream, ""
 		}
-		return s.buildFakeIPResponse(r, fakeIP), DecisionRelay, "ip-fallback", upstream
+		return s.buildFakeIPResponse(r, fakeIP), DecisionRelay, "ip-fallback", upstream, fakeIP.String()
 	}
-	return s.buildRejectResponse(r), DecisionRelay, "relay-unsupported-qtype", upstream
+	return s.buildRejectResponse(r), DecisionRelay, "relay-unsupported-qtype", upstream, ""
 }
 
 // processCachedResponse mirrors processUpstreamResponse but avoids materializing
 // the cached DNS message when classification will return a synthesized response.
-func (s *Server) processCachedResponse(r *dns.Msg, domain string, qtype uint16, disableFakeIP bool, hit cacheHit, upstream string) (*dns.Msg, Decision, string, string) {
+func (s *Server) processCachedResponse(r *dns.Msg, domain string, qtype uint16, disableFakeIP bool, hit cacheHit, upstream string) (*dns.Msg, Decision, string, string, string) {
 	if hit.msg == nil {
 		s.ignoreDecisions.Add(1)
-		return nil, DecisionIgnore, "no-ip-detected", upstream
+		return nil, DecisionIgnore, "no-ip-detected", upstream, hit.queryResult
 	}
 	if !answerRRsHaveIPAnswer(hit.msg.Answer) {
 		s.ignoreDecisions.Add(1)
-		return hit.message(), DecisionIgnore, "no-ip-detected", upstream
+		return hit.message(), DecisionIgnore, "no-ip-detected", upstream, hit.queryResult
 	}
 	if s.answerRRsHaveDirectIP(hit.msg.Answer) {
 		s.directDecisions.Add(1)
-		return hit.message(), DecisionDirect, "ip-direct", upstream
+		return hit.message(), DecisionDirect, "ip-direct", upstream, hit.queryResult
 	}
 	s.defaultRuleHits.Add(1)
 	if disableFakeIP {
 		s.directDecisions.Add(1)
-		return hit.message(), DecisionDirect, "forced-direct", upstream
+		return hit.message(), DecisionDirect, "forced-direct", upstream, hit.queryResult
 	}
 
 	s.relayDecisions.Add(1)
 	if qtype == dns.TypeAAAA && s.disableIPv6FakeIP {
 		empty := new(dns.Msg)
 		empty.SetReply(r)
-		return empty, DecisionRelay, "ipv6-fakeip-disabled", upstream
+		return empty, DecisionRelay, "ipv6-fakeip-disabled", upstream, "EMPTY(NOERROR)"
 	}
 	if qtype == dns.TypeA || qtype == dns.TypeAAAA {
 		fakeIP, ok := s.lookupFakeIP(domain, qtype)
 		if !ok {
-			return s.buildRejectResponse(r), DecisionRelay, "fake-ip-family-unavailable", upstream
+			return s.buildRejectResponse(r), DecisionRelay, "fake-ip-family-unavailable", upstream, ""
 		}
-		return s.buildFakeIPResponse(r, fakeIP), DecisionRelay, "ip-fallback", upstream
+		return s.buildFakeIPResponse(r, fakeIP), DecisionRelay, "ip-fallback", upstream, fakeIP.String()
 	}
-	return s.buildRejectResponse(r), DecisionRelay, "relay-unsupported-qtype", upstream
+	return s.buildRejectResponse(r), DecisionRelay, "relay-unsupported-qtype", upstream, ""
 }
 
 func (s *Server) responseHasDirectIP(msg *dns.Msg) bool {

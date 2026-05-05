@@ -12,7 +12,7 @@ import (
 	"github.com/punchproxy/punch/internal/fakeip"
 )
 
-func (s *Server) resolveAndClassifyWithResolver(ctx context.Context, r *dns.Msg, domain string, qtype uint16, disableFakeIP bool, resolverOverride *ResolverGroup, respectAnswerTTL bool) (*dns.Msg, Decision, string, string) {
+func (s *Server) resolveAndClassifyWithResolver(ctx context.Context, r *dns.Msg, domain string, qtype uint16, disableFakeIP bool, resolverOverride *ResolverGroup, respectAnswerTTL bool) (*dns.Msg, Decision, string, string, string) {
 	if cached, ok := s.cache.lookup(domain, qtype); ok {
 		if !cached.stale && !(respectAnswerTTL && cached.answerMinTTL() == 0) {
 			s.cacheHits.Add(1)
@@ -26,30 +26,31 @@ func (s *Server) resolveAndClassifyWithResolver(ctx context.Context, r *dns.Msg,
 
 	resp, upstream := s.resolveUpstreamWithResolver(ctx, r, resolverOverride)
 	if resp == nil {
-		return nil, DecisionIgnore, "resolve-failed", ""
+		return nil, DecisionIgnore, "resolve-failed", "", ""
 	}
 
-	s.cache.Put(domain, qtype, resp, upstream)
-	return s.processUpstreamResponse(r, domain, qtype, disableFakeIP, resp, upstream)
+	result := s.cache.Put(domain, qtype, resp, upstream)
+	return s.processUpstreamResponse(r, domain, qtype, disableFakeIP, resp, upstream, result)
 }
 
-func (s *Server) resolveAndCacheWithResolver(ctx context.Context, r *dns.Msg, domain string, qtype uint16, resolverOverride *ResolverGroup, respectAnswerTTL bool) (*dns.Msg, string) {
+func (s *Server) resolveAndCacheWithResolver(ctx context.Context, r *dns.Msg, domain string, qtype uint16, resolverOverride *ResolverGroup, respectAnswerTTL bool) (*dns.Msg, string, string) {
 	if cached, ok := s.cache.lookup(domain, qtype); ok {
 		if !cached.stale && !(respectAnswerTTL && cached.answerMinTTL() == 0) {
 			s.cacheHits.Add(1)
-			return cached.message(), "Cache"
+			return cached.message(), "Cache", cached.queryResult
 		}
 		if !respectAnswerTTL {
 			s.refreshCacheAsync(domain, qtype, r.Copy(), resolverOverride)
-			return cached.message(), "Cache (stale)"
+			return cached.message(), "Cache (stale)", cached.queryResult
 		}
 	}
 
 	resp, upstream := s.resolveUpstreamWithResolver(ctx, r, resolverOverride)
+	result := ""
 	if resp != nil {
-		s.cache.Put(domain, qtype, resp, upstream)
+		result = s.cache.Put(domain, qtype, resp, upstream)
 	}
-	return resp, upstream
+	return resp, upstream, result
 }
 
 func (s *Server) resolveUpstreamWithResolver(ctx context.Context, r *dns.Msg, resolverOverride *ResolverGroup) (*dns.Msg, string) {

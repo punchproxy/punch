@@ -86,6 +86,24 @@ func TestCacheSnapshotIncludesUpstream(t *testing.T) {
 	}
 }
 
+func TestCacheLookupIncludesQueryResult(t *testing.T) {
+	cache := NewCache(2, 0, 60)
+
+	got := cache.Put("alias.example", mdns.TypeA, cacheTestCNAMEAResponse("alias.example.", "target.example.", "203.0.113.7", 60), "")
+	want := "target.example., 203.0.113.7"
+	if got != want {
+		t.Fatalf("Put() result = %q, want %q", got, want)
+	}
+
+	hit, ok := cache.lookup("alias.example", mdns.TypeA)
+	if !ok {
+		t.Fatal("lookup() miss, want cached hit")
+	}
+	if hit.queryResult != want {
+		t.Fatalf("hit.queryResult = %q, want %q", hit.queryResult, want)
+	}
+}
+
 func TestCacheStaleAndLazyExpiry(t *testing.T) {
 	cache := NewCache(2, 0, 10)
 	var events []CacheEvent
@@ -178,6 +196,38 @@ func cacheTestAResponse(name, ip string, ttl uint32) *mdns.Msg {
 	return msg
 }
 
+func cacheTestCNAMEAResponse(name, target, ip string, ttl uint32) *mdns.Msg {
+	msg := new(mdns.Msg)
+	msg.SetReply(&mdns.Msg{
+		Question: []mdns.Question{{
+			Name:   name,
+			Qtype:  mdns.TypeA,
+			Qclass: mdns.ClassINET,
+		}},
+	})
+	msg.Answer = []mdns.RR{
+		&mdns.CNAME{
+			Hdr: mdns.RR_Header{
+				Name:   name,
+				Rrtype: mdns.TypeCNAME,
+				Class:  mdns.ClassINET,
+				Ttl:    ttl,
+			},
+			Target: target,
+		},
+		&mdns.A{
+			Hdr: mdns.RR_Header{
+				Name:   target,
+				Rrtype: mdns.TypeA,
+				Class:  mdns.ClassINET,
+				Ttl:    ttl,
+			},
+			A: net.ParseIP(ip).To4(),
+		},
+	}
+	return msg
+}
+
 func backdateCacheEntry(t *testing.T, cache *Cache, name string, qtype uint16, storedAgo, expiresIn time.Duration) {
 	t.Helper()
 	now := time.Now()
@@ -196,6 +246,19 @@ func setCacheEntryTimes(t *testing.T, cache *Cache, name string, qtype uint16, s
 	entry := value.(*cacheEntry)
 	entry.storedAt = storedAt
 	entry.expireAt = expireAt
+}
+
+func setCacheEntryQueryResult(t *testing.T, cache *Cache, name string, qtype uint16, result string) {
+	t.Helper()
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+
+	value, ok := cache.entries.Peek(cacheKey(name, qtype))
+	if !ok {
+		t.Fatalf("cache entry %s not found", cacheKey(name, qtype))
+	}
+	entry := value.(*cacheEntry)
+	entry.queryResult = result
 }
 
 func hasCacheDeleteEvent(events []CacheEvent, name, qtype string) bool {

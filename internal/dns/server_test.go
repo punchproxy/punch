@@ -3,6 +3,7 @@ package dns
 import (
 	"context"
 	"net"
+	"net/netip"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
@@ -123,7 +124,7 @@ func TestServerStaleCacheRefreshDoesNotStampede(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			<-start
-			resp, upstream := server.resolveAndCacheWithResolver(nil, query.Copy(), "stale.example", mdns.TypeA, nil, false)
+			resp, upstream, _ := server.resolveAndCacheWithResolver(nil, query.Copy(), "stale.example", mdns.TypeA, nil, false)
 			if resp == nil {
 				t.Error("resolveAndCacheWithResolver returned nil response")
 				return
@@ -153,6 +154,34 @@ func TestServerStaleCacheRefreshDoesNotStampede(t *testing.T) {
 	}
 }
 
+func TestServerCachedDirectResultUsesStoredCacheResult(t *testing.T) {
+	cache := NewCache(10, 0, 60)
+	cache.Put("direct.example", mdns.TypeA, cacheTestAResponse("direct.example.", "203.0.113.1", 60), "cache-test")
+	setCacheEntryQueryResult(t, cache, "direct.example", mdns.TypeA, "stored-result")
+
+	directIPs := NewIPSet()
+	directIPs.AddWithSource(netip.MustParsePrefix("203.0.113.1/32"), "test-direct")
+	server := &Server{
+		cache:              cache,
+		directIPs:          directIPs,
+		ruleLists:          make(map[string][]RuleListEntry),
+		queryStreamClients: make(map[chan<- QueryLog]struct{}),
+	}
+
+	query := new(mdns.Msg)
+	query.SetQuestion("direct.example.", mdns.TypeA)
+	_, decision, rule, result, err := server.serveMsgWithOptions(context.Background(), query, "test", false, nil, false)
+	if err != nil {
+		t.Fatalf("serveMsgWithOptions() error = %v", err)
+	}
+	if decision != DecisionDirect || rule != "ip-direct" {
+		t.Fatalf("decision/rule = %s/%s, want %s/ip-direct", decision, rule, DecisionDirect)
+	}
+	if result != "stored-result" {
+		t.Fatalf("result = %q, want cached query result", result)
+	}
+}
+
 func TestServerCachedRelayClassificationUsesCacheHitView(t *testing.T) {
 	fakePool, err := fakeip.New("198.18.0.0/24", time.Hour)
 	if err != nil {
@@ -171,7 +200,7 @@ func TestServerCachedRelayClassificationUsesCacheHitView(t *testing.T) {
 
 	query := new(mdns.Msg)
 	query.SetQuestion("proxy.example.", mdns.TypeA)
-	resp, decision, rule, upstream := server.resolveAndClassifyWithResolver(context.Background(), query, "proxy.example", mdns.TypeA, false, nil, false)
+	resp, decision, rule, upstream, result := server.resolveAndClassifyWithResolver(context.Background(), query, "proxy.example", mdns.TypeA, false, nil, false)
 
 	if decision != DecisionRelay || rule != "ip-fallback" || upstream != "Cache" {
 		t.Fatalf("decision/rule/upstream = %s/%s/%s, want %s/ip-fallback/Cache", decision, rule, upstream, DecisionRelay)
@@ -185,6 +214,9 @@ func TestServerCachedRelayClassificationUsesCacheHitView(t *testing.T) {
 	}
 	if got := answer.A.String(); got == "203.0.113.1" {
 		t.Fatalf("response A = %s, want fake IP instead of cached upstream IP", got)
+	}
+	if result != answer.A.String() {
+		t.Fatalf("result = %q, want synthesized fake IP %s", result, answer.A.String())
 	}
 
 	cached, stale := cache.Get("proxy.example", mdns.TypeA)

@@ -10,18 +10,20 @@ import (
 )
 
 type cacheEntry struct {
-	name     string
-	qtype    string
-	msg      *dns.Msg
-	upstream string
-	expireAt time.Time
-	storedAt time.Time
+	name        string
+	qtype       string
+	msg         *dns.Msg
+	queryResult string
+	upstream    string
+	expireAt    time.Time
+	storedAt    time.Time
 }
 
 type cacheHit struct {
-	msg     *dns.Msg
-	stale   bool
-	elapsed uint32
+	msg         *dns.Msg
+	queryResult string
+	stale       bool
+	elapsed     uint32
 }
 
 type CacheSnapshotEntry struct {
@@ -123,9 +125,10 @@ func (c *Cache) lookup(name string, qtype uint16) (cacheHit, bool) {
 
 	staleEntry := now.After(entry.expireAt)
 	hit := cacheHit{
-		msg:     entry.msg,
-		stale:   staleEntry,
-		elapsed: elapsedSeconds(entry.storedAt, now),
+		msg:         entry.msg,
+		queryResult: entry.queryResult,
+		stale:       staleEntry,
+		elapsed:     elapsedSeconds(entry.storedAt, now),
 	}
 	c.mu.Unlock()
 	return hit, true
@@ -188,10 +191,11 @@ func elapsedSeconds(storedAt, now time.Time) uint32 {
 	return uint32(elapsed)
 }
 
-// Put stores a DNS response and the upstream that produced it in the cache.
-func (c *Cache) Put(name string, qtype uint16, msg *dns.Msg, upstream string) {
+// Put stores a DNS response and the upstream that produced it in the cache. It
+// returns the query-log result string formatted from the stored response.
+func (c *Cache) Put(name string, qtype uint16, msg *dns.Msg, upstream string) string {
 	if msg == nil || len(msg.Answer) == 0 {
-		return
+		return ""
 	}
 
 	key := cacheKey(name, qtype)
@@ -199,6 +203,9 @@ func (c *Cache) Put(name string, qtype uint16, msg *dns.Msg, upstream string) {
 	if ttl < c.minTTL {
 		ttl = c.minTTL
 	}
+
+	cachedMsg := msg.Copy()
+	queryResult := answerToString(cachedMsg)
 
 	c.mu.Lock()
 
@@ -213,12 +220,13 @@ func (c *Cache) Put(name string, qtype uint16, msg *dns.Msg, upstream string) {
 
 	now := time.Now()
 	entry := &cacheEntry{
-		name:     name,
-		qtype:    dns.TypeToString[qtype],
-		msg:      msg.Copy(),
-		upstream: upstream,
-		expireAt: now.Add(ttl),
-		storedAt: now,
+		name:        name,
+		qtype:       dns.TypeToString[qtype],
+		msg:         cachedMsg,
+		queryResult: queryResult,
+		upstream:    upstream,
+		expireAt:    now.Add(ttl),
+		storedAt:    now,
 	}
 	c.entries.Add(key, entry)
 	snap := c.entrySnapshotLocked(entry, now)
@@ -228,6 +236,7 @@ func (c *Cache) Put(name string, qtype uint16, msg *dns.Msg, upstream string) {
 	c.mu.Unlock()
 
 	fireCacheEvents(handlers, events)
+	return queryResult
 }
 
 // Flush clears the entire cache.
