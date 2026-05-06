@@ -479,6 +479,76 @@ func TestSelectedCheckLoopChecksOnlyActiveRelay(t *testing.T) {
 	}
 }
 
+func TestSelectedConnectivityBypassesBenchmarkSemaphore(t *testing.T) {
+	st, err := config.Open(filepath.Join(t.TempDir(), "punch.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := st.Close(); err != nil {
+			t.Fatalf("close store: %v", err)
+		}
+	})
+
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	t.Cleanup(target.Close)
+
+	active := &countingDialer{testDialer: testDialer{name: "active"}}
+	selector := &Selector{
+		health:        make(map[string]*RelayHealth),
+		mode:          "manual",
+		outsideURL:    target.URL,
+		domesticURL:   target.URL,
+		outsideHealth: ConnectivityCheck{URL: target.URL},
+		checkSem:      make(chan struct{}, 1),
+		store:         st,
+		bus:           eventbus.New(),
+	}
+	selector.checkSem <- struct{}{}
+	t.Cleanup(func() { <-selector.checkSem })
+
+	g := &group{name: "main", mode: "manual", dialers: []Dialer{active}}
+	selector.groups = []*group{g}
+	staleCheckedAt := time.Now().Add(-time.Hour)
+	selector.health[selector.healthKey(g.name, active.Name())] = &RelayHealth{
+		Name:              selector.displayName(g.name, active.Name()),
+		Group:             g.name,
+		Status:            HealthHealthy,
+		Latency:           99,
+		TCPConnectLatency: 88,
+		URLTestLatency:    99,
+		LastCheckedAt:     staleCheckedAt,
+	}
+
+	done := make(chan struct{})
+	go func() {
+		selector.CheckSelectedConnectivity()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("selected connectivity check blocked behind benchmark semaphore")
+	}
+
+	status := selector.ConnectivityStatus()
+	if status.Domestic.LastCheckedAt.IsZero() {
+		t.Fatal("domestic connectivity was not checked")
+	}
+	if !status.Outside.LastCheckedAt.After(staleCheckedAt) {
+		t.Fatalf("outside connectivity check time = %s, want after stale relay time %s", status.Outside.LastCheckedAt, staleCheckedAt)
+	}
+	if status.Outside.URL != target.URL || status.Outside.Status != HealthHealthy || status.Outside.Latency <= 0 || status.Outside.TCPConnectLatency <= 0 {
+		t.Fatalf("outside connectivity status = %#v", status.Outside)
+	}
+	if got := active.checks.Load(); got != 1 {
+		t.Fatalf("selected relay checks = %d, want 1", got)
+	}
+}
+
 func TestSelectedCheckFailuresTriggerFullBenchmark(t *testing.T) {
 	st, err := config.Open(filepath.Join(t.TempDir(), "punch.db"))
 	if err != nil {

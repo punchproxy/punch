@@ -112,12 +112,20 @@ func (s *Selector) benchmarkSelected() (benchmarkTarget, bool, bool) {
 	if !ok {
 		return benchmarkTarget{}, false, false
 	}
-	results, err := s.benchmarkTargetsWithResults([]benchmarkTarget{target}, nil, false)
-	if err != nil {
-		slog.Warn("selected relay health check failed", "error", err)
-		return target, true, true
-	}
-	return target, true, len(results) > 0 && results[0].check.err != nil
+	prevActive := s.ActiveName()
+	s.setRelayCheckStatus([]benchmarkTarget{target}, HealthChecking)
+	result := s.testRelay(target.dialer)
+	s.finishRelayCheck(target, result)
+	s.applyOutsideConnectivityCheckResult(target, result)
+
+	s.mu.Lock()
+	s.reevaluateAutoSelectionsLocked()
+	s.saveSelectionsLocked()
+	s.mu.Unlock()
+
+	s.publishRelayChange(prevActive)
+	s.bus.Publish(eventbus.Event{Type: eventbus.EventRelayHealth, Data: s.HealthList()})
+	return target, true, result.err != nil
 }
 
 func (s *Selector) triggerFullBenchmarkAfterSelectedCheck(target benchmarkTarget, failed bool) {

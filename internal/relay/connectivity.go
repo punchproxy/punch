@@ -68,6 +68,26 @@ func (s *Selector) CheckDomesticConnectivity() {
 	}
 }
 
+func (s *Selector) applyOutsideConnectivityCheckResult(target benchmarkTarget, result relayCheckResult) {
+	key := s.healthKey(target.group.name, target.dialer.Name())
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.groups) == 0 {
+		return
+	}
+	activeGroup := s.groups[s.activeUsableGroupIndexLocked()]
+	if activeGroup.name != target.group.name || len(activeGroup.dialers) == 0 {
+		return
+	}
+	activeDialer := activeGroup.dialers[s.activeDialerIndexLocked(activeGroup)]
+	if activeDialer.Name() != target.dialer.Name() {
+		return
+	}
+	applyConnectivityCheckResult(&s.outsideHealth, s.outsideURL, result)
+	s.outsideHealthKey = key
+}
+
 func (s *Selector) ConnectivityStatus() ConnectivityStatus {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -90,13 +110,10 @@ func (s *Selector) ConnectivityStatus() ConnectivityStatus {
 		return status
 	}
 	d := g.dialers[s.activeDialerIndexLocked(g)]
-	if h := s.health[s.healthKey(g.name, d.Name())]; h != nil {
-		status.Outside.Status = h.Status
-		status.Outside.Latency = h.Latency
-		status.Outside.TCPConnectLatency = h.TCPConnectLatency
-		status.Outside.LastCheckedAt = h.LastCheckedAt
-		status.Outside.History = cloneHealthRecords(h.History)
-		status.Outside.Error = h.Error
+	if key := s.healthKey(g.name, d.Name()); s.outsideHealthKey == key {
+		status.Outside = s.outsideHealth
+		status.Outside.URL = s.outsideURL
+		status.Outside.History = cloneHealthRecords(status.Outside.History)
 	}
 	return status
 }

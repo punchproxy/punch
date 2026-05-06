@@ -119,6 +119,8 @@ type Selector struct {
 	selectedCheckFailureKey string
 	tolerance               time.Duration
 	domesticHealth          ConnectivityCheck
+	outsideHealth           ConnectivityCheck
+	outsideHealthKey        string
 	checkSem                chan struct{}
 	bus                     *eventbus.Bus
 	stopCh                  chan struct{}
@@ -155,6 +157,7 @@ func NewSelector(
 		fullTriggerFailures:   normalizeFullTriggerFailures(checkCfg.FullTriggerFailures),
 		tolerance:             time.Duration(checkCfg.Tolerance) * time.Millisecond,
 		domesticHealth:        ConnectivityCheck{URL: checkCfg.DomesticURL},
+		outsideHealth:         ConnectivityCheck{URL: checkCfg.OutsideURL},
 		checkSem:              make(chan struct{}, normalizeCheckConcurrency(checkCfg.Concurrency)),
 		bus:                   bus,
 		stopCh:                make(chan struct{}),

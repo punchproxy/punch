@@ -7,7 +7,7 @@ import (
 
 func (s *Selector) Start() {
 	go s.Benchmark()
-	go s.CheckDomesticConnectivity()
+	go s.CheckSelectedConnectivity()
 	go s.refreshLoop()
 	go s.selectedCheckLoop()
 	go func() {

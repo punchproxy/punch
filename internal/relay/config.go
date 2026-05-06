@@ -25,6 +25,10 @@ func (s *Selector) ApplyConfig(relayCfg config.Relay, checkCfg config.Check) err
 	if s.domesticURL != checkCfg.DomesticURL {
 		s.domesticHealth = ConnectivityCheck{URL: checkCfg.DomesticURL}
 	}
+	if s.outsideURL != checkCfg.OutsideURL {
+		s.outsideHealth = ConnectivityCheck{URL: checkCfg.OutsideURL}
+		s.outsideHealthKey = ""
+	}
 	s.outsideURL = checkCfg.OutsideURL
 	s.domesticURL = checkCfg.DomesticURL
 	s.fullCheckInterval = normalizeFullCheckInterval(checkCfg.FullInterval)
