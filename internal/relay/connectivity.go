@@ -110,10 +110,20 @@ func (s *Selector) ConnectivityStatus() ConnectivityStatus {
 		return status
 	}
 	d := g.dialers[s.activeDialerIndexLocked(g)]
-	if key := s.healthKey(g.name, d.Name()); s.outsideHealthKey == key {
+	key := s.healthKey(g.name, d.Name())
+	if s.outsideHealthKey == key {
 		status.Outside = s.outsideHealth
 		status.Outside.URL = s.outsideURL
 		status.Outside.History = cloneHealthRecords(status.Outside.History)
+		return status
+	}
+	if h := s.health[key]; h != nil {
+		status.Outside.Status = h.Status
+		status.Outside.Latency = h.Latency
+		status.Outside.TCPConnectLatency = h.TCPConnectLatency
+		status.Outside.LastCheckedAt = h.LastCheckedAt
+		status.Outside.History = cloneHealthRecords(h.History)
+		status.Outside.Error = h.Error
 	}
 	return status
 }
