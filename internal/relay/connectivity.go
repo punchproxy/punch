@@ -4,6 +4,8 @@ import (
 	"log/slog"
 	"sync"
 	"time"
+
+	"github.com/punchproxy/punch/internal/eventbus"
 )
 
 // ConnectivityCheck is a point-in-time URL reachability check.
@@ -25,24 +27,67 @@ type ConnectivityStatus struct {
 	Outside         ConnectivityCheck `json:"outside"`
 }
 
+// CheckSelectedConnectivity runs the domestic ("Internet") and outside
+// ("Relayed") reachability checks in parallel. Both checks run on every tick
+// regardless of the per-relay benchmark state — the outside check always uses
+// whatever relay is currently active at the moment of the check.
 func (s *Selector) CheckSelectedConnectivity() {
-	var selectedTarget benchmarkTarget
-	var selectedChecked bool
-	var selectedFailed bool
+	var outsideTarget benchmarkTarget
+	var outsideChecked bool
+	var outsideFailed bool
 	var wg sync.WaitGroup
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		selectedTarget, selectedChecked, selectedFailed = s.benchmarkSelected()
+		outsideTarget, outsideChecked, outsideFailed = s.CheckOutsideConnectivity()
 	}()
 	go func() {
 		defer wg.Done()
 		s.CheckDomesticConnectivity()
 	}()
 	wg.Wait()
-	if selectedChecked {
-		s.triggerFullBenchmarkAfterSelectedCheck(selectedTarget, selectedFailed)
+	if outsideChecked {
+		s.triggerFullBenchmarkAfterSelectedCheck(outsideTarget, outsideFailed)
 	}
+}
+
+// CheckOutsideConnectivity tests outside reachability through whatever relay
+// is currently active. It always writes the result to outsideHealth, even if
+// the active relay changes mid-flight. It also folds the result into the
+// active relay's per-relay health so that the active row stays fresh.
+func (s *Selector) CheckOutsideConnectivity() (benchmarkTarget, bool, bool) {
+	target, ok := s.selectedBenchmarkTarget()
+	if !ok {
+		s.markOutsideUnavailableLocked("no active relay")
+		return benchmarkTarget{}, false, false
+	}
+	prevActive := s.ActiveName()
+	s.setRelayCheckStatus([]benchmarkTarget{target}, HealthChecking)
+	result := s.testRelay(target.dialer)
+	s.finishRelayCheck(target, result)
+	s.applyOutsideConnectivityCheckResult(target, result)
+
+	s.mu.Lock()
+	s.reevaluateAutoSelectionsLocked()
+	s.saveSelectionsLocked()
+	s.mu.Unlock()
+
+	s.publishRelayChange(prevActive)
+	s.bus.Publish(eventbus.Event{Type: eventbus.EventRelayHealth, Data: s.HealthList()})
+	return target, true, result.err != nil
+}
+
+func (s *Selector) markOutsideUnavailableLocked(reason string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.outsideHealth.URL = s.outsideURL
+	s.outsideHealth.Status = HealthDown
+	s.outsideHealth.Latency = 0
+	s.outsideHealth.TCPConnectLatency = 0
+	s.outsideHealth.LastCheckedAt = time.Now()
+	s.outsideHealth.Error = reason
+	s.outsideHealthKey = ""
+	appendConnectivityHealthRecord(&s.outsideHealth)
 }
 
 func (s *Selector) CheckDomesticConnectivity() {
@@ -68,22 +113,14 @@ func (s *Selector) CheckDomesticConnectivity() {
 	}
 }
 
+// applyOutsideConnectivityCheckResult unconditionally records the result of
+// an outside check against the relay we just tested. The result reflects the
+// relay that was active at the moment the check started; we do not discard it
+// even if the active selection changed during the check.
 func (s *Selector) applyOutsideConnectivityCheckResult(target benchmarkTarget, result relayCheckResult) {
 	key := s.healthKey(target.group.name, target.dialer.Name())
-
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if len(s.groups) == 0 {
-		return
-	}
-	activeGroup := s.groups[s.activeUsableGroupIndexLocked()]
-	if activeGroup.name != target.group.name || len(activeGroup.dialers) == 0 {
-		return
-	}
-	activeDialer := activeGroup.dialers[s.activeDialerIndexLocked(activeGroup)]
-	if activeDialer.Name() != target.dialer.Name() {
-		return
-	}
 	applyConnectivityCheckResult(&s.outsideHealth, s.outsideURL, result)
 	s.outsideHealthKey = key
 }
@@ -95,36 +132,12 @@ func (s *Selector) ConnectivityStatus() ConnectivityStatus {
 	status := ConnectivityStatus{
 		CheckIntervalMS: s.selectedCheckIntervalLocked().Milliseconds(),
 		Domestic:        s.domesticHealth,
-		Outside: ConnectivityCheck{
-			URL: s.outsideURL,
-		},
+		Outside:         s.outsideHealth,
 	}
 	status.Domestic.URL = s.domesticURL
 	status.Domestic.History = cloneHealthRecords(status.Domestic.History)
-
-	if len(s.groups) == 0 {
-		return status
-	}
-	g := s.groups[s.activeUsableGroupIndexLocked()]
-	if len(g.dialers) == 0 {
-		return status
-	}
-	d := g.dialers[s.activeDialerIndexLocked(g)]
-	key := s.healthKey(g.name, d.Name())
-	if s.outsideHealthKey == key {
-		status.Outside = s.outsideHealth
-		status.Outside.URL = s.outsideURL
-		status.Outside.History = cloneHealthRecords(status.Outside.History)
-		return status
-	}
-	if h := s.health[key]; h != nil {
-		status.Outside.Status = h.Status
-		status.Outside.Latency = h.Latency
-		status.Outside.TCPConnectLatency = h.TCPConnectLatency
-		status.Outside.LastCheckedAt = h.LastCheckedAt
-		status.Outside.History = cloneHealthRecords(h.History)
-		status.Outside.Error = h.Error
-	}
+	status.Outside.URL = s.outsideURL
+	status.Outside.History = cloneHealthRecords(status.Outside.History)
 	return status
 }
 

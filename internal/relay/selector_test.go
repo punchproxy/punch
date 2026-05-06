@@ -549,40 +549,38 @@ func TestSelectedConnectivityBypassesBenchmarkSemaphore(t *testing.T) {
 	}
 }
 
-func TestConnectivityStatusFallsBackToActiveRelayHealth(t *testing.T) {
+func TestConnectivityStatusReturnsOutsideHealthRegardlessOfActiveRelay(t *testing.T) {
+	checkedAt := time.Now().Add(-time.Minute).Round(0)
 	selector := &Selector{
-		health:           make(map[string]*RelayHealth),
-		outsideURL:       "http://example.test/generate_204",
-		outsideHealth:    ConnectivityCheck{URL: "http://example.test/generate_204"},
+		health:     make(map[string]*RelayHealth),
+		outsideURL: "http://example.test/generate_204",
+		outsideHealth: ConnectivityCheck{
+			URL:               "http://example.test/generate_204",
+			Status:            HealthHealthy,
+			Latency:           42,
+			TCPConnectLatency: 9,
+			LastCheckedAt:     checkedAt,
+			History: []HealthRecord{{
+				Time:              checkedAt,
+				Status:            HealthHealthy,
+				Latency:           42,
+				TCPConnectLatency: 9,
+			}},
+		},
+		// outsideHealthKey points to a relay that is no longer active —
+		// ConnectivityStatus should still return outsideHealth verbatim.
 		outsideHealthKey: "main\x00previous",
 	}
 	active := &testDialer{name: "active"}
 	g := &group{name: "main", mode: "manual", dialers: []Dialer{active}}
 	selector.groups = []*group{g}
 
-	checkedAt := time.Now().Add(-time.Minute).Round(0)
-	selector.health[selector.healthKey(g.name, active.Name())] = &RelayHealth{
-		Name:              selector.displayName(g.name, active.Name()),
-		Group:             g.name,
-		Status:            HealthHealthy,
-		Latency:           42,
-		TCPConnectLatency: 9,
-		URLTestLatency:    42,
-		LastCheckedAt:     checkedAt,
-		History: []HealthRecord{{
-			Time:              checkedAt,
-			Status:            HealthHealthy,
-			Latency:           42,
-			TCPConnectLatency: 9,
-		}},
-	}
-
 	status := selector.ConnectivityStatus()
 	if status.Outside.Status != HealthHealthy || status.Outside.Latency != 42 || status.Outside.TCPConnectLatency != 9 || !status.Outside.LastCheckedAt.Equal(checkedAt) {
-		t.Fatalf("outside connectivity fallback = %#v", status.Outside)
+		t.Fatalf("outside connectivity = %#v", status.Outside)
 	}
 	if len(status.Outside.History) != 1 {
-		t.Fatalf("outside fallback history length = %d, want 1", len(status.Outside.History))
+		t.Fatalf("outside history length = %d, want 1", len(status.Outside.History))
 	}
 }
 

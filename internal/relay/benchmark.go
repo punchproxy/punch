@@ -100,34 +100,6 @@ func (s *Selector) BenchmarkTarget(name string) error {
 	return s.benchmarkTargets(targets, targetGroup, benchmarkWholeGroup)
 }
 
-func (s *Selector) BenchmarkSelected() {
-	target, checked, failed := s.benchmarkSelected()
-	if checked {
-		s.triggerFullBenchmarkAfterSelectedCheck(target, failed)
-	}
-}
-
-func (s *Selector) benchmarkSelected() (benchmarkTarget, bool, bool) {
-	target, ok := s.selectedBenchmarkTarget()
-	if !ok {
-		return benchmarkTarget{}, false, false
-	}
-	prevActive := s.ActiveName()
-	s.setRelayCheckStatus([]benchmarkTarget{target}, HealthChecking)
-	result := s.testRelay(target.dialer)
-	s.finishRelayCheck(target, result)
-	s.applyOutsideConnectivityCheckResult(target, result)
-
-	s.mu.Lock()
-	s.reevaluateAutoSelectionsLocked()
-	s.saveSelectionsLocked()
-	s.mu.Unlock()
-
-	s.publishRelayChange(prevActive)
-	s.bus.Publish(eventbus.Event{Type: eventbus.EventRelayHealth, Data: s.HealthList()})
-	return target, true, result.err != nil
-}
-
 func (s *Selector) triggerFullBenchmarkAfterSelectedCheck(target benchmarkTarget, failed bool) {
 	failures, trigger := s.recordSelectedCheckResult(target, failed)
 	if !trigger {
