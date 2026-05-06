@@ -257,13 +257,36 @@ func healthRecordLatency(record statusHealthRecord, metric healthMetric) int64 {
 
 func colorHealthBlock(status string, latency int64, metric healthMetric) string {
 	if status == "down" && (metric == healthMetricRoundTrip || latency <= 0) {
-		return ansiRed + "█" + ansiReset
+		return ansiRed + healthLatencyBlock(latency) + ansiReset
 	}
 	if status == "degraded" && metric == healthMetricRoundTrip {
-		return ansiYellow + "█" + ansiReset
+		return ansiYellow + healthLatencyBlock(latency) + ansiReset
 	}
 	color := colorHealthLatency(latency)
-	return color + "█" + ansiReset
+	return color + healthLatencyBlock(latency) + ansiReset
+}
+
+func healthLatencyBlock(latency int64) string {
+	switch {
+	case latency <= 0:
+		return "█"
+	case latency <= 25:
+		return "▁"
+	case latency <= 50:
+		return "▂"
+	case latency <= 100:
+		return "▃"
+	case latency <= 150:
+		return "▄"
+	case latency <= 250:
+		return "▅"
+	case latency <= 350:
+		return "▆"
+	case latency <= 500:
+		return "▇"
+	default:
+		return "█"
+	}
 }
 
 func colorHealthLatency(latency int64) string {

@@ -129,7 +129,7 @@ func TestStatusCommand(t *testing.T) {
 		t.Fatalf("Execute() error = %v", err)
 	}
 	text := out.String()
-	for _, want := range []string{"General:", "Client Version: dev", "Server Version: v1.2.3", "Relay:          10 requests, last google.com", "Cache:          42 entries, 7 hits", "Health (every 10s):", "  Internet:", "    TCP Connect:", "last 12 ms @", "    Round Trip:", "last 45 ms @", "  Relayed:", "last 31 ms @", "last 88 ms @", "\x1b[32m█\x1b[0m", "Active:         auto / hk-1", "Latency:        88ms (tcp 31ms, url 88ms)", "Sessions:       4 active, 99 total processed", "Download:       3.0 MB total, 2.0 KB/s", "UDP Packets:    300 enqueued, 7 dropped (5 queue full, 1 closed, 1 pending)"} {
+	for _, want := range []string{"General:", "Client Version: dev", "Server Version: v1.2.3", "Relay:          10 requests, last google.com", "Cache:          42 entries, 7 hits", "Health (every 10s):", "  Internet:", "    TCP Connect:", "last 12 ms @", "    Round Trip:", "last 45 ms @", "  Relayed:", "last 31 ms @", "last 88 ms @", "\x1b[32m▁\x1b[0m", "\x1b[32m▂\x1b[0m", "\x1b[32m▃\x1b[0m", "Active:         auto / hk-1", "Latency:        88ms (tcp 31ms, url 88ms)", "Sessions:       4 active, 99 total processed", "Download:       3.0 MB total, 2.0 KB/s", "UDP Packets:    300 enqueued, 7 dropped (5 queue full, 1 closed, 1 pending)"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("output missing %q:\n%s", want, text)
 		}
@@ -139,9 +139,52 @@ func TestStatusCommand(t *testing.T) {
 			t.Fatalf("output should hide %q:\n%s", hidden, text)
 		}
 	}
-	if got := strings.Count(text, "█"); got != 80 {
+	if got := countHealthChartBars(text); got != 80 {
 		t.Fatalf("health chart block count = %d, want 80:\n%s", got, text)
 	}
+}
+
+func TestHealthChartEncodesLatencyHeight(t *testing.T) {
+	records := []statusHealthRecord{
+		{Status: "healthy", LatencyMS: 10},
+		{Status: "healthy", LatencyMS: 40},
+		{Status: "healthy", LatencyMS: 80},
+		{Status: "healthy", LatencyMS: 125},
+		{Status: "healthy", LatencyMS: 200},
+		{Status: "healthy", LatencyMS: 300},
+		{Status: "healthy", LatencyMS: 450},
+		{Status: "healthy", LatencyMS: 650},
+		{Status: "down"},
+	}
+	want := ansiGreen + "▁" + ansiReset +
+		ansiGreen + "▂" + ansiReset +
+		ansiGreen + "▃" + ansiReset +
+		ansiGreen + "▄" + ansiReset +
+		ansiGreen + "▅" + ansiReset +
+		ansiGreen + "▆" + ansiReset +
+		ansiGreen + "▇" + ansiReset +
+		ansiYellow + "█" + ansiReset +
+		ansiRed + "█" + ansiReset
+	if got := formatHealthChart(records, healthMetricRoundTrip); !strings.HasSuffix(got, want) {
+		t.Fatalf("chart suffix = %q, want %q", got, want)
+	}
+
+	tcpRecords := []statusHealthRecord{{
+		Status:              "healthy",
+		LatencyMS:           650,
+		TCPConnectLatencyMS: 10,
+	}}
+	if got, want := formatHealthChart(tcpRecords, healthMetricTCPConnect), ansiGreen+"▁"+ansiReset; !strings.HasSuffix(got, want) {
+		t.Fatalf("tcp chart suffix = %q, want %q", got, want)
+	}
+}
+
+func countHealthChartBars(text string) int {
+	total := 0
+	for _, bar := range []string{"▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"} {
+		total += strings.Count(text, bar)
+	}
+	return total
 }
 
 func TestVersionFlag(t *testing.T) {
