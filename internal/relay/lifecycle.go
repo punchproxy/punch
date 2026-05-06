@@ -116,10 +116,7 @@ func (s *Selector) benchmarkLoopConfig() (time.Duration, bool) {
 func (s *Selector) selectedCheckLoopInterval() time.Duration {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	if s.selectedInterval <= 0 {
-		return defaultSelectedCheckInterval
-	}
-	return s.selectedInterval
+	return s.selectedCheckIntervalLocked()
 }
 
 func (s *Selector) benchmarkTargetAsync(name string) {

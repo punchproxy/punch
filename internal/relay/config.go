@@ -116,8 +116,8 @@ func cloneHealthRecords(records []HealthRecord) []HealthRecord {
 		return nil
 	}
 	out := append([]HealthRecord(nil), records...)
-	if len(out) > maxRelayHealthRecords {
-		out = out[len(out)-maxRelayHealthRecords:]
+	if len(out) > maxHealthRecords {
+		out = out[len(out)-maxHealthRecords:]
 	}
 	return out
 }

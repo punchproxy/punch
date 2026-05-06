@@ -490,8 +490,8 @@ func appendRelayHealthRecord(h *RelayHealth) {
 		Latency:           h.Latency,
 		TCPConnectLatency: h.TCPConnectLatency,
 	})
-	if len(h.History) > maxRelayHealthRecords {
-		h.History = h.History[len(h.History)-maxRelayHealthRecords:]
+	if len(h.History) > maxHealthRecords {
+		h.History = h.History[len(h.History)-maxHealthRecords:]
 	}
 }
 

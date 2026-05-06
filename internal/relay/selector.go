@@ -18,7 +18,7 @@ const directGroupName = "DIRECT"
 
 const defaultCheckConcurrency = 10
 const defaultSelectedCheckInterval = 10 * time.Second
-const maxRelayHealthRecords = 10
+const maxHealthRecords = 20
 
 var (
 	ErrRelaySelectionAutoGroup = errors.New("relay belongs to an auto relay group")

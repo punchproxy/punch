@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -42,17 +43,26 @@ type statusDecisionStat struct {
 }
 
 type statusConnectivity struct {
-	Domestic statusConnectivityCheck `json:"domestic"`
-	Outside  statusConnectivityCheck `json:"outside"`
+	CheckIntervalMS int64                   `json:"check_interval_ms"`
+	Domestic        statusConnectivityCheck `json:"domestic"`
+	Outside         statusConnectivityCheck `json:"outside"`
 }
 
 type statusConnectivityCheck struct {
-	URL                 string    `json:"url"`
+	URL                 string               `json:"url"`
+	Status              string               `json:"status"`
+	LatencyMS           int64                `json:"latency_ms"`
+	TCPConnectLatencyMS int64                `json:"tcp_connect_latency_ms"`
+	LastCheckedAt       time.Time            `json:"last_checked_at"`
+	History             []statusHealthRecord `json:"history"`
+	Error               string               `json:"error"`
+}
+
+type statusHealthRecord struct {
+	Time                time.Time `json:"time"`
 	Status              string    `json:"status"`
 	LatencyMS           int64     `json:"latency_ms"`
 	TCPConnectLatencyMS int64     `json:"tcp_connect_latency_ms"`
-	LastCheckedAt       time.Time `json:"last_checked_at"`
-	Error               string    `json:"error"`
 }
 
 type statusRelay struct {
@@ -129,11 +139,13 @@ func writeStatus(w io.Writer, status statusInfo) error {
 	fmt.Fprintf(w, "  Reject:         %d requests, last %s\n", status.DNS.Reject.Requests, formatOptional(status.DNS.Reject.LastDomain))
 	fmt.Fprintf(w, "  Cache:          %d entries, %d hits\n", status.DNS.CacheEntries, status.DNS.CacheHits)
 	fmt.Fprintln(w)
-	fmt.Fprintln(w, "Connectivity:")
-	fmt.Fprintf(w, "  Domestic URL:  %s\n", formatOptional(status.Connectivity.Domestic.URL))
-	fmt.Fprintf(w, "  Domestic:      %s\n", formatConnectivityCheck(status.Connectivity.Domestic))
-	fmt.Fprintf(w, "  Outside URL:   %s\n", formatOptional(status.Connectivity.Outside.URL))
-	fmt.Fprintf(w, "  Outside:       %s\n", formatConnectivityCheck(status.Connectivity.Outside))
+	fmt.Fprintf(w, "Health (every %s ms):\n", formatHealthInterval(status.Connectivity.CheckIntervalMS))
+	fmt.Fprintln(w, "  Internet:")
+	fmt.Fprintf(w, "    %-12s %s\n", "TCP Connect:", formatHealthMetric(status.Connectivity.Domestic, healthMetricTCPConnect))
+	fmt.Fprintf(w, "    %-12s %s\n", "Round Trip:", formatHealthMetric(status.Connectivity.Domestic, healthMetricRoundTrip))
+	fmt.Fprintln(w, "  Relayed:")
+	fmt.Fprintf(w, "    %-12s %s\n", "TCP Connect:", formatHealthMetric(status.Connectivity.Outside, healthMetricTCPConnect))
+	fmt.Fprintf(w, "    %-12s %s\n", "Round Trip:", formatHealthMetric(status.Connectivity.Outside, healthMetricRoundTrip))
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Relay:")
 	fmt.Fprintf(w, "  Active:         %s\n", formatOptional(status.Relay.ActiveRelay))
@@ -163,18 +175,119 @@ func formatRelayLatencies(status statusRelay) string {
 	return fmt.Sprintf("%s (tcp %s, url %s)", latency, tcp, url)
 }
 
-func formatConnectivityCheck(check statusConnectivityCheck) string {
-	summary := fmt.Sprintf(
-		"%s (tc latency %s, latency %s, last check %s)",
-		formatOptional(check.Status),
-		formatLatency(check.TCPConnectLatencyMS),
-		formatLatency(check.LatencyMS),
-		formatTime(check.LastCheckedAt),
-	)
-	if check.Error != "" {
-		summary += ", error " + check.Error
+type healthMetric int
+
+const (
+	healthMetricTCPConnect healthMetric = iota
+	healthMetricRoundTrip
+	healthChartBars = 20
+)
+
+const (
+	ansiReset  = "\x1b[0m"
+	ansiGreen  = "\x1b[32m"
+	ansiYellow = "\x1b[33m"
+	ansiRed    = "\x1b[31m"
+	ansiGray   = "\x1b[90m"
+)
+
+func formatHealthInterval(ms int64) string {
+	if ms <= 0 {
+		return "-"
 	}
-	return summary
+	return fmt.Sprintf("%d", ms)
+}
+
+func formatHealthMetric(check statusConnectivityCheck, metric healthMetric) string {
+	records := healthRecords(check)
+	latency := check.LatencyMS
+	if metric == healthMetricTCPConnect {
+		latency = check.TCPConnectLatencyMS
+	}
+	return fmt.Sprintf("%s (last %s @ %s)", formatHealthChart(records, metric), formatHealthLatency(latency), formatClockTime(check.LastCheckedAt))
+}
+
+func healthRecords(check statusConnectivityCheck) []statusHealthRecord {
+	records := append([]statusHealthRecord(nil), check.History...)
+	if !check.LastCheckedAt.IsZero() && shouldAppendCurrentHealthRecord(records, check) {
+		records = append(records, statusHealthRecord{
+			Time:                check.LastCheckedAt,
+			Status:              check.Status,
+			LatencyMS:           check.LatencyMS,
+			TCPConnectLatencyMS: check.TCPConnectLatencyMS,
+		})
+	}
+	if len(records) > healthChartBars {
+		records = records[len(records)-healthChartBars:]
+	}
+	return records
+}
+
+func shouldAppendCurrentHealthRecord(records []statusHealthRecord, check statusConnectivityCheck) bool {
+	if len(records) == 0 {
+		return true
+	}
+	last := records[len(records)-1]
+	return !last.Time.Equal(check.LastCheckedAt) ||
+		last.Status != check.Status ||
+		last.LatencyMS != check.LatencyMS ||
+		last.TCPConnectLatencyMS != check.TCPConnectLatencyMS
+}
+
+func formatHealthChart(records []statusHealthRecord, metric healthMetric) string {
+	var b strings.Builder
+	if len(records) > healthChartBars {
+		records = records[len(records)-healthChartBars:]
+	}
+	for i := len(records); i < healthChartBars; i++ {
+		b.WriteString(colorHealthBlock("", 0, metric))
+	}
+	for _, record := range records {
+		b.WriteString(colorHealthBlock(record.Status, healthRecordLatency(record, metric), metric))
+	}
+	return b.String()
+}
+
+func healthRecordLatency(record statusHealthRecord, metric healthMetric) int64 {
+	if metric == healthMetricTCPConnect {
+		return record.TCPConnectLatencyMS
+	}
+	return record.LatencyMS
+}
+
+func colorHealthBlock(status string, latency int64, metric healthMetric) string {
+	if status == "down" && (metric == healthMetricRoundTrip || latency <= 0) {
+		return ansiRed + "█" + ansiReset
+	}
+	if status == "degraded" && metric == healthMetricRoundTrip {
+		return ansiYellow + "█" + ansiReset
+	}
+	color := colorHealthLatency(latency)
+	return color + "█" + ansiReset
+}
+
+func colorHealthLatency(latency int64) string {
+	if latency <= 0 {
+		return ansiGray
+	}
+	if latency > 500 {
+		return ansiYellow
+	}
+	return ansiGreen
+}
+
+func formatHealthLatency(ms int64) string {
+	if ms <= 0 {
+		return "-"
+	}
+	return fmt.Sprintf("%d ms", ms)
+}
+
+func formatClockTime(t time.Time) string {
+	if t.IsZero() {
+		return "-"
+	}
+	return t.Local().Format("15:04:05")
 }
 
 func formatDurationSeconds(seconds int64) string {

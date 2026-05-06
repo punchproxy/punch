@@ -517,6 +517,12 @@ func TestSelectedCheckLoopChecksDomesticConnectivity(t *testing.T) {
 	if status.Domestic.URL != target.URL || status.Domestic.Status != HealthHealthy || status.Domestic.Latency <= 0 || status.Domestic.TCPConnectLatency <= 0 {
 		t.Fatalf("domestic connectivity status = %#v", status.Domestic)
 	}
+	if status.CheckIntervalMS != 10 {
+		t.Fatalf("connectivity interval = %d, want 10", status.CheckIntervalMS)
+	}
+	if len(status.Domestic.History) == 0 {
+		t.Fatal("domestic connectivity history is empty")
+	}
 	if got := requests.Load(); got < 2 {
 		t.Fatalf("domestic URL requests = %d, want at least 2", got)
 	}
@@ -608,9 +614,9 @@ func TestBenchmarkPublishesCompletedRelayBeforeWholeBatchFinishes(t *testing.T) 
 	}
 }
 
-func TestRelayHealthHistoryKeepsLatestTenCompletedChecks(t *testing.T) {
+func TestRelayHealthHistoryKeepsLatestTwentyCompletedChecks(t *testing.T) {
 	h := &RelayHealth{}
-	for i := 0; i < maxRelayHealthRecords+2; i++ {
+	for i := 0; i < maxHealthRecords+2; i++ {
 		h.LastCheckedAt = time.Unix(int64(i), 0)
 		h.Status = HealthHealthy
 		h.Latency = int64(i)
@@ -618,16 +624,17 @@ func TestRelayHealthHistoryKeepsLatestTenCompletedChecks(t *testing.T) {
 		appendRelayHealthRecord(h)
 	}
 
-	if len(h.History) != maxRelayHealthRecords {
-		t.Fatalf("history length = %d, want %d", len(h.History), maxRelayHealthRecords)
+	if len(h.History) != maxHealthRecords {
+		t.Fatalf("history length = %d, want %d", len(h.History), maxHealthRecords)
 	}
 	first := h.History[0]
 	if first.Time != time.Unix(2, 0) || first.Latency != 2 || first.TCPConnectLatency != 102 {
 		t.Fatalf("oldest kept record = %#v, want check 2", first)
 	}
 	last := h.History[len(h.History)-1]
-	if last.Time != time.Unix(11, 0) || last.Latency != 11 || last.TCPConnectLatency != 111 {
-		t.Fatalf("newest kept record = %#v, want check 11", last)
+	wantLast := int64(maxHealthRecords + 1)
+	if last.Time != time.Unix(wantLast, 0) || last.Latency != wantLast || last.TCPConnectLatency != wantLast+100 {
+		t.Fatalf("newest kept record = %#v, want check %d", last, wantLast)
 	}
 }
 
