@@ -98,6 +98,16 @@ func (s *Selector) BenchmarkTarget(name string) error {
 	return s.benchmarkTargets(targets, targetGroup, benchmarkWholeGroup)
 }
 
+func (s *Selector) BenchmarkSelected() {
+	target, ok := s.selectedBenchmarkTarget()
+	if !ok {
+		return
+	}
+	if err := s.benchmarkTargets([]benchmarkTarget{target}, nil, false); err != nil {
+		slog.Warn("selected relay health check failed", "error", err)
+	}
+}
+
 func (s *Selector) HasBenchmarkTarget(name string) bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -180,6 +190,20 @@ func (s *Selector) lookupBenchmarkRelay(name, groupName string) (string, []bench
 	return s.displayName(target.group.name, target.dialer.Name()), targets, nil
 }
 
+func (s *Selector) selectedBenchmarkTarget() (benchmarkTarget, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if len(s.groups) == 0 {
+		return benchmarkTarget{}, false
+	}
+	g := s.groups[s.activeUsableGroupIndexLocked()]
+	if g.name == directGroupName || len(g.dialers) == 0 {
+		return benchmarkTarget{}, false
+	}
+	idx := s.activeDialerIndexLocked(g)
+	return benchmarkTarget{group: g, index: idx, dialer: g.dialers[idx]}, true
+}
+
 func (s *Selector) benchmarkTargets(targets []benchmarkTarget, targetGroup *group, benchmarkWholeGroup bool) error {
 	prevActive := s.ActiveName()
 
@@ -259,16 +283,23 @@ func (s *Selector) relayCheckSemaphore() chan struct{} {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.checkSem == nil {
-		s.checkSem = make(chan struct{}, defaultRelayCheckConcurrency)
+		s.checkSem = make(chan struct{}, defaultCheckConcurrency)
 	}
 	return s.checkSem
 }
 
-func normalizeRelayCheckConcurrency(n int) int {
+func normalizeCheckConcurrency(n int) int {
 	if n <= 0 {
-		return defaultRelayCheckConcurrency
+		return defaultCheckConcurrency
 	}
 	return n
+}
+
+func normalizeSelectedCheckInterval(seconds int) time.Duration {
+	if seconds <= 0 {
+		return defaultSelectedCheckInterval
+	}
+	return time.Duration(seconds) * time.Second
 }
 
 func (s *Selector) setRelayCheckStatus(targets []benchmarkTarget, status HealthStatus) {

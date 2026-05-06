@@ -26,6 +26,7 @@ type Config struct {
 	DNS                  DNS      `json:"dns"`
 	TUN                  TUN      `json:"tun"`
 	Relay                Relay    `json:"relay"`
+	Check                Check    `json:"check"`
 	API                  API      `json:"api"`
 	Sessions             Sessions `json:"sessions"`
 }
@@ -90,16 +91,16 @@ type TUN struct {
 }
 
 type Relay struct {
-	Select       string       `json:"select"`
-	AutoStrategy AutoStrategy `json:"auto_strategy"`
-	Groups       []RelayGroup `json:"groups,omitempty"`
+	Select string       `json:"select"`
+	Groups []RelayGroup `json:"groups,omitempty"`
 }
 
-type AutoStrategy struct {
+type Check struct {
 	URL              string `json:"url"`
 	Interval         int    `json:"interval"`
 	Tolerance        int    `json:"tolerance"`
-	CheckConcurrency int    `json:"check_concurrency,omitempty"`
+	Concurrency      int    `json:"concurrency,omitempty"`
+	SelectedInterval int    `json:"selected_interval,omitempty"`
 }
 
 type RelayGroup struct {
@@ -161,10 +162,11 @@ var scalarKeys = []string{
 	"dns.disable_ipv6_fakeip",
 	"tun.device",
 	"relay.select",
-	"relay.auto_strategy.url",
-	"relay.auto_strategy.interval",
-	"relay.auto_strategy.tolerance",
-	"relay.auto_strategy.check_concurrency",
+	"check.url",
+	"check.interval",
+	"check.tolerance",
+	"check.concurrency",
+	"check.selected_interval",
 	"api.listen",
 	"api.secret",
 	"sessions.history_limit",
@@ -308,14 +310,16 @@ func getValue(cfg *Config, key string) (string, error) {
 		return cfg.TUN.Device, nil
 	case "relay.select":
 		return cfg.Relay.Select, nil
-	case "relay.auto_strategy.url":
-		return cfg.Relay.AutoStrategy.URL, nil
-	case "relay.auto_strategy.interval":
-		return strconv.Itoa(cfg.Relay.AutoStrategy.Interval), nil
-	case "relay.auto_strategy.tolerance":
-		return strconv.Itoa(cfg.Relay.AutoStrategy.Tolerance), nil
-	case "relay.auto_strategy.check_concurrency":
-		return strconv.Itoa(cfg.Relay.AutoStrategy.CheckConcurrency), nil
+	case "check.url":
+		return cfg.Check.URL, nil
+	case "check.interval":
+		return strconv.Itoa(cfg.Check.Interval), nil
+	case "check.tolerance":
+		return strconv.Itoa(cfg.Check.Tolerance), nil
+	case "check.concurrency":
+		return strconv.Itoa(cfg.Check.Concurrency), nil
+	case "check.selected_interval":
+		return strconv.Itoa(cfg.Check.SelectedInterval), nil
 	case "api.listen":
 		return cfg.API.Listen, nil
 	case "api.secret":
@@ -363,26 +367,32 @@ func setValue(cfg *Config, key, value string) error {
 		cfg.TUN.Device = value
 	case "relay.select":
 		cfg.Relay.Select = value
-	case "relay.auto_strategy.url":
-		cfg.Relay.AutoStrategy.URL = value
-	case "relay.auto_strategy.interval":
+	case "check.url":
+		cfg.Check.URL = value
+	case "check.interval":
 		parsed, err := parsePositiveInt(key, value)
 		if err != nil {
 			return err
 		}
-		cfg.Relay.AutoStrategy.Interval = parsed
-	case "relay.auto_strategy.tolerance":
+		cfg.Check.Interval = parsed
+	case "check.tolerance":
 		parsed, err := parsePositiveInt(key, value)
 		if err != nil {
 			return err
 		}
-		cfg.Relay.AutoStrategy.Tolerance = parsed
-	case "relay.auto_strategy.check_concurrency":
+		cfg.Check.Tolerance = parsed
+	case "check.concurrency":
 		parsed, err := parsePositiveInt(key, value)
 		if err != nil {
 			return err
 		}
-		cfg.Relay.AutoStrategy.CheckConcurrency = parsed
+		cfg.Check.Concurrency = parsed
+	case "check.selected_interval":
+		parsed, err := parsePositiveInt(key, value)
+		if err != nil {
+			return err
+		}
+		cfg.Check.SelectedInterval = parsed
 	case "api.listen":
 		cfg.API.Listen = value
 	case "api.secret":
@@ -515,12 +525,13 @@ func loadTables(s *Store) (*Config, error) {
 		},
 		Relay: Relay{
 			Select: base.RelaySelect,
-			AutoStrategy: AutoStrategy{
-				URL:              base.RelayAutoURL,
-				Interval:         base.RelayAutoInterval,
-				Tolerance:        base.RelayAutoTolerance,
-				CheckConcurrency: base.RelayCheckConcurrency,
-			},
+		},
+		Check: Check{
+			URL:              base.RelayAutoURL,
+			Interval:         base.RelayAutoInterval,
+			Tolerance:        base.RelayAutoTolerance,
+			Concurrency:      base.RelayCheckConcurrency,
+			SelectedInterval: base.CheckSelectedInterval,
 		},
 		API: API{
 			Listen: base.APIListen,
@@ -697,10 +708,11 @@ func saveTables(s *Store, cfg *Config) error {
 			DNSDisableIPv6FakeIP:  cfg.DNS.DisableIPv6FakeIP,
 			TUNDevice:             cfg.TUN.Device,
 			RelaySelect:           cfg.Relay.Select,
-			RelayAutoURL:          cfg.Relay.AutoStrategy.URL,
-			RelayAutoInterval:     cfg.Relay.AutoStrategy.Interval,
-			RelayAutoTolerance:    cfg.Relay.AutoStrategy.Tolerance,
-			RelayCheckConcurrency: cfg.Relay.AutoStrategy.CheckConcurrency,
+			RelayAutoURL:          cfg.Check.URL,
+			RelayAutoInterval:     cfg.Check.Interval,
+			RelayAutoTolerance:    cfg.Check.Tolerance,
+			RelayCheckConcurrency: cfg.Check.Concurrency,
+			CheckSelectedInterval: cfg.Check.SelectedInterval,
 			APIListen:             cfg.API.Listen,
 			APISecret:             cfg.API.Secret,
 			SessionsHistoryLimit:  cfg.Sessions.HistoryLimit,
@@ -944,10 +956,10 @@ func Default() *Config {
 				{URL: "https://doh.pub/dns-query", Bootstrap: "119.29.29.29"},
 				{URL: "https://dns.alidns.com/dns-query", Bootstrap: "223.5.5.5"},
 			},
-			CacheSize:     100000,
-			FakeIPRange:   "198.18.0.0/15",
-			FakeIPv6Range: "fdfe:dcba:9876::/64",
-			FakeIPTTL:     "1h",
+			CacheSize:         100000,
+			FakeIPRange:       "198.18.0.0/15",
+			FakeIPv6Range:     "fdfe:dcba:9876::/64",
+			FakeIPTTL:         "1h",
 			DisableIPv6FakeIP: func() *bool { t := true; return &t }(),
 			Rules: DNSRules{
 				Domains: []DomainRule{
@@ -972,12 +984,13 @@ func Default() *Config {
 		},
 		Relay: Relay{
 			Select: "auto",
-			AutoStrategy: AutoStrategy{
-				URL:              "http://www.gstatic.com/generate_204",
-				Interval:         3600,
-				Tolerance:        50,
-				CheckConcurrency: 10,
-			},
+		},
+		Check: Check{
+			URL:              "http://www.gstatic.com/generate_204",
+			Interval:         3600,
+			Tolerance:        50,
+			Concurrency:      10,
+			SelectedInterval: 10,
 		},
 		API: API{
 			Listen: "127.0.0.1:28854",
@@ -1022,17 +1035,20 @@ func applyDefaults(cfg *Config) {
 	if cfg.Relay.Select == "" {
 		cfg.Relay.Select = "auto"
 	}
-	if cfg.Relay.AutoStrategy.URL == "" {
-		cfg.Relay.AutoStrategy.URL = "http://www.gstatic.com/generate_204"
+	if cfg.Check.URL == "" {
+		cfg.Check.URL = "http://www.gstatic.com/generate_204"
 	}
-	if cfg.Relay.AutoStrategy.Interval == 0 {
-		cfg.Relay.AutoStrategy.Interval = 300
+	if cfg.Check.Interval == 0 {
+		cfg.Check.Interval = 300
 	}
-	if cfg.Relay.AutoStrategy.Tolerance == 0 {
-		cfg.Relay.AutoStrategy.Tolerance = 50
+	if cfg.Check.Tolerance == 0 {
+		cfg.Check.Tolerance = 50
 	}
-	if cfg.Relay.AutoStrategy.CheckConcurrency == 0 {
-		cfg.Relay.AutoStrategy.CheckConcurrency = 10
+	if cfg.Check.Concurrency == 0 {
+		cfg.Check.Concurrency = 10
+	}
+	if cfg.Check.SelectedInterval == 0 {
+		cfg.Check.SelectedInterval = 10
 	}
 	if cfg.API.Listen == "" {
 		cfg.API.Listen = "127.0.0.1:28854"

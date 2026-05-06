@@ -69,7 +69,7 @@ func (s *Server) handleSetConfigValue(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, configErrorStatus(err), map[string]string{"error": err.Error()})
 			return
 		}
-		if err := s.selector.ApplyConfig(cfg.Relay); err != nil {
+		if err := s.selector.ApplyConfig(cfg.Relay, cfg.Check); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 			return
 		}
@@ -83,7 +83,7 @@ func (s *Server) handleSetConfigValue(w http.ResponseWriter, r *http.Request) {
 }
 
 func isLiveRelayConfigKey(key string) bool {
-	return key == "relay.select" || strings.HasPrefix(key, "relay.auto_strategy.")
+	return key == "relay.select" || strings.HasPrefix(key, "check.")
 }
 
 func configErrorStatus(err error) int {

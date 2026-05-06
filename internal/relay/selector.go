@@ -16,7 +16,8 @@ import (
 
 const directGroupName = "DIRECT"
 
-const defaultRelayCheckConcurrency = 10
+const defaultCheckConcurrency = 10
+const defaultSelectedCheckInterval = 10 * time.Second
 const maxRelayHealthRecords = 10
 
 var (
@@ -110,12 +111,14 @@ type Selector struct {
 	active             atomic.Int32
 	mode               string
 	testURL            string
-	interval           time.Duration
+	checkInterval      time.Duration
+	selectedInterval   time.Duration
 	tolerance          time.Duration
 	checkSem           chan struct{}
 	bus                *eventbus.Bus
 	stopCh             chan struct{}
 	benchmarkConfigCh  chan struct{}
+	selectedConfigCh   chan struct{}
 	store              *config.Store
 	assets             *assets.Manager
 	groupCfgs          map[string]config.RelayGroup
@@ -124,7 +127,8 @@ type Selector struct {
 }
 
 func NewSelector(
-	cfg config.Relay,
+	relayCfg config.Relay,
+	checkCfg config.Check,
 	assetManager *assets.Manager,
 	directDialContext DialContextFunc,
 	stateStore *config.Store,
@@ -138,14 +142,16 @@ func NewSelector(
 
 	s := &Selector{
 		health:             make(map[string]*RelayHealth),
-		mode:               normalizeSelectMode(cfg.Select),
-		testURL:            cfg.AutoStrategy.URL,
-		interval:           time.Duration(cfg.AutoStrategy.Interval) * time.Second,
-		tolerance:          time.Duration(cfg.AutoStrategy.Tolerance) * time.Millisecond,
-		checkSem:           make(chan struct{}, normalizeRelayCheckConcurrency(cfg.AutoStrategy.CheckConcurrency)),
+		mode:               normalizeSelectMode(relayCfg.Select),
+		testURL:            checkCfg.URL,
+		checkInterval:      time.Duration(checkCfg.Interval) * time.Second,
+		selectedInterval:   normalizeSelectedCheckInterval(checkCfg.SelectedInterval),
+		tolerance:          time.Duration(checkCfg.Tolerance) * time.Millisecond,
+		checkSem:           make(chan struct{}, normalizeCheckConcurrency(checkCfg.Concurrency)),
 		bus:                bus,
 		stopCh:             make(chan struct{}),
 		benchmarkConfigCh:  make(chan struct{}, 1),
+		selectedConfigCh:   make(chan struct{}, 1),
 		store:              stateStore,
 		assets:             assetManager,
 		groupCfgs:          make(map[string]config.RelayGroup),
@@ -153,7 +159,7 @@ func NewSelector(
 		resolveRelayDomain: resolveRelayDomain,
 	}
 
-	if err := s.ApplyConfig(cfg); err != nil {
+	if err := s.ApplyConfig(relayCfg, checkCfg); err != nil {
 		return nil, err
 	}
 	if assetManager != nil {

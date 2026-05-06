@@ -8,6 +8,7 @@ import (
 func (s *Selector) Start() {
 	go s.Benchmark()
 	go s.refreshLoop()
+	go s.selectedCheckLoop()
 	go func() {
 		for {
 			interval, enabled := s.benchmarkLoopConfig()
@@ -26,6 +27,23 @@ func (s *Selector) Start() {
 			}
 		}
 	}()
+}
+
+func (s *Selector) selectedCheckLoop() {
+	for {
+		interval := s.selectedCheckLoopInterval()
+		timer := time.NewTimer(interval)
+		select {
+		case <-timer.C:
+			s.BenchmarkSelected()
+		case <-s.selectedConfigCh:
+			timer.Stop()
+			continue
+		case <-s.stopCh:
+			timer.Stop()
+			return
+		}
+	}
 }
 
 func (s *Selector) refreshLoop() {
@@ -87,11 +105,20 @@ func (s *Selector) anyAutoGroupLocked() bool {
 func (s *Selector) benchmarkLoopConfig() (time.Duration, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	interval := s.interval
+	interval := s.checkInterval
 	if interval <= 0 {
 		interval = 300 * time.Second
 	}
 	return interval, s.mode == "auto" || s.anyAutoGroupLocked()
+}
+
+func (s *Selector) selectedCheckLoopInterval() time.Duration {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.selectedInterval <= 0 {
+		return defaultSelectedCheckInterval
+	}
+	return s.selectedInterval
 }
 
 func (s *Selector) benchmarkTargetAsync(name string) {

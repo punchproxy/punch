@@ -1,5 +1,7 @@
 package relay
 
+import "time"
+
 func (s *Selector) HealthList() []RelayHealth {
 	// Health snapshots should not trigger hostname re-resolution by themselves.
 	s.mu.RLock()
@@ -21,6 +23,7 @@ func (s *Selector) HealthList() []RelayHealth {
 			if h == nil {
 				continue
 			}
+			selected := groupSelected && di == activeDialerIdx
 			result = append(result, RelayHealth{
 				Name:              h.Name,
 				Group:             h.Group,
@@ -30,12 +33,12 @@ func (s *Selector) HealthList() []RelayHealth {
 				Latency:           h.Latency,
 				TCPConnectLatency: h.TCPConnectLatency,
 				URLTestLatency:    h.URLTestLatency,
-				CheckInterval:     int64(s.interval.Seconds()),
+				CheckInterval:     int64(s.relayCheckIntervalLocked(selected).Seconds()),
 				LastCheckedAt:     h.LastCheckedAt,
 				LastRefreshedAt:   g.lastRefreshedAt,
 				NextRefreshAt:     g.nextRefreshAt,
 				RefreshInterval:   int64(g.refreshEvery.Seconds()),
-				Selected:          groupSelected && di == activeDialerIdx,
+				Selected:          selected,
 				GroupMode:         displaySelectMode(h.GroupMode),
 				GroupSourceURL:    h.GroupSourceURL,
 				Spec:              cloneRelaySpec(h.Spec),
@@ -61,6 +64,7 @@ func (s *Selector) GroupList() []GroupStatus {
 	result := make([]GroupStatus, 0, len(s.groups))
 	activeGroupIdx := s.activeGroupIndexLocked()
 	for gi, g := range s.groups {
+		selected := gi == activeGroupIdx && len(g.dialers) > 0
 		cfg := s.groupCfgs[g.name]
 		groupType := cfg.Type
 		if g.name == directGroupName {
@@ -70,10 +74,10 @@ func (s *Selector) GroupList() []GroupStatus {
 			Name:                g.name,
 			Type:                groupType,
 			RelayCount:          len(g.dialers),
-			Selected:            gi == activeGroupIdx && len(g.dialers) > 0,
+			Selected:            selected,
 			Select:              displaySelectMode(g.mode),
 			RemoteAddress:       g.sourceURL,
-			CheckInterval:       int64(s.interval.Seconds()),
+			CheckInterval:       int64(s.checkInterval.Seconds()),
 			LastRefreshedAt:     g.lastRefreshedAt,
 			NextRefreshAt:       g.nextRefreshAt,
 			RefreshInterval:     int64(g.refreshEvery.Seconds()),
@@ -88,8 +92,8 @@ func (s *Selector) GroupList() []GroupStatus {
 				status.CurrentLatency = h.Latency
 				status.CurrentTCPConnectLatency = h.TCPConnectLatency
 				status.LastCheckedAt = h.LastCheckedAt
-				if s.interval > 0 && !h.LastCheckedAt.IsZero() && g.name != directGroupName {
-					status.NextCheckAt = h.LastCheckedAt.Add(s.interval)
+				if s.checkInterval > 0 && !h.LastCheckedAt.IsZero() && g.name != directGroupName {
+					status.NextCheckAt = h.LastCheckedAt.Add(s.checkInterval)
 				}
 				if status.Error == "" {
 					status.Error = h.Error
@@ -104,4 +108,11 @@ func (s *Selector) GroupList() []GroupStatus {
 		result = append(result, status)
 	}
 	return result
+}
+
+func (s *Selector) relayCheckIntervalLocked(selected bool) time.Duration {
+	if selected && s.selectedInterval > 0 {
+		return s.selectedInterval
+	}
+	return s.checkInterval
 }

@@ -16,6 +16,9 @@ func TestLoadSeedsDefaultConfigTables(t *testing.T) {
 	if cfg.DNS.Listen != "0.0.0.0:28853" {
 		t.Fatalf("dns listen = %q, want default first-run listen", cfg.DNS.Listen)
 	}
+	if cfg.Check.SelectedInterval != 10 {
+		t.Fatalf("check selected interval = %d, want 10", cfg.Check.SelectedInterval)
+	}
 
 	var count int64
 	if err := st.DB().Model(&configBaseModel{}).Count(&count).Error; err != nil {
@@ -57,12 +60,6 @@ func TestConfigSaveLoadRoundTrip(t *testing.T) {
 	want.TUN = TUN{Device: "utun9", Routes: []string{"0.0.0.0/1", "128.0.0.0/1"}}
 	want.Relay = Relay{
 		Select: "manual",
-		AutoStrategy: AutoStrategy{
-			URL:              "https://example.com/204",
-			Interval:         60,
-			Tolerance:        10,
-			CheckConcurrency: 4,
-		},
 		Groups: []RelayGroup{{
 			Type:            "inline",
 			Name:            "test",
@@ -73,6 +70,13 @@ func TestConfigSaveLoadRoundTrip(t *testing.T) {
 				{URL: "https://resolver.example/dns-query", Bootstrap: "8.8.8.8"},
 			},
 		}},
+	}
+	want.Check = Check{
+		URL:              "https://example.com/204",
+		Interval:         60,
+		Tolerance:        10,
+		Concurrency:      4,
+		SelectedInterval: 15,
 	}
 	want.API = API{Listen: "127.0.0.1:18080", Secret: "secret"}
 
@@ -154,6 +158,24 @@ func TestSingletonGetSetScalarValues(t *testing.T) {
 	}
 	if persisted.DNS.Listen != "127.0.0.1:5354" {
 		t.Fatalf("persisted dns.listen = %q, want updated value", persisted.DNS.Listen)
+	}
+
+	if err := Set("check.selected_interval", "15"); err != nil {
+		t.Fatalf("set check.selected_interval: %v", err)
+	}
+	got, err = Get("check.selected_interval")
+	if err != nil {
+		t.Fatalf("get check.selected_interval: %v", err)
+	}
+	if got != "15" {
+		t.Fatalf("check.selected_interval = %q, want 15", got)
+	}
+	persisted, err = Load(st)
+	if err != nil {
+		t.Fatalf("load persisted check config: %v", err)
+	}
+	if persisted.Check.SelectedInterval != 15 {
+		t.Fatalf("persisted check.selected_interval = %d, want 15", persisted.Check.SelectedInterval)
 	}
 }
 

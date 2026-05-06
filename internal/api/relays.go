@@ -451,7 +451,7 @@ func saveRelayConfig(w http.ResponseWriter, s *Server, cfg *config.Config, check
 		return false
 	}
 	if s.selector != nil {
-		if err := s.selector.ApplyConfig(cfg.Relay); err != nil {
+		if err := s.selector.ApplyConfig(cfg.Relay, cfg.Check); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 			return false
 		}

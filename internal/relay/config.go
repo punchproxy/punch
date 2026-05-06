@@ -7,8 +7,8 @@ import (
 	"github.com/punchproxy/punch/internal/eventbus"
 )
 
-func (s *Selector) ApplyConfig(cfg config.Relay) error {
-	groups, groupCfgs, err := s.buildGroups(cfg)
+func (s *Selector) ApplyConfig(relayCfg config.Relay, checkCfg config.Check) error {
+	groups, groupCfgs, err := s.buildGroups(relayCfg)
 	if err != nil {
 		return err
 	}
@@ -21,11 +21,12 @@ func (s *Selector) ApplyConfig(cfg config.Relay) error {
 	if selections.ActiveGroup == "" {
 		selections = s.loadSelections()
 	}
-	s.mode = normalizeSelectMode(cfg.Select)
-	s.testURL = cfg.AutoStrategy.URL
-	s.interval = time.Duration(cfg.AutoStrategy.Interval) * time.Second
-	s.tolerance = time.Duration(cfg.AutoStrategy.Tolerance) * time.Millisecond
-	checkConcurrency := normalizeRelayCheckConcurrency(cfg.AutoStrategy.CheckConcurrency)
+	s.mode = normalizeSelectMode(relayCfg.Select)
+	s.testURL = checkCfg.URL
+	s.checkInterval = time.Duration(checkCfg.Interval) * time.Second
+	s.selectedInterval = normalizeSelectedCheckInterval(checkCfg.SelectedInterval)
+	s.tolerance = time.Duration(checkCfg.Tolerance) * time.Millisecond
+	checkConcurrency := normalizeCheckConcurrency(checkCfg.Concurrency)
 	if s.checkSem == nil || cap(s.checkSem) != checkConcurrency {
 		s.checkSem = make(chan struct{}, checkConcurrency)
 	}
@@ -43,15 +44,19 @@ func (s *Selector) ApplyConfig(cfg config.Relay) error {
 		}
 	}
 
-	s.notifyBenchmarkConfigChanged()
+	s.notifyCheckConfigChanged()
 	s.publishRelayChange(prevActive)
 	s.bus.Publish(eventbus.Event{Type: eventbus.EventRelayHealth, Data: s.HealthList()})
 	return nil
 }
 
-func (s *Selector) notifyBenchmarkConfigChanged() {
+func (s *Selector) notifyCheckConfigChanged() {
 	select {
 	case s.benchmarkConfigCh <- struct{}{}:
+	default:
+	}
+	select {
+	case s.selectedConfigCh <- struct{}{}:
 	default:
 	}
 }

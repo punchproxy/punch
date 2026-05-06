@@ -174,7 +174,8 @@ Punch keeps its configuration in a SQLite database (`punch.db`), seeded with sen
 punchctl config                                 # list everything
 punchctl config get dns.listen
 punchctl config set api.secret "change-me"
-punchctl config set relay.auto_strategy.interval 300
+punchctl config set check.interval 300
+punchctl config set check.selected_interval 10
 ```
 
 If you need to override a value at startup (for example to bring the daemon up on a different port), use `-s` on `punchd`. The new value is persisted, so it survives restarts:
@@ -193,7 +194,8 @@ Defaults worth knowing:
 | TUN device           | `punch0`                                |
 | DoH upstreams        | `doh.pub`, `dns.alidns.com`             |
 | Fake IP pool         | `198.18.0.0/15`, `fdfe:dcba:9876::/64`  |
-| Auto-check URL       | `https://www.gstatic.com/generate_204`  |
+| Check URL            | `http://www.gstatic.com/generate_204`   |
+| Selected check       | every 10 seconds                        |
 | Session history      | last 1000                               |
 
 Default data directory:

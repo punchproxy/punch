@@ -29,17 +29,17 @@ func TestDirectRelayIsHealthyWithoutLatencyCheck(t *testing.T) {
 		}
 	})
 
-	selector, err := NewSelector(config.Relay{
-		Select: "auto",
-		AutoStrategy: config.AutoStrategy{
+	selector, err := NewSelector(
+		config.Relay{Select: "auto"},
+		config.Check{
 			URL:       "http://www.gstatic.com/generate_204",
 			Interval:  300,
 			Tolerance: 50,
 		},
-	}, nil, func(context.Context, string, string) (net.Conn, error) {
-		t.Fatal("direct relay should not be benchmarked")
-		return nil, nil
-	}, st, eventbus.New(), nil)
+		nil, func(context.Context, string, string) (net.Conn, error) {
+			t.Fatal("direct relay should not be benchmarked")
+			return nil, nil
+		}, st, eventbus.New(), nil)
 	if err != nil {
 		t.Fatalf("NewSelector() error = %v", err)
 	}
@@ -203,11 +203,6 @@ func TestApplyConfigPreservesExistingHealthAndMarksNewRelaysPending(t *testing.T
 
 	cfg := config.Relay{
 		Select: "auto",
-		AutoStrategy: config.AutoStrategy{
-			URL:       "http://www.gstatic.com/generate_204",
-			Interval:  300,
-			Tolerance: 50,
-		},
 		Groups: []config.RelayGroup{{
 			Type: "inline",
 			Name: "main",
@@ -217,7 +212,8 @@ func TestApplyConfigPreservesExistingHealthAndMarksNewRelaysPending(t *testing.T
 			}},
 		}},
 	}
-	selector, err := NewSelector(cfg, nil, nil, st, eventbus.New(), nil)
+	checkCfg := config.Check{URL: "http://www.gstatic.com/generate_204", Interval: 300, Tolerance: 50}
+	selector, err := NewSelector(cfg, checkCfg, nil, nil, st, eventbus.New(), nil)
 	if err != nil {
 		t.Fatalf("NewSelector() error = %v", err)
 	}
@@ -234,7 +230,7 @@ func TestApplyConfigPreservesExistingHealthAndMarksNewRelaysPending(t *testing.T
 		"name": "jp-1",
 		"type": "direct",
 	})
-	if err := selector.ApplyConfig(cfg); err != nil {
+	if err := selector.ApplyConfig(cfg, checkCfg); err != nil {
 		t.Fatalf("ApplyConfig() error = %v", err)
 	}
 
@@ -263,11 +259,6 @@ func TestHealthListIncludesRelaySpec(t *testing.T) {
 
 	cfg := config.Relay{
 		Select: "auto",
-		AutoStrategy: config.AutoStrategy{
-			URL:       "http://www.gstatic.com/generate_204",
-			Interval:  300,
-			Tolerance: 50,
-		},
 		Groups: []config.RelayGroup{{
 			Type: "inline",
 			Name: "main",
@@ -277,7 +268,8 @@ func TestHealthListIncludesRelaySpec(t *testing.T) {
 			}},
 		}},
 	}
-	selector, err := NewSelector(cfg, nil, nil, st, eventbus.New(), nil)
+	checkCfg := config.Check{URL: "http://www.gstatic.com/generate_204", Interval: 300, Tolerance: 50}
+	selector, err := NewSelector(cfg, checkCfg, nil, nil, st, eventbus.New(), nil)
 	if err != nil {
 		t.Fatalf("NewSelector() error = %v", err)
 	}
@@ -342,8 +334,8 @@ func TestBenchmarkLimitsConcurrentRelayChecks(t *testing.T) {
 	selector.groups = []*group{g}
 
 	selector.Benchmark()
-	if got := maxActive.Load(); got > defaultRelayCheckConcurrency {
-		t.Fatalf("max concurrent checks = %d, want <= %d", got, defaultRelayCheckConcurrency)
+	if got := maxActive.Load(); got > defaultCheckConcurrency {
+		t.Fatalf("max concurrent checks = %d, want <= %d", got, defaultCheckConcurrency)
 	}
 	for _, h := range selector.HealthList() {
 		if h.Status == HealthPending || h.Status == HealthChecking || h.Status == HealthUntested {
@@ -352,7 +344,7 @@ func TestBenchmarkLimitsConcurrentRelayChecks(t *testing.T) {
 	}
 }
 
-func TestBenchmarkUsesConfiguredRelayCheckConcurrencyAcrossOverlappingRuns(t *testing.T) {
+func TestBenchmarkUsesConfiguredCheckConcurrencyAcrossOverlappingRuns(t *testing.T) {
 	st, err := config.Open(filepath.Join(t.TempDir(), "punch.db"))
 	if err != nil {
 		t.Fatalf("open store: %v", err)
@@ -411,6 +403,71 @@ func TestBenchmarkUsesConfiguredRelayCheckConcurrencyAcrossOverlappingRuns(t *te
 	}
 	if got := maxActive.Load(); got > concurrency {
 		t.Fatalf("max concurrent checks = %d, want <= %d", got, concurrency)
+	}
+}
+
+func TestSelectedCheckLoopChecksOnlyActiveRelay(t *testing.T) {
+	st, err := config.Open(filepath.Join(t.TempDir(), "punch.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := st.Close(); err != nil {
+			t.Fatalf("close store: %v", err)
+		}
+	})
+
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	t.Cleanup(target.Close)
+
+	active := &countingDialer{testDialer: testDialer{name: "active"}}
+	inactive := &countingDialer{testDialer: testDialer{name: "inactive"}}
+	selector := &Selector{
+		health:           make(map[string]*RelayHealth),
+		mode:             "manual",
+		testURL:          target.URL,
+		selectedInterval: 10 * time.Millisecond,
+		store:            st,
+		bus:              eventbus.New(),
+		stopCh:           make(chan struct{}),
+		selectedConfigCh: make(chan struct{}, 1),
+	}
+	g := &group{name: "main", mode: "manual", dialers: []Dialer{active, inactive}}
+	selector.groups = []*group{g}
+	for _, d := range g.dialers {
+		selector.health[selector.healthKey(g.name, d.Name())] = &RelayHealth{
+			Name:   selector.displayName(g.name, d.Name()),
+			Group:  g.name,
+			Status: HealthPending,
+		}
+	}
+
+	done := make(chan struct{})
+	go func() {
+		selector.selectedCheckLoop()
+		close(done)
+	}()
+
+	deadline := time.After(2 * time.Second)
+	for active.checks.Load() == 0 {
+		select {
+		case <-deadline:
+			selector.Stop()
+			t.Fatal("selected relay was not checked")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+
+	selector.Stop()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("selected check loop did not stop")
+	}
+	if got := inactive.checks.Load(); got != 0 {
+		t.Fatalf("inactive checks = %d, want 0", got)
 	}
 }
 
@@ -614,6 +671,16 @@ func (d *meteredDialer) TCPConnectLatency(ctx context.Context) (time.Duration, e
 		return 0, ctx.Err()
 	}
 	d.active.Add(-1)
+	return time.Millisecond, nil
+}
+
+type countingDialer struct {
+	testDialer
+	checks atomic.Int64
+}
+
+func (d *countingDialer) TCPConnectLatency(ctx context.Context) (time.Duration, error) {
+	d.checks.Add(1)
 	return time.Millisecond, nil
 }
 

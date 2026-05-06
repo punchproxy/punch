@@ -61,7 +61,7 @@ func TestConfigHandlersGetAndSetSessionHistoryLimit(t *testing.T) {
 	}
 }
 
-func TestConfigHandlersApplyRelayAutoStrategyInterval(t *testing.T) {
+func TestConfigHandlersApplyCheckInterval(t *testing.T) {
 	st, err := config.Open(filepath.Join(t.TempDir(), "punch.db"))
 	if err != nil {
 		t.Fatalf("open store: %v", err)
@@ -90,7 +90,7 @@ func TestConfigHandlersApplyRelayAutoStrategyInterval(t *testing.T) {
 	if err := config.Replace(cfg); err != nil {
 		t.Fatalf("replace config: %v", err)
 	}
-	selector, err := relay.NewSelector(cfg.Relay, nil, func(ctx context.Context, network, address string) (net.Conn, error) {
+	selector, err := relay.NewSelector(cfg.Relay, cfg.Check, nil, func(ctx context.Context, network, address string) (net.Conn, error) {
 		return (&net.Dialer{}).DialContext(ctx, network, address)
 	}, st, eventbus.New(), nil)
 	if err != nil {
@@ -98,8 +98,8 @@ func TestConfigHandlersApplyRelayAutoStrategyInterval(t *testing.T) {
 	}
 	s := &Server{store: st, selector: selector}
 
-	rec := runRelayHandler(t, s.handleSetConfigValue, http.MethodPut, "/api/config/relay.auto_strategy.interval", map[string]string{
-		"key": "relay.auto_strategy.interval",
+	rec := runRelayHandler(t, s.handleSetConfigValue, http.MethodPut, "/api/config/check.interval", map[string]string{
+		"key": "check.interval",
 	}, configValueRequest{Value: "3600"})
 	if rec.Code != http.StatusOK {
 		t.Fatalf("set status = %d body = %s", rec.Code, rec.Body.String())

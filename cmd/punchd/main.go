@@ -135,7 +135,7 @@ func main() {
 	}
 
 	// Initialize relay selector
-	selector, err = relay.NewSelector(cfg.Relay, assetManager, directDNSDialContext, st, bus, dnsServer.ResolveRelayDomain)
+	selector, err = relay.NewSelector(cfg.Relay, cfg.Check, assetManager, directDNSDialContext, st, bus, dnsServer.ResolveRelayDomain)
 	if err != nil {
 		slog.Error("failed to create relay selector", "error", err)
 		os.Exit(1)

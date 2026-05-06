@@ -101,18 +101,18 @@ func TestRelayGroupCreateSchedulesHealthCheck(t *testing.T) {
 		w.WriteHeader(http.StatusNoContent)
 	}))
 	t.Cleanup(target.Close)
-	cfg.Relay.AutoStrategy.URL = target.URL
-	if cfg.Relay.AutoStrategy.Interval == 0 {
-		cfg.Relay.AutoStrategy.Interval = 300
+	cfg.Check.URL = target.URL
+	if cfg.Check.Interval == 0 {
+		cfg.Check.Interval = 300
 	}
-	if cfg.Relay.AutoStrategy.Tolerance == 0 {
-		cfg.Relay.AutoStrategy.Tolerance = 50
+	if cfg.Check.Tolerance == 0 {
+		cfg.Check.Tolerance = 50
 	}
 	if err := config.Replace(cfg); err != nil {
 		t.Fatalf("save config: %v", err)
 	}
 
-	selector, err := relay.NewSelector(cfg.Relay, nil, func(ctx context.Context, network, address string) (net.Conn, error) {
+	selector, err := relay.NewSelector(cfg.Relay, cfg.Check, nil, func(ctx context.Context, network, address string) (net.Conn, error) {
 		return (&net.Dialer{}).DialContext(ctx, network, address)
 	}, st, eventbus.New(), nil)
 	if err != nil {
