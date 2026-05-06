@@ -416,6 +416,57 @@ func (p *Pool) Snapshot() []Mapping {
 	return out
 }
 
+// Restore seeds the pool with previously-persisted mappings. Mappings whose
+// IP is outside the pool's configured ranges, or that collide with existing
+// in-memory entries, are skipped. Expired entries are revived with a fresh
+// TTL so they survive at least one prune cycle after startup. Returns the
+// number of mappings successfully restored.
+func (p *Pool) Restore(mappings []Mapping) int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	now := time.Now()
+	restored := 0
+	for _, m := range mappings {
+		ip := m.IP.Unmap()
+		if !ip.IsValid() || m.Domain == "" {
+			continue
+		}
+		family := FamilyIPv4
+		if ip.Is6() {
+			family = FamilyIPv6
+		}
+		r, ok := p.ranges[family]
+		if !ok || !r.ipNet.Contains(ip) {
+			continue
+		}
+		key := hostKey{domain: m.Domain, family: family}
+		if _, ok := p.byHost[key]; ok {
+			continue
+		}
+		if _, ok := p.byIP[ip]; ok {
+			continue
+		}
+		expiresAt := m.ExpiresAt
+		if expiresAt.Before(now.Add(p.ttl)) {
+			expiresAt = now.Add(p.ttl)
+		}
+		e := &entry{
+			ip:         ip,
+			family:     family,
+			domain:     m.Domain,
+			expiresAt:  expiresAt,
+			lastLookup: now,
+		}
+		p.byHost[key] = e
+		p.byIP[ip] = e
+		if cur, ok := p.lastLookupByDomain[m.Domain]; !ok || now.After(cur) {
+			p.lastLookupByDomain[m.Domain] = now
+		}
+		restored++
+	}
+	return restored
+}
+
 func (p *Pool) allocateLocked(family Family) (netip.Addr, *Mapping) {
 	r := p.ranges[family]
 	if r == nil {

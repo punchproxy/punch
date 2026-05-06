@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"net/netip"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -20,6 +21,7 @@ import (
 	"github.com/punchproxy/punch/internal/config"
 	pdns "github.com/punchproxy/punch/internal/dns"
 	"github.com/punchproxy/punch/internal/eventbus"
+	"github.com/punchproxy/punch/internal/fakeip"
 	"github.com/punchproxy/punch/internal/relay"
 	"github.com/punchproxy/punch/internal/session"
 	"github.com/punchproxy/punch/internal/tun"
@@ -134,6 +136,25 @@ func main() {
 		os.Exit(1)
 	}
 
+	if records, err := st.ListFakeIPs(); err != nil {
+		slog.Warn("load persisted fake IPs", "error", err)
+	} else if len(records) > 0 {
+		mappings := make([]fakeip.Mapping, 0, len(records))
+		for _, r := range records {
+			ip, parseErr := netip.ParseAddr(r.IP)
+			if parseErr != nil {
+				continue
+			}
+			mappings = append(mappings, fakeip.Mapping{
+				IP:        ip,
+				Domain:    r.Domain,
+				ExpiresAt: r.ExpiresAt,
+			})
+		}
+		n := dnsServer.FakeIPPool().Restore(mappings)
+		slog.Info("restored fake IP mappings", "count", n, "persisted", len(records))
+	}
+
 	// Initialize relay selector
 	selector, err = relay.NewSelector(cfg.Relay, cfg.Check, assetManager, directDNSDialContext, st, bus, dnsServer.ResolveRelayDomain)
 	if err != nil {
@@ -178,6 +199,24 @@ func main() {
 		os.Exit(1)
 	}
 
+	fakeIPSaverStop := make(chan struct{})
+	fakeIPSaverDone := make(chan struct{})
+	go func() {
+		defer close(fakeIPSaverDone)
+		t := time.NewTicker(60 * time.Second)
+		defer t.Stop()
+		for {
+			select {
+			case <-fakeIPSaverStop:
+				return
+			case <-t.C:
+				if err := saveFakeIPs(st, dnsServer.FakeIPPool()); err != nil {
+					slog.Warn("persist fake IPs", "error", err)
+				}
+			}
+		}
+	}()
+
 	assetManager.MarkReady()
 	slog.Info("Punch is ready",
 		"dns", cfg.DNS.Listen,
@@ -206,6 +245,12 @@ func main() {
 shutdown:
 	// Graceful shutdown in reverse order
 	slog.Info("shutting down...")
+
+	close(fakeIPSaverStop)
+	<-fakeIPSaverDone
+	if err := saveFakeIPs(st, dnsServer.FakeIPPool()); err != nil {
+		slog.Warn("persist fake IPs on shutdown", "error", err)
+	}
 
 	if err := apiServer.Stop(); err != nil {
 		slog.Error("API shutdown error", "error", err)
@@ -266,6 +311,28 @@ func applySetOverrides(items []string) error {
 		}
 	}
 	return nil
+}
+
+func saveFakeIPs(st *config.Store, pool *fakeip.Pool) error {
+	if pool == nil {
+		return nil
+	}
+	snap := pool.Snapshot()
+	records := make([]config.FakeIPRecord, 0, len(snap))
+	for _, m := range snap {
+		ip := m.IP.Unmap()
+		family := 4
+		if ip.Is6() {
+			family = 6
+		}
+		records = append(records, config.FakeIPRecord{
+			Domain:    m.Domain,
+			Family:    family,
+			IP:        ip.String(),
+			ExpiresAt: m.ExpiresAt,
+		})
+	}
+	return st.ReplaceFakeIPs(records)
 }
 
 func setupLogging(level, file string) {

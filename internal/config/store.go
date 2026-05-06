@@ -77,6 +77,7 @@ func (s *Store) migrate() error {
 		&relayGroupModel{},
 		&relayGroupProxyModel{},
 		&relaySelectionModel{},
+		&fakeIPModel{},
 	); err != nil {
 		return fmt.Errorf("migrate: %w", err)
 	}
@@ -257,6 +258,66 @@ type AssetMeta struct {
 	URL       string
 	UpdatedAt time.Time
 	Size      int64
+}
+
+type fakeIPModel struct {
+	Domain    string `gorm:"column:domain;primaryKey"`
+	Family    int    `gorm:"column:family;primaryKey"`
+	IP        string `gorm:"column:ip;not null;index"`
+	ExpiresAt int64  `gorm:"column:expires_at;not null"`
+}
+
+func (fakeIPModel) TableName() string { return "fake_ips" }
+
+// FakeIPRecord is a persisted fake IP allocation.
+type FakeIPRecord struct {
+	Domain    string
+	Family    int
+	IP        string
+	ExpiresAt time.Time
+}
+
+// ListFakeIPs returns every persisted fake IP allocation.
+func (s *Store) ListFakeIPs() ([]FakeIPRecord, error) {
+	var rows []fakeIPModel
+	if err := s.db.Find(&rows).Error; err != nil {
+		return nil, fmt.Errorf("list fake ips: %w", err)
+	}
+	out := make([]FakeIPRecord, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, FakeIPRecord{
+			Domain:    r.Domain,
+			Family:    r.Family,
+			IP:        r.IP,
+			ExpiresAt: time.Unix(r.ExpiresAt, 0).UTC(),
+		})
+	}
+	return out, nil
+}
+
+// ReplaceFakeIPs atomically replaces the persisted fake IP set.
+func (s *Store) ReplaceFakeIPs(records []FakeIPRecord) error {
+	return s.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Exec("DELETE FROM fake_ips").Error; err != nil {
+			return fmt.Errorf("clear fake ips: %w", err)
+		}
+		if len(records) == 0 {
+			return nil
+		}
+		rows := make([]fakeIPModel, 0, len(records))
+		for _, r := range records {
+			rows = append(rows, fakeIPModel{
+				Domain:    r.Domain,
+				Family:    r.Family,
+				IP:        r.IP,
+				ExpiresAt: r.ExpiresAt.Unix(),
+			})
+		}
+		if err := tx.CreateInBatches(rows, 200).Error; err != nil {
+			return fmt.Errorf("insert fake ips: %w", err)
+		}
+		return nil
+	})
 }
 
 // ListAssetMeta returns metadata for every cached asset.
