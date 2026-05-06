@@ -19,6 +19,7 @@ const directGroupName = "DIRECT"
 const defaultCheckConcurrency = 10
 const defaultFullCheckInterval = 24 * time.Hour
 const defaultSelectedCheckInterval = 10 * time.Second
+const defaultFullTriggerFailures = 5
 const maxHealthRecords = 20
 
 var (
@@ -104,27 +105,30 @@ type group struct {
 }
 
 type Selector struct {
-	mu                    sync.RWMutex
-	groups                []*group
-	health                map[string]*RelayHealth
-	active                atomic.Int32
-	mode                  string
-	outsideURL            string
-	domesticURL           string
-	fullCheckInterval     time.Duration
-	selectedCheckInterval time.Duration
-	tolerance             time.Duration
-	domesticHealth        ConnectivityCheck
-	checkSem              chan struct{}
-	bus                   *eventbus.Bus
-	stopCh                chan struct{}
-	benchmarkConfigCh     chan struct{}
-	selectedConfigCh      chan struct{}
-	store                 *config.Store
-	assets                *assets.Manager
-	groupCfgs             map[string]config.RelayGroup
-	directDialContext     DialContextFunc
-	resolveRelayDomain    RelayResolveFunc
+	mu                      sync.RWMutex
+	groups                  []*group
+	health                  map[string]*RelayHealth
+	active                  atomic.Int32
+	mode                    string
+	outsideURL              string
+	domesticURL             string
+	fullCheckInterval       time.Duration
+	selectedCheckInterval   time.Duration
+	fullTriggerFailures     int
+	selectedCheckFailures   int
+	selectedCheckFailureKey string
+	tolerance               time.Duration
+	domesticHealth          ConnectivityCheck
+	checkSem                chan struct{}
+	bus                     *eventbus.Bus
+	stopCh                  chan struct{}
+	benchmarkConfigCh       chan struct{}
+	selectedConfigCh        chan struct{}
+	store                   *config.Store
+	assets                  *assets.Manager
+	groupCfgs               map[string]config.RelayGroup
+	directDialContext       DialContextFunc
+	resolveRelayDomain      RelayResolveFunc
 }
 
 func NewSelector(
@@ -148,6 +152,7 @@ func NewSelector(
 		domesticURL:           checkCfg.DomesticURL,
 		fullCheckInterval:     normalizeFullCheckInterval(checkCfg.FullInterval),
 		selectedCheckInterval: normalizeSelectedCheckInterval(checkCfg.Interval),
+		fullTriggerFailures:   normalizeFullTriggerFailures(checkCfg.FullTriggerFailures),
 		tolerance:             time.Duration(checkCfg.Tolerance) * time.Millisecond,
 		domesticHealth:        ConnectivityCheck{URL: checkCfg.DomesticURL},
 		checkSem:              make(chan struct{}, normalizeCheckConcurrency(checkCfg.Concurrency)),

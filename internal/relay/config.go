@@ -29,6 +29,8 @@ func (s *Selector) ApplyConfig(relayCfg config.Relay, checkCfg config.Check) err
 	s.domesticURL = checkCfg.DomesticURL
 	s.fullCheckInterval = normalizeFullCheckInterval(checkCfg.FullInterval)
 	s.selectedCheckInterval = normalizeSelectedCheckInterval(checkCfg.Interval)
+	s.fullTriggerFailures = normalizeFullTriggerFailures(checkCfg.FullTriggerFailures)
+	s.resetSelectedCheckFailuresLocked()
 	s.tolerance = time.Duration(checkCfg.Tolerance) * time.Millisecond
 	checkConcurrency := normalizeCheckConcurrency(checkCfg.Concurrency)
 	if s.checkSem == nil || cap(s.checkSem) != checkConcurrency {

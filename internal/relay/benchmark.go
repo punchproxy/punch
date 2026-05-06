@@ -53,6 +53,7 @@ func (s *Selector) Benchmark() {
 	}
 	s.reevaluateAutoSelectionsLocked()
 	s.saveSelectionsLocked()
+	s.resetSelectedCheckFailuresLocked()
 	s.mu.Unlock()
 
 	slog.Debug("relay benchmark completed", "active", s.ActiveName())
@@ -100,13 +101,55 @@ func (s *Selector) BenchmarkTarget(name string) error {
 }
 
 func (s *Selector) BenchmarkSelected() {
+	target, checked, failed := s.benchmarkSelected()
+	if checked {
+		s.triggerFullBenchmarkAfterSelectedCheck(target, failed)
+	}
+}
+
+func (s *Selector) benchmarkSelected() (benchmarkTarget, bool, bool) {
 	target, ok := s.selectedBenchmarkTarget()
 	if !ok {
+		return benchmarkTarget{}, false, false
+	}
+	results, err := s.benchmarkTargetsWithResults([]benchmarkTarget{target}, nil, false)
+	if err != nil {
+		slog.Warn("selected relay health check failed", "error", err)
+		return target, true, true
+	}
+	return target, true, len(results) > 0 && results[0].check.err != nil
+}
+
+func (s *Selector) triggerFullBenchmarkAfterSelectedCheck(target benchmarkTarget, failed bool) {
+	failures, trigger := s.recordSelectedCheckResult(target, failed)
+	if !trigger {
 		return
 	}
-	if err := s.benchmarkTargets([]benchmarkTarget{target}, nil, false); err != nil {
-		slog.Warn("selected relay health check failed", "error", err)
+	slog.Warn("selected relay failed repeatedly; running full relay benchmark", "group", target.group.name, "relay", target.dialer.Name(), "failures", failures)
+	s.Benchmark()
+}
+
+func (s *Selector) recordSelectedCheckResult(target benchmarkTarget, failed bool) (int, bool) {
+	key := s.healthKey(target.group.name, target.dialer.Name())
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !failed {
+		s.resetSelectedCheckFailuresLocked()
+		return 0, false
 	}
+	if s.selectedCheckFailureKey != key {
+		s.selectedCheckFailureKey = key
+		s.selectedCheckFailures = 0
+	}
+	s.selectedCheckFailures++
+	failures := s.selectedCheckFailures
+	threshold := normalizeFullTriggerFailures(s.fullTriggerFailures)
+	if failures < threshold {
+		return failures, false
+	}
+	s.selectedCheckFailures = 0
+	s.selectedCheckFailureKey = ""
+	return failures, true
 }
 
 func (s *Selector) HasBenchmarkTarget(name string) bool {
@@ -206,6 +249,11 @@ func (s *Selector) selectedBenchmarkTarget() (benchmarkTarget, bool) {
 }
 
 func (s *Selector) benchmarkTargets(targets []benchmarkTarget, targetGroup *group, benchmarkWholeGroup bool) error {
+	_, err := s.benchmarkTargetsWithResults(targets, targetGroup, benchmarkWholeGroup)
+	return err
+}
+
+func (s *Selector) benchmarkTargetsWithResults(targets []benchmarkTarget, targetGroup *group, benchmarkWholeGroup bool) ([]benchmarkTargetResult, error) {
 	prevActive := s.ActiveName()
 
 	results := s.runRelayChecks(targets)
@@ -234,7 +282,7 @@ func (s *Selector) benchmarkTargets(targets []benchmarkTarget, targetGroup *grou
 
 	s.publishRelayChange(prevActive)
 	s.bus.Publish(eventbus.Event{Type: eventbus.EventRelayHealth, Data: s.HealthList()})
-	return nil
+	return results, nil
 }
 
 type benchmarkTargetResult struct {
@@ -308,6 +356,13 @@ func normalizeSelectedCheckInterval(seconds int) time.Duration {
 		return defaultSelectedCheckInterval
 	}
 	return time.Duration(seconds) * time.Second
+}
+
+func normalizeFullTriggerFailures(n int) int {
+	if n <= 0 {
+		return defaultFullTriggerFailures
+	}
+	return n
 }
 
 func (s *Selector) setRelayCheckStatus(targets []benchmarkTarget, status HealthStatus) {

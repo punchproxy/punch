@@ -2,6 +2,7 @@ package relay
 
 import (
 	"context"
+	"errors"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -478,6 +479,62 @@ func TestSelectedCheckLoopChecksOnlyActiveRelay(t *testing.T) {
 	}
 }
 
+func TestSelectedCheckFailuresTriggerFullBenchmark(t *testing.T) {
+	st, err := config.Open(filepath.Join(t.TempDir(), "punch.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := st.Close(); err != nil {
+			t.Fatalf("close store: %v", err)
+		}
+	})
+
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	t.Cleanup(target.Close)
+
+	bad := &failingTCPDialer{testDialer: testDialer{name: "bad"}}
+	good := &countingDialer{testDialer: testDialer{name: "good"}}
+	selector := &Selector{
+		health:              make(map[string]*RelayHealth),
+		mode:                "auto",
+		outsideURL:          target.URL,
+		fullTriggerFailures: 2,
+		store:               st,
+		bus:                 eventbus.New(),
+	}
+	g := &group{name: "main", mode: "auto", dialers: []Dialer{bad, good}}
+	selector.groups = []*group{g}
+	for _, d := range g.dialers {
+		selector.health[selector.healthKey(g.name, d.Name())] = &RelayHealth{
+			Name:   selector.displayName(g.name, d.Name()),
+			Group:  g.name,
+			Status: HealthPending,
+		}
+	}
+
+	selector.CheckSelectedConnectivity()
+	if got := good.checks.Load(); got != 0 {
+		t.Fatalf("healthy relay checks after first selected failure = %d, want 0", got)
+	}
+	if got := selector.ActiveName(); got != "main / bad" {
+		t.Fatalf("active relay after first selected failure = %q, want bad", got)
+	}
+
+	selector.CheckSelectedConnectivity()
+	if got := good.checks.Load(); got != 1 {
+		t.Fatalf("healthy relay checks after trigger = %d, want 1", got)
+	}
+	if got := selector.ActiveName(); got != "main / good" {
+		t.Fatalf("active relay after full benchmark = %q, want good", got)
+	}
+	if got := selector.selectedCheckFailures; got != 0 {
+		t.Fatalf("selected check failures after trigger = %d, want 0", got)
+	}
+}
+
 func TestSelectedCheckLoopChecksDomesticConnectivity(t *testing.T) {
 	var requests atomic.Int64
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -747,6 +804,16 @@ type countingDialer struct {
 func (d *countingDialer) TCPConnectLatency(ctx context.Context) (time.Duration, error) {
 	d.checks.Add(1)
 	return time.Millisecond, nil
+}
+
+type failingTCPDialer struct {
+	testDialer
+	checks atomic.Int64
+}
+
+func (d *failingTCPDialer) TCPConnectLatency(ctx context.Context) (time.Duration, error) {
+	d.checks.Add(1)
+	return 0, errors.New("tcp unavailable")
 }
 
 type blockingTCPDialer struct {

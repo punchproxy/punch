@@ -43,6 +43,7 @@ func (s *Selector) Select(name string) error {
 		}
 		if g.name == name {
 			s.active.Store(int32(gi))
+			s.resetSelectedCheckFailuresLocked()
 			s.saveSelectionsLocked()
 			slog.Debug("manually selected relay group", "group", g.name)
 			s.publishRelayChangeLocked(prevActive)
@@ -52,6 +53,7 @@ func (s *Selector) Select(name string) error {
 			if s.displayName(g.name, d.Name()) == name || d.Name() == name {
 				g.active.Store(int32(di))
 				s.active.Store(int32(gi))
+				s.resetSelectedCheckFailuresLocked()
 				s.saveSelectionsLocked()
 				slog.Debug("manually selected relay", "group", g.name, "relay", d.Name())
 				s.publishRelayChangeLocked(prevActive)
@@ -103,6 +105,7 @@ func (s *Selector) SelectManualRelay(name string) (string, error) {
 	selected := matches[0]
 	selected.group.active.Store(int32(selected.relayIdx))
 	s.active.Store(int32(selected.groupIdx))
+	s.resetSelectedCheckFailuresLocked()
 	s.saveSelectionsLocked()
 	slog.Debug("manually selected relay", "group", selected.group.name, "relay", selected.relay.Name())
 	s.publishRelayChangeLocked(prevActive)
@@ -121,6 +124,7 @@ func (s *Selector) SelectManualGroup(name string) (string, error) {
 			continue
 		}
 		s.active.Store(int32(gi))
+		s.resetSelectedCheckFailuresLocked()
 		s.saveSelectionsLocked()
 		slog.Debug("manually selected relay group", "group", g.name)
 		s.publishRelayChangeLocked(prevActive)

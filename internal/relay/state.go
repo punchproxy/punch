@@ -37,6 +37,11 @@ func (s *Selector) healthKey(group, relay string) string {
 	return group + "\x00" + relay
 }
 
+func (s *Selector) resetSelectedCheckFailuresLocked() {
+	s.selectedCheckFailures = 0
+	s.selectedCheckFailureKey = ""
+}
+
 func (s *Selector) displayName(group, relay string) string {
 	return group + " / " + relay
 }

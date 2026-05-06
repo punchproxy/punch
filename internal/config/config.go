@@ -96,12 +96,13 @@ type Relay struct {
 }
 
 type Check struct {
-	OutsideURL   string `json:"outside_url"`
-	DomesticURL  string `json:"domestic_url"`
-	FullInterval int    `json:"full_interval"`
-	Interval     int    `json:"interval"`
-	Tolerance    int    `json:"tolerance"`
-	Concurrency  int    `json:"concurrency,omitempty"`
+	OutsideURL          string `json:"outside_url"`
+	DomesticURL         string `json:"domestic_url"`
+	FullInterval        int    `json:"full_interval"`
+	Interval            int    `json:"interval"`
+	FullTriggerFailures int    `json:"full_trigger_failures"`
+	Tolerance           int    `json:"tolerance"`
+	Concurrency         int    `json:"concurrency,omitempty"`
 }
 
 type RelayGroup struct {
@@ -166,6 +167,7 @@ var scalarKeys = []string{
 	"check.domestic_url",
 	"check.interval",
 	"check.full_interval",
+	"check.full_trigger_failures",
 	"check.tolerance",
 	"check.concurrency",
 	"api.listen",
@@ -319,6 +321,8 @@ func getValue(cfg *Config, key string) (string, error) {
 		return strconv.Itoa(cfg.Check.Interval), nil
 	case "check.full_interval":
 		return strconv.Itoa(cfg.Check.FullInterval), nil
+	case "check.full_trigger_failures":
+		return strconv.Itoa(cfg.Check.FullTriggerFailures), nil
 	case "check.tolerance":
 		return strconv.Itoa(cfg.Check.Tolerance), nil
 	case "check.concurrency":
@@ -386,6 +390,12 @@ func setValue(cfg *Config, key, value string) error {
 			return err
 		}
 		cfg.Check.FullInterval = parsed
+	case "check.full_trigger_failures":
+		parsed, err := parsePositiveInt(key, value)
+		if err != nil {
+			return err
+		}
+		cfg.Check.FullTriggerFailures = parsed
 	case "check.tolerance":
 		parsed, err := parsePositiveInt(key, value)
 		if err != nil {
@@ -531,12 +541,13 @@ func loadTables(s *Store) (*Config, error) {
 			Select: base.RelaySelect,
 		},
 		Check: Check{
-			OutsideURL:   base.RelayAutoURL,
-			DomesticURL:  base.CheckDomesticURL,
-			FullInterval: base.CheckFullInterval,
-			Interval:     base.CheckInterval,
-			Tolerance:    base.RelayAutoTolerance,
-			Concurrency:  base.RelayCheckConcurrency,
+			OutsideURL:          base.RelayAutoURL,
+			DomesticURL:         base.CheckDomesticURL,
+			FullInterval:        base.CheckFullInterval,
+			Interval:            base.CheckInterval,
+			FullTriggerFailures: base.CheckFullTriggerFailures,
+			Tolerance:           base.RelayAutoTolerance,
+			Concurrency:         base.RelayCheckConcurrency,
 		},
 		API: API{
 			Listen: base.APIListen,
@@ -674,27 +685,28 @@ func loadRelayGroupProxies(s *Store, groupPosition int) ([]map[string]any, error
 func saveTables(s *Store, cfg *Config) error {
 	return s.db.Transaction(func(tx *gorm.DB) error {
 		base := configBaseModel{
-			ID:                    1,
-			LogLevel:              cfg.LogLevel,
-			LogFile:               cfg.LogFile,
-			AssetRefreshInterval:  cfg.AssetRefreshInterval,
-			DNSListen:             cfg.DNS.Listen,
-			DNSCacheSize:          cfg.DNS.CacheSize,
-			DNSFakeIPRange:        cfg.DNS.FakeIPRange,
-			DNSFakeIPv6Range:      cfg.DNS.FakeIPv6Range,
-			DNSFakeIPTTL:          cfg.DNS.FakeIPTTL,
-			DNSDisableIPv6FakeIP:  cfg.DNS.DisableIPv6FakeIP,
-			TUNDevice:             cfg.TUN.Device,
-			RelaySelect:           cfg.Relay.Select,
-			RelayAutoURL:          cfg.Check.OutsideURL,
-			CheckDomesticURL:      cfg.Check.DomesticURL,
-			CheckFullInterval:     cfg.Check.FullInterval,
-			RelayAutoTolerance:    cfg.Check.Tolerance,
-			RelayCheckConcurrency: cfg.Check.Concurrency,
-			CheckInterval:         cfg.Check.Interval,
-			APIListen:             cfg.API.Listen,
-			APISecret:             cfg.API.Secret,
-			SessionsHistoryLimit:  cfg.Sessions.HistoryLimit,
+			ID:                       1,
+			LogLevel:                 cfg.LogLevel,
+			LogFile:                  cfg.LogFile,
+			AssetRefreshInterval:     cfg.AssetRefreshInterval,
+			DNSListen:                cfg.DNS.Listen,
+			DNSCacheSize:             cfg.DNS.CacheSize,
+			DNSFakeIPRange:           cfg.DNS.FakeIPRange,
+			DNSFakeIPv6Range:         cfg.DNS.FakeIPv6Range,
+			DNSFakeIPTTL:             cfg.DNS.FakeIPTTL,
+			DNSDisableIPv6FakeIP:     cfg.DNS.DisableIPv6FakeIP,
+			TUNDevice:                cfg.TUN.Device,
+			RelaySelect:              cfg.Relay.Select,
+			RelayAutoURL:             cfg.Check.OutsideURL,
+			CheckDomesticURL:         cfg.Check.DomesticURL,
+			CheckFullInterval:        cfg.Check.FullInterval,
+			RelayAutoTolerance:       cfg.Check.Tolerance,
+			RelayCheckConcurrency:    cfg.Check.Concurrency,
+			CheckInterval:            cfg.Check.Interval,
+			CheckFullTriggerFailures: cfg.Check.FullTriggerFailures,
+			APIListen:                cfg.API.Listen,
+			APISecret:                cfg.API.Secret,
+			SessionsHistoryLimit:     cfg.Sessions.HistoryLimit,
 		}
 		if err := tx.Save(&base).Error; err != nil {
 			return fmt.Errorf("save config base: %w", err)
@@ -931,12 +943,13 @@ func Default() *Config {
 			Select: "auto",
 		},
 		Check: Check{
-			OutsideURL:   "http://www.gstatic.com/generate_204",
-			DomesticURL:  "http://connect.rom.miui.com/generate_204",
-			FullInterval: 86400,
-			Interval:     10,
-			Tolerance:    50,
-			Concurrency:  10,
+			OutsideURL:          "http://www.gstatic.com/generate_204",
+			DomesticURL:         "http://connect.rom.miui.com/generate_204",
+			FullInterval:        86400,
+			Interval:            10,
+			FullTriggerFailures: 5,
+			Tolerance:           50,
+			Concurrency:         10,
 		},
 		API: API{
 			Listen: "127.0.0.1:28854",
@@ -992,6 +1005,9 @@ func applyDefaults(cfg *Config) {
 	}
 	if cfg.Check.Interval == 0 {
 		cfg.Check.Interval = 10
+	}
+	if cfg.Check.FullTriggerFailures == 0 {
+		cfg.Check.FullTriggerFailures = 5
 	}
 	if cfg.Check.Tolerance == 0 {
 		cfg.Check.Tolerance = 50

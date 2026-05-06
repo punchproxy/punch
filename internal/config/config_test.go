@@ -22,6 +22,9 @@ func TestLoadSeedsDefaultConfigTables(t *testing.T) {
 	if cfg.Check.FullInterval != 86400 {
 		t.Fatalf("check full interval = %d, want 86400", cfg.Check.FullInterval)
 	}
+	if cfg.Check.FullTriggerFailures != 5 {
+		t.Fatalf("check full trigger failures = %d, want 5", cfg.Check.FullTriggerFailures)
+	}
 	if cfg.Check.OutsideURL != "http://www.gstatic.com/generate_204" {
 		t.Fatalf("check outside url = %q, want default outside url", cfg.Check.OutsideURL)
 	}
@@ -78,12 +81,13 @@ func TestConfigSaveLoadRoundTrip(t *testing.T) {
 		}},
 	}
 	want.Check = Check{
-		OutsideURL:   "https://example.com/204",
-		DomesticURL:  "https://domestic.example/204",
-		FullInterval: 60,
-		Interval:     15,
-		Tolerance:    10,
-		Concurrency:  4,
+		OutsideURL:          "https://example.com/204",
+		DomesticURL:         "https://domestic.example/204",
+		FullInterval:        60,
+		Interval:            15,
+		FullTriggerFailures: 3,
+		Tolerance:           10,
+		Concurrency:         4,
 	}
 	want.API = API{Listen: "127.0.0.1:18080", Secret: "secret"}
 
@@ -180,6 +184,16 @@ func TestSingletonGetSetScalarValues(t *testing.T) {
 	if got != "60" {
 		t.Fatalf("check.full_interval = %q, want 60", got)
 	}
+	if err := Set("check.full_trigger_failures", "3"); err != nil {
+		t.Fatalf("set check.full_trigger_failures: %v", err)
+	}
+	got, err = Get("check.full_trigger_failures")
+	if err != nil {
+		t.Fatalf("get check.full_trigger_failures: %v", err)
+	}
+	if got != "3" {
+		t.Fatalf("check.full_trigger_failures = %q, want 3", got)
+	}
 	persisted, err = Load(st)
 	if err != nil {
 		t.Fatalf("load persisted check config: %v", err)
@@ -189,6 +203,9 @@ func TestSingletonGetSetScalarValues(t *testing.T) {
 	}
 	if persisted.Check.FullInterval != 60 {
 		t.Fatalf("persisted check.full_interval = %d, want 60", persisted.Check.FullInterval)
+	}
+	if persisted.Check.FullTriggerFailures != 3 {
+		t.Fatalf("persisted check.full_trigger_failures = %d, want 3", persisted.Check.FullTriggerFailures)
 	}
 
 	if err := Set("check.outside_url", "https://outside.example/204"); err != nil {

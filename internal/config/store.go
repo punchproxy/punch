@@ -105,27 +105,28 @@ type schemaVersionModel struct {
 func (schemaVersionModel) TableName() string { return "schema_version" }
 
 type configBaseModel struct {
-	ID                    int    `gorm:"column:id;primaryKey;autoIncrement:false"`
-	LogLevel              string `gorm:"column:log_level;not null"`
-	LogFile               string `gorm:"column:log_file;not null"`
-	AssetRefreshInterval  int    `gorm:"column:asset_refresh_interval;not null"`
-	DNSListen             string `gorm:"column:dns_listen;not null"`
-	DNSCacheSize          int    `gorm:"column:dns_cache_size;not null"`
-	DNSFakeIPRange        string `gorm:"column:dns_fake_ip_range;not null"`
-	DNSFakeIPv6Range      string `gorm:"column:dns_fake_ipv6_range"`
-	DNSFakeIPTTL          string `gorm:"column:dns_fakeip_ttl;not null;default:1h"`
-	DNSDisableIPv6FakeIP  *bool  `gorm:"column:dns_disable_ipv6_fakeip;default:1"`
-	TUNDevice             string `gorm:"column:tun_device;not null"`
-	RelaySelect           string `gorm:"column:relay_select;not null"`
-	RelayAutoURL          string `gorm:"column:relay_auto_url;not null"`
-	CheckDomesticURL      string `gorm:"column:check_domestic_url"`
-	CheckFullInterval     int    `gorm:"column:relay_auto_interval;not null"`
-	RelayAutoTolerance    int    `gorm:"column:relay_auto_tolerance;not null"`
-	RelayCheckConcurrency int    `gorm:"column:relay_check_concurrency;not null;default:10"`
-	CheckInterval         int    `gorm:"column:check_selected_interval;not null;default:10"`
-	APIListen             string `gorm:"column:api_listen;not null"`
-	APISecret             string `gorm:"column:api_secret;not null"`
-	SessionsHistoryLimit  int    `gorm:"column:sessions_history_limit;not null;default:1000"`
+	ID                       int    `gorm:"column:id;primaryKey;autoIncrement:false"`
+	LogLevel                 string `gorm:"column:log_level;not null"`
+	LogFile                  string `gorm:"column:log_file;not null"`
+	AssetRefreshInterval     int    `gorm:"column:asset_refresh_interval;not null"`
+	DNSListen                string `gorm:"column:dns_listen;not null"`
+	DNSCacheSize             int    `gorm:"column:dns_cache_size;not null"`
+	DNSFakeIPRange           string `gorm:"column:dns_fake_ip_range;not null"`
+	DNSFakeIPv6Range         string `gorm:"column:dns_fake_ipv6_range"`
+	DNSFakeIPTTL             string `gorm:"column:dns_fakeip_ttl;not null;default:1h"`
+	DNSDisableIPv6FakeIP     *bool  `gorm:"column:dns_disable_ipv6_fakeip;default:1"`
+	TUNDevice                string `gorm:"column:tun_device;not null"`
+	RelaySelect              string `gorm:"column:relay_select;not null"`
+	RelayAutoURL             string `gorm:"column:relay_auto_url;not null"`
+	CheckDomesticURL         string `gorm:"column:check_domestic_url"`
+	CheckFullInterval        int    `gorm:"column:relay_auto_interval;not null"`
+	RelayAutoTolerance       int    `gorm:"column:relay_auto_tolerance;not null"`
+	RelayCheckConcurrency    int    `gorm:"column:relay_check_concurrency;not null;default:10"`
+	CheckInterval            int    `gorm:"column:check_selected_interval;not null;default:10"`
+	CheckFullTriggerFailures int    `gorm:"column:check_full_trigger_failures;not null;default:5"`
+	APIListen                string `gorm:"column:api_listen;not null"`
+	APISecret                string `gorm:"column:api_secret;not null"`
+	SessionsHistoryLimit     int    `gorm:"column:sessions_history_limit;not null;default:1000"`
 }
 
 func (configBaseModel) TableName() string { return "config_base" }

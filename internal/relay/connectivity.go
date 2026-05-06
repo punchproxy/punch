@@ -26,17 +26,23 @@ type ConnectivityStatus struct {
 }
 
 func (s *Selector) CheckSelectedConnectivity() {
+	var selectedTarget benchmarkTarget
+	var selectedChecked bool
+	var selectedFailed bool
 	var wg sync.WaitGroup
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		s.BenchmarkSelected()
+		selectedTarget, selectedChecked, selectedFailed = s.benchmarkSelected()
 	}()
 	go func() {
 		defer wg.Done()
 		s.CheckDomesticConnectivity()
 	}()
 	wg.Wait()
+	if selectedChecked {
+		s.triggerFullBenchmarkAfterSelectedCheck(selectedTarget, selectedFailed)
+	}
 }
 
 func (s *Selector) CheckDomesticConnectivity() {

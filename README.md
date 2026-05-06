@@ -175,6 +175,7 @@ punchctl config                                 # list everything
 punchctl config get dns.listen
 punchctl config set api.secret "change-me"
 punchctl config set check.full_interval 86400
+punchctl config set check.full_trigger_failures 5
 punchctl config set check.outside_url http://www.gstatic.com/generate_204
 punchctl config set check.domestic_url http://connect.rom.miui.com/generate_204
 punchctl config set check.interval 10
@@ -200,6 +201,7 @@ Defaults worth knowing:
 | Domestic check URL      | `http://connect.rom.miui.com/generate_204`        |
 | Internet/selected check | every 10 seconds                                  |
 | Full relay check        | every 86400 seconds                               |
+| Full check trigger      | 5 selected-check failures                         |
 | Session history         | last 1000                                         |
 
 Default data directory:
