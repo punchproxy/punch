@@ -180,7 +180,7 @@ type healthMetric int
 const (
 	healthMetricTCPConnect healthMetric = iota
 	healthMetricRoundTrip
-	healthChartBars = 20
+	healthChartBars = 30
 )
 
 const (

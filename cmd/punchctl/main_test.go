@@ -139,8 +139,8 @@ func TestStatusCommand(t *testing.T) {
 			t.Fatalf("output should hide %q:\n%s", hidden, text)
 		}
 	}
-	if got := countHealthChartBars(text); got != 80 {
-		t.Fatalf("health chart block count = %d, want 80:\n%s", got, text)
+	if got := countHealthChartBars(text); got != 120 {
+		t.Fatalf("health chart block count = %d, want 120:\n%s", got, text)
 	}
 }
 

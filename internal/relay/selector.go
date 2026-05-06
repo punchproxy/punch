@@ -20,7 +20,7 @@ const defaultCheckConcurrency = 10
 const defaultFullCheckInterval = 24 * time.Hour
 const defaultSelectedCheckInterval = 10 * time.Second
 const defaultFullTriggerFailures = 5
-const maxHealthRecords = 20
+const maxHealthRecords = 30
 
 var (
 	ErrRelaySelectionAutoGroup = errors.New("relay belongs to an auto relay group")
