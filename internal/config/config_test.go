@@ -19,6 +19,12 @@ func TestLoadSeedsDefaultConfigTables(t *testing.T) {
 	if cfg.Check.SelectedInterval != 10 {
 		t.Fatalf("check selected interval = %d, want 10", cfg.Check.SelectedInterval)
 	}
+	if cfg.Check.OutsideURL != "http://www.gstatic.com/generate_204" {
+		t.Fatalf("check outside url = %q, want default outside url", cfg.Check.OutsideURL)
+	}
+	if cfg.Check.DomesticURL != "http://connect.rom.miui.com/generate_204" {
+		t.Fatalf("check domestic url = %q, want default domestic url", cfg.Check.DomesticURL)
+	}
 
 	var count int64
 	if err := st.DB().Model(&configBaseModel{}).Count(&count).Error; err != nil {
@@ -72,7 +78,8 @@ func TestConfigSaveLoadRoundTrip(t *testing.T) {
 		}},
 	}
 	want.Check = Check{
-		URL:              "https://example.com/204",
+		OutsideURL:       "https://example.com/204",
+		DomesticURL:      "https://domestic.example/204",
 		Interval:         60,
 		Tolerance:        10,
 		Concurrency:      4,
@@ -176,6 +183,30 @@ func TestSingletonGetSetScalarValues(t *testing.T) {
 	}
 	if persisted.Check.SelectedInterval != 15 {
 		t.Fatalf("persisted check.selected_interval = %d, want 15", persisted.Check.SelectedInterval)
+	}
+
+	if err := Set("check.outside_url", "https://outside.example/204"); err != nil {
+		t.Fatalf("set check.outside_url: %v", err)
+	}
+	if err := Set("check.domestic_url", "https://domestic.example/204"); err != nil {
+		t.Fatalf("set check.domestic_url: %v", err)
+	}
+	got, err = Get("check.outside_url")
+	if err != nil {
+		t.Fatalf("get check.outside_url: %v", err)
+	}
+	if got != "https://outside.example/204" {
+		t.Fatalf("check.outside_url = %q, want https://outside.example/204", got)
+	}
+	got, err = Get("check.domestic_url")
+	if err != nil {
+		t.Fatalf("get check.domestic_url: %v", err)
+	}
+	if got != "https://domestic.example/204" {
+		t.Fatalf("check.domestic_url = %q, want https://domestic.example/204", got)
+	}
+	if _, err := Get("check.url"); err != ErrNotFound {
+		t.Fatalf("get check.url error = %v, want ErrNotFound", err)
 	}
 }
 

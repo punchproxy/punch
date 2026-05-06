@@ -101,7 +101,7 @@ func TestRelayGroupCreateSchedulesHealthCheck(t *testing.T) {
 		w.WriteHeader(http.StatusNoContent)
 	}))
 	t.Cleanup(target.Close)
-	cfg.Check.URL = target.URL
+	cfg.Check.OutsideURL = target.URL
 	if cfg.Check.Interval == 0 {
 		cfg.Check.Interval = 300
 	}

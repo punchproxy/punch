@@ -7,6 +7,7 @@ import (
 
 func (s *Selector) Start() {
 	go s.Benchmark()
+	go s.CheckDomesticConnectivity()
 	go s.refreshLoop()
 	go s.selectedCheckLoop()
 	go func() {
@@ -35,7 +36,7 @@ func (s *Selector) selectedCheckLoop() {
 		timer := time.NewTimer(interval)
 		select {
 		case <-timer.C:
-			s.BenchmarkSelected()
+			s.CheckSelectedConnectivity()
 		case <-s.selectedConfigCh:
 			timer.Stop()
 			continue

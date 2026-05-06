@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -16,7 +17,7 @@ import (
 func (s *Selector) Benchmark() {
 	s.mu.RLock()
 	mode := s.mode
-	testURL := s.testURL
+	outsideURL := s.outsideURL
 	groups := make([]benchmarkGroup, 0, len(s.groups))
 	var targets []benchmarkTarget
 	for _, g := range s.groups {
@@ -34,7 +35,7 @@ func (s *Selector) Benchmark() {
 	s.mu.RUnlock()
 	prevActive := s.ActiveName()
 
-	slog.Debug("start relay benchmark", "mode", mode, "groups", len(groups), "url", testURL)
+	slog.Debug("start relay benchmark", "mode", mode, "groups", len(groups), "url", outsideURL)
 
 	results := s.runRelayChecks(targets)
 
@@ -350,15 +351,39 @@ func (s *Selector) testRelay(d Dialer) relayCheckResult {
 }
 
 func (s *Selector) testRelayURL(ctx context.Context, d Dialer) (time.Duration, error) {
-	target, err := url.Parse(s.testURL)
+	return testURLLatency(ctx, s.outsideURL, d.DialContext)
+}
+
+func testURLConnectivity(rawURL string, dialContext DialContextFunc) relayCheckResult {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	target, err := parseCheckURL(rawURL)
 	if err != nil {
-		return 0, fmt.Errorf("parse test url: %w", err)
+		return relayCheckResult{err: err}
 	}
-	if target.Scheme != "http" && target.Scheme != "https" {
-		return 0, fmt.Errorf("unsupported test url scheme %q", target.Scheme)
+	address, err := checkURLAddress(target)
+	if err != nil {
+		return relayCheckResult{err: err}
 	}
-	transport := &http.Transport{
-		DialContext: d.DialContext,
+	tcpLatency, err := tcpConnectLatencyWithDialer(ctx, dialContext, address)
+	if err != nil {
+		return relayCheckResult{err: fmt.Errorf("tcp connect to check url: %w", err)}
+	}
+	urlLatency, err := testURLLatency(ctx, rawURL, dialContext)
+	if err != nil {
+		return relayCheckResult{tcpLatency: tcpLatency, err: err}
+	}
+	return relayCheckResult{tcpLatency: tcpLatency, urlLatency: urlLatency}
+}
+
+func testURLLatency(ctx context.Context, rawURL string, dialContext DialContextFunc) (time.Duration, error) {
+	if _, err := parseCheckURL(rawURL); err != nil {
+		return 0, err
+	}
+	transport := &http.Transport{}
+	if dialContext != nil {
+		transport.DialContext = dialContext
 	}
 	defer transport.CloseIdleConnections()
 	client := &http.Client{
@@ -367,18 +392,63 @@ func (s *Selector) testRelayURL(ctx context.Context, d Dialer) (time.Duration, e
 			return http.ErrUseLastResponse
 		},
 	}
-	latency, err := s.testRelayURLOnce(ctx, client)
+	latency, err := testURLLatencyOnce(ctx, client, rawURL)
 	if err != nil {
 		return 0, err
 	}
-	if secondLatency, err := s.testRelayURLOnce(ctx, client); err == nil {
+	if secondLatency, err := testURLLatencyOnce(ctx, client, rawURL); err == nil {
 		return secondLatency, nil
 	}
 	return latency, nil
 }
 
-func (s *Selector) testRelayURLOnce(ctx context.Context, client *http.Client) (time.Duration, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodHead, s.testURL, nil)
+func parseCheckURL(rawURL string) (*url.URL, error) {
+	target, err := url.Parse(rawURL)
+	if err != nil {
+		return nil, fmt.Errorf("parse test url: %w", err)
+	}
+	if target.Scheme != "http" && target.Scheme != "https" {
+		return nil, fmt.Errorf("unsupported test url scheme %q", target.Scheme)
+	}
+	if target.Hostname() == "" {
+		return nil, fmt.Errorf("test url missing host")
+	}
+	return target, nil
+}
+
+func checkURLAddress(target *url.URL) (string, error) {
+	port := target.Port()
+	if port == "" {
+		switch target.Scheme {
+		case "http":
+			port = "80"
+		case "https":
+			port = "443"
+		default:
+			return "", fmt.Errorf("unsupported test url scheme %q", target.Scheme)
+		}
+	}
+	return net.JoinHostPort(target.Hostname(), port), nil
+}
+
+func tcpConnectLatencyWithDialer(ctx context.Context, dialContext DialContextFunc, address string) (time.Duration, error) {
+	start := time.Now()
+	var conn net.Conn
+	var err error
+	if dialContext != nil {
+		conn, err = dialContext(ctx, "tcp", address)
+	} else {
+		conn, err = (&net.Dialer{}).DialContext(ctx, "tcp", address)
+	}
+	if err != nil {
+		return 0, err
+	}
+	_ = conn.Close()
+	return time.Since(start), nil
+}
+
+func testURLLatencyOnce(ctx context.Context, client *http.Client, rawURL string) (time.Duration, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodHead, rawURL, nil)
 	if err != nil {
 		return 0, err
 	}

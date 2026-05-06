@@ -74,6 +74,22 @@ func TestStatusCommand(t *testing.T) {
 				CacheEntries: 42,
 				CacheHits:    7,
 			},
+			Connectivity: statusConnectivity{
+				Domestic: statusConnectivityCheck{
+					URL:                 "http://connect.rom.miui.com/generate_204",
+					Status:              "healthy",
+					LatencyMS:           45,
+					TCPConnectLatencyMS: 12,
+					LastCheckedAt:       time.Date(2026, 4, 28, 12, 0, 30, 0, time.UTC),
+				},
+				Outside: statusConnectivityCheck{
+					URL:                 "http://www.gstatic.com/generate_204",
+					Status:              "healthy",
+					LatencyMS:           88,
+					TCPConnectLatencyMS: 31,
+					LastCheckedAt:       time.Date(2026, 4, 28, 12, 1, 0, 0, time.UTC),
+				},
+			},
 			Relay: statusRelay{
 				ActiveRelay:            "auto / hk-1",
 				Status:                 "healthy",
@@ -111,7 +127,7 @@ func TestStatusCommand(t *testing.T) {
 		t.Fatalf("Execute() error = %v", err)
 	}
 	text := out.String()
-	for _, want := range []string{"General:", "Client Version: dev", "Server Version: v1.2.3", "Relay:          10 requests, last google.com", "Cache:          42 entries, 7 hits", "Active:         auto / hk-1", "Latency:        88ms (tcp 31ms, url 88ms)", "Sessions:       4 active, 99 total processed", "Download:       3.0 MB total, 2.0 KB/s", "UDP Packets:    300 enqueued, 7 dropped (5 queue full, 1 closed, 1 pending)"} {
+	for _, want := range []string{"General:", "Client Version: dev", "Server Version: v1.2.3", "Relay:          10 requests, last google.com", "Cache:          42 entries, 7 hits", "Connectivity:", "Domestic URL:  http://connect.rom.miui.com/generate_204", "Domestic:      healthy (tc latency 12ms, latency 45ms, last check", "Outside URL:   http://www.gstatic.com/generate_204", "Outside:       healthy (tc latency 31ms, latency 88ms, last check", "Active:         auto / hk-1", "Latency:        88ms (tcp 31ms, url 88ms)", "Sessions:       4 active, 99 total processed", "Download:       3.0 MB total, 2.0 KB/s", "UDP Packets:    300 enqueued, 7 dropped (5 queue full, 1 closed, 1 pending)"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("output missing %q:\n%s", want, text)
 		}

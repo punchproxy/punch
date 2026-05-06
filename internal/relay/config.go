@@ -22,7 +22,11 @@ func (s *Selector) ApplyConfig(relayCfg config.Relay, checkCfg config.Check) err
 		selections = s.loadSelections()
 	}
 	s.mode = normalizeSelectMode(relayCfg.Select)
-	s.testURL = checkCfg.URL
+	if s.domesticURL != checkCfg.DomesticURL {
+		s.domesticHealth = ConnectivityCheck{URL: checkCfg.DomesticURL}
+	}
+	s.outsideURL = checkCfg.OutsideURL
+	s.domesticURL = checkCfg.DomesticURL
 	s.checkInterval = time.Duration(checkCfg.Interval) * time.Second
 	s.selectedInterval = normalizeSelectedCheckInterval(checkCfg.SelectedInterval)
 	s.tolerance = time.Duration(checkCfg.Tolerance) * time.Millisecond

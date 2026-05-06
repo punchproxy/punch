@@ -120,6 +120,7 @@ type configBaseModel struct {
 	TUNDevice             string `gorm:"column:tun_device;not null"`
 	RelaySelect           string `gorm:"column:relay_select;not null"`
 	RelayAutoURL          string `gorm:"column:relay_auto_url;not null"`
+	CheckDomesticURL      string `gorm:"column:check_domestic_url"`
 	RelayAutoInterval     int    `gorm:"column:relay_auto_interval;not null"`
 	RelayAutoTolerance    int    `gorm:"column:relay_auto_tolerance;not null"`
 	RelayCheckConcurrency int    `gorm:"column:relay_check_concurrency;not null;default:10"`

@@ -32,9 +32,9 @@ func TestDirectRelayIsHealthyWithoutLatencyCheck(t *testing.T) {
 	selector, err := NewSelector(
 		config.Relay{Select: "auto"},
 		config.Check{
-			URL:       "http://www.gstatic.com/generate_204",
-			Interval:  300,
-			Tolerance: 50,
+			OutsideURL: "http://www.gstatic.com/generate_204",
+			Interval:   300,
+			Tolerance:  50,
 		},
 		nil, func(context.Context, string, string) (net.Conn, error) {
 			t.Fatal("direct relay should not be benchmarked")
@@ -154,12 +154,12 @@ func TestBenchmarkTargetReevaluatesGlobalAutoSelection(t *testing.T) {
 	current := &testDialer{name: "current"}
 	preferred := &testDialer{name: "preferred"}
 	selector := &Selector{
-		health:    make(map[string]*RelayHealth),
-		mode:      "auto",
-		testURL:   target.URL,
-		tolerance: 50 * time.Millisecond,
-		store:     st,
-		bus:       eventbus.New(),
+		health:     make(map[string]*RelayHealth),
+		mode:       "auto",
+		outsideURL: target.URL,
+		tolerance:  50 * time.Millisecond,
+		store:      st,
+		bus:        eventbus.New(),
 		groups: []*group{
 			{name: "current", mode: "auto", dialers: []Dialer{current}},
 			{name: "preferred", mode: "auto", dialers: []Dialer{preferred}},
@@ -212,7 +212,7 @@ func TestApplyConfigPreservesExistingHealthAndMarksNewRelaysPending(t *testing.T
 			}},
 		}},
 	}
-	checkCfg := config.Check{URL: "http://www.gstatic.com/generate_204", Interval: 300, Tolerance: 50}
+	checkCfg := config.Check{OutsideURL: "http://www.gstatic.com/generate_204", Interval: 300, Tolerance: 50}
 	selector, err := NewSelector(cfg, checkCfg, nil, nil, st, eventbus.New(), nil)
 	if err != nil {
 		t.Fatalf("NewSelector() error = %v", err)
@@ -268,7 +268,7 @@ func TestHealthListIncludesRelaySpec(t *testing.T) {
 			}},
 		}},
 	}
-	checkCfg := config.Check{URL: "http://www.gstatic.com/generate_204", Interval: 300, Tolerance: 50}
+	checkCfg := config.Check{OutsideURL: "http://www.gstatic.com/generate_204", Interval: 300, Tolerance: 50}
 	selector, err := NewSelector(cfg, checkCfg, nil, nil, st, eventbus.New(), nil)
 	if err != nil {
 		t.Fatalf("NewSelector() error = %v", err)
@@ -310,11 +310,11 @@ func TestBenchmarkLimitsConcurrentRelayChecks(t *testing.T) {
 	var maxActive atomic.Int64
 	dialers := make([]Dialer, 12)
 	selector := &Selector{
-		health:  make(map[string]*RelayHealth),
-		mode:    "auto",
-		testURL: target.URL,
-		store:   st,
-		bus:     eventbus.New(),
+		health:     make(map[string]*RelayHealth),
+		mode:       "auto",
+		outsideURL: target.URL,
+		store:      st,
+		bus:        eventbus.New(),
 	}
 	g := &group{name: "main", mode: "auto"}
 	for i := range dialers {
@@ -364,12 +364,12 @@ func TestBenchmarkUsesConfiguredCheckConcurrencyAcrossOverlappingRuns(t *testing
 	var active atomic.Int64
 	var maxActive atomic.Int64
 	selector := &Selector{
-		health:   make(map[string]*RelayHealth),
-		mode:     "auto",
-		testURL:  target.URL,
-		store:    st,
-		bus:      eventbus.New(),
-		checkSem: make(chan struct{}, concurrency),
+		health:     make(map[string]*RelayHealth),
+		mode:       "auto",
+		outsideURL: target.URL,
+		store:      st,
+		bus:        eventbus.New(),
+		checkSem:   make(chan struct{}, concurrency),
 	}
 	g := &group{name: "main", mode: "auto"}
 	for i := 0; i < 9; i++ {
@@ -427,7 +427,7 @@ func TestSelectedCheckLoopChecksOnlyActiveRelay(t *testing.T) {
 	selector := &Selector{
 		health:           make(map[string]*RelayHealth),
 		mode:             "manual",
-		testURL:          target.URL,
+		outsideURL:       target.URL,
 		selectedInterval: 10 * time.Millisecond,
 		store:            st,
 		bus:              eventbus.New(),
@@ -471,6 +471,57 @@ func TestSelectedCheckLoopChecksOnlyActiveRelay(t *testing.T) {
 	}
 }
 
+func TestSelectedCheckLoopChecksDomesticConnectivity(t *testing.T) {
+	var requests atomic.Int64
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	t.Cleanup(target.Close)
+
+	selector := &Selector{
+		domesticURL:      target.URL,
+		selectedInterval: 10 * time.Millisecond,
+		stopCh:           make(chan struct{}),
+		selectedConfigCh: make(chan struct{}, 1),
+		bus:              eventbus.New(),
+	}
+
+	done := make(chan struct{})
+	go func() {
+		selector.selectedCheckLoop()
+		close(done)
+	}()
+
+	var status ConnectivityStatus
+	deadline := time.After(2 * time.Second)
+	for {
+		status = selector.ConnectivityStatus()
+		if !status.Domestic.LastCheckedAt.IsZero() {
+			break
+		}
+		select {
+		case <-deadline:
+			selector.Stop()
+			t.Fatal("domestic connectivity was not checked")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+
+	selector.Stop()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("selected check loop did not stop")
+	}
+	if status.Domestic.URL != target.URL || status.Domestic.Status != HealthHealthy || status.Domestic.Latency <= 0 || status.Domestic.TCPConnectLatency <= 0 {
+		t.Fatalf("domestic connectivity status = %#v", status.Domestic)
+	}
+	if got := requests.Load(); got < 2 {
+		t.Fatalf("domestic URL requests = %d, want at least 2", got)
+	}
+}
+
 func TestBenchmarkPublishesCompletedRelayBeforeWholeBatchFinishes(t *testing.T) {
 	st, err := config.Open(filepath.Join(t.TempDir(), "punch.db"))
 	if err != nil {
@@ -493,12 +544,12 @@ func TestBenchmarkPublishesCompletedRelayBeforeWholeBatchFinishes(t *testing.T) 
 		release:    make(chan struct{}),
 	}
 	selector := &Selector{
-		health:   make(map[string]*RelayHealth),
-		mode:     "auto",
-		testURL:  target.URL,
-		store:    st,
-		bus:      eventbus.New(),
-		checkSem: make(chan struct{}, 1),
+		health:     make(map[string]*RelayHealth),
+		mode:       "auto",
+		outsideURL: target.URL,
+		store:      st,
+		bus:        eventbus.New(),
+		checkSem:   make(chan struct{}, 1),
 	}
 	g := &group{name: "main", mode: "auto"}
 	for _, d := range []Dialer{
@@ -588,7 +639,7 @@ func TestRelayURLLatencyUsesWarmedRoundTrip(t *testing.T) {
 	}))
 	t.Cleanup(target.Close)
 
-	selector := &Selector{testURL: target.URL}
+	selector := &Selector{outsideURL: target.URL}
 	dialer := &slowFirstDialer{
 		testDialer: testDialer{name: "slow-first-dial"},
 		delay:      300 * time.Millisecond,

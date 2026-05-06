@@ -12,9 +12,10 @@ import (
 )
 
 type statusInfo struct {
-	General statusGeneral `json:"general"`
-	DNS     statusDNS     `json:"dns"`
-	Relay   statusRelay   `json:"relay"`
+	General      statusGeneral      `json:"general"`
+	DNS          statusDNS          `json:"dns"`
+	Connectivity statusConnectivity `json:"connectivity"`
+	Relay        statusRelay        `json:"relay"`
 }
 
 type statusGeneral struct {
@@ -38,6 +39,20 @@ type statusDNS struct {
 type statusDecisionStat struct {
 	Requests   int64  `json:"requests"`
 	LastDomain string `json:"last_domain"`
+}
+
+type statusConnectivity struct {
+	Domestic statusConnectivityCheck `json:"domestic"`
+	Outside  statusConnectivityCheck `json:"outside"`
+}
+
+type statusConnectivityCheck struct {
+	URL                 string    `json:"url"`
+	Status              string    `json:"status"`
+	LatencyMS           int64     `json:"latency_ms"`
+	TCPConnectLatencyMS int64     `json:"tcp_connect_latency_ms"`
+	LastCheckedAt       time.Time `json:"last_checked_at"`
+	Error               string    `json:"error"`
 }
 
 type statusRelay struct {
@@ -114,6 +129,12 @@ func writeStatus(w io.Writer, status statusInfo) error {
 	fmt.Fprintf(w, "  Reject:         %d requests, last %s\n", status.DNS.Reject.Requests, formatOptional(status.DNS.Reject.LastDomain))
 	fmt.Fprintf(w, "  Cache:          %d entries, %d hits\n", status.DNS.CacheEntries, status.DNS.CacheHits)
 	fmt.Fprintln(w)
+	fmt.Fprintln(w, "Connectivity:")
+	fmt.Fprintf(w, "  Domestic URL:  %s\n", formatOptional(status.Connectivity.Domestic.URL))
+	fmt.Fprintf(w, "  Domestic:      %s\n", formatConnectivityCheck(status.Connectivity.Domestic))
+	fmt.Fprintf(w, "  Outside URL:   %s\n", formatOptional(status.Connectivity.Outside.URL))
+	fmt.Fprintf(w, "  Outside:       %s\n", formatConnectivityCheck(status.Connectivity.Outside))
+	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Relay:")
 	fmt.Fprintf(w, "  Active:         %s\n", formatOptional(status.Relay.ActiveRelay))
 	fmt.Fprintf(w, "  Status:         %s\n", formatOptional(status.Relay.Status))
@@ -140,6 +161,20 @@ func formatRelayLatencies(status statusRelay) string {
 		return latency
 	}
 	return fmt.Sprintf("%s (tcp %s, url %s)", latency, tcp, url)
+}
+
+func formatConnectivityCheck(check statusConnectivityCheck) string {
+	summary := fmt.Sprintf(
+		"%s (tc latency %s, latency %s, last check %s)",
+		formatOptional(check.Status),
+		formatLatency(check.TCPConnectLatencyMS),
+		formatLatency(check.LatencyMS),
+		formatTime(check.LastCheckedAt),
+	)
+	if check.Error != "" {
+		summary += ", error " + check.Error
+	}
+	return summary
 }
 
 func formatDurationSeconds(seconds int64) string {

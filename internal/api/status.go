@@ -6,13 +6,15 @@ import (
 	"time"
 
 	pdns "github.com/punchproxy/punch/internal/dns"
+	"github.com/punchproxy/punch/internal/relay"
 	"github.com/punchproxy/punch/internal/tun"
 )
 
 type statusResponse struct {
-	General statusGeneralResponse `json:"general"`
-	DNS     pdns.Stats            `json:"dns"`
-	Relay   statusRelayResponse   `json:"relay"`
+	General      statusGeneralResponse    `json:"general"`
+	DNS          pdns.Stats               `json:"dns"`
+	Connectivity relay.ConnectivityStatus `json:"connectivity"`
+	Relay        statusRelayResponse      `json:"relay"`
 }
 
 type statusGeneralResponse struct {
@@ -56,6 +58,9 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	if s.dns != nil {
 		resp.DNS = s.dns.Stats()
+	}
+	if s.selector != nil {
+		resp.Connectivity = s.selector.ConnectivityStatus()
 	}
 	resp.Relay = s.relayStatus()
 	writeJSON(w, http.StatusOK, resp)

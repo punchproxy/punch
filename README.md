@@ -175,6 +175,8 @@ punchctl config                                 # list everything
 punchctl config get dns.listen
 punchctl config set api.secret "change-me"
 punchctl config set check.interval 300
+punchctl config set check.outside_url http://www.gstatic.com/generate_204
+punchctl config set check.domestic_url http://connect.rom.miui.com/generate_204
 punchctl config set check.selected_interval 10
 ```
 
@@ -187,16 +189,17 @@ sudo punchd -s system.log_level=debug
 
 Defaults worth knowing:
 
-| Setting              | Default                                 |
-| -------------------- | --------------------------------------- |
-| DNS listener         | `0.0.0.0:28853`                         |
-| API listener         | `127.0.0.1:28854`                       |
-| TUN device           | `punch0`                                |
-| DoH upstreams        | `doh.pub`, `dns.alidns.com`             |
-| Fake IP pool         | `198.18.0.0/15`, `fdfe:dcba:9876::/64`  |
-| Check URL            | `http://www.gstatic.com/generate_204`   |
-| Selected check       | every 10 seconds                        |
-| Session history      | last 1000                               |
+| Setting              | Default                                           |
+| -------------------- | ------------------------------------------------- |
+| DNS listener         | `0.0.0.0:28853`                                   |
+| API listener         | `127.0.0.1:28854`                                 |
+| TUN device           | `punch0`                                          |
+| DoH upstreams        | `doh.pub`, `dns.alidns.com`                       |
+| Fake IP pool         | `198.18.0.0/15`, `fdfe:dcba:9876::/64`            |
+| Outside check URL    | `http://www.gstatic.com/generate_204`             |
+| Domestic check URL   | `http://connect.rom.miui.com/generate_204`        |
+| Selected check       | every 10 seconds                                  |
+| Session history      | last 1000                                         |
 
 Default data directory:
 

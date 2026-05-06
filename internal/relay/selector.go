@@ -110,10 +110,12 @@ type Selector struct {
 	health             map[string]*RelayHealth
 	active             atomic.Int32
 	mode               string
-	testURL            string
+	outsideURL         string
+	domesticURL        string
 	checkInterval      time.Duration
 	selectedInterval   time.Duration
 	tolerance          time.Duration
+	domesticHealth     ConnectivityCheck
 	checkSem           chan struct{}
 	bus                *eventbus.Bus
 	stopCh             chan struct{}
@@ -143,10 +145,12 @@ func NewSelector(
 	s := &Selector{
 		health:             make(map[string]*RelayHealth),
 		mode:               normalizeSelectMode(relayCfg.Select),
-		testURL:            checkCfg.URL,
+		outsideURL:         checkCfg.OutsideURL,
+		domesticURL:        checkCfg.DomesticURL,
 		checkInterval:      time.Duration(checkCfg.Interval) * time.Second,
 		selectedInterval:   normalizeSelectedCheckInterval(checkCfg.SelectedInterval),
 		tolerance:          time.Duration(checkCfg.Tolerance) * time.Millisecond,
+		domesticHealth:     ConnectivityCheck{URL: checkCfg.DomesticURL},
 		checkSem:           make(chan struct{}, normalizeCheckConcurrency(checkCfg.Concurrency)),
 		bus:                bus,
 		stopCh:             make(chan struct{}),

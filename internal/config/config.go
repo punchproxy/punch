@@ -96,7 +96,8 @@ type Relay struct {
 }
 
 type Check struct {
-	URL              string `json:"url"`
+	OutsideURL       string `json:"outside_url"`
+	DomesticURL      string `json:"domestic_url"`
 	Interval         int    `json:"interval"`
 	Tolerance        int    `json:"tolerance"`
 	Concurrency      int    `json:"concurrency,omitempty"`
@@ -162,7 +163,8 @@ var scalarKeys = []string{
 	"dns.disable_ipv6_fakeip",
 	"tun.device",
 	"relay.select",
-	"check.url",
+	"check.outside_url",
+	"check.domestic_url",
 	"check.interval",
 	"check.tolerance",
 	"check.concurrency",
@@ -310,8 +312,10 @@ func getValue(cfg *Config, key string) (string, error) {
 		return cfg.TUN.Device, nil
 	case "relay.select":
 		return cfg.Relay.Select, nil
-	case "check.url":
-		return cfg.Check.URL, nil
+	case "check.outside_url":
+		return cfg.Check.OutsideURL, nil
+	case "check.domestic_url":
+		return cfg.Check.DomesticURL, nil
 	case "check.interval":
 		return strconv.Itoa(cfg.Check.Interval), nil
 	case "check.tolerance":
@@ -367,8 +371,10 @@ func setValue(cfg *Config, key, value string) error {
 		cfg.TUN.Device = value
 	case "relay.select":
 		cfg.Relay.Select = value
-	case "check.url":
-		cfg.Check.URL = value
+	case "check.outside_url":
+		cfg.Check.OutsideURL = value
+	case "check.domestic_url":
+		cfg.Check.DomesticURL = value
 	case "check.interval":
 		parsed, err := parsePositiveInt(key, value)
 		if err != nil {
@@ -527,7 +533,8 @@ func loadTables(s *Store) (*Config, error) {
 			Select: base.RelaySelect,
 		},
 		Check: Check{
-			URL:              base.RelayAutoURL,
+			OutsideURL:       base.RelayAutoURL,
+			DomesticURL:      base.CheckDomesticURL,
 			Interval:         base.RelayAutoInterval,
 			Tolerance:        base.RelayAutoTolerance,
 			Concurrency:      base.RelayCheckConcurrency,
@@ -708,7 +715,8 @@ func saveTables(s *Store, cfg *Config) error {
 			DNSDisableIPv6FakeIP:  cfg.DNS.DisableIPv6FakeIP,
 			TUNDevice:             cfg.TUN.Device,
 			RelaySelect:           cfg.Relay.Select,
-			RelayAutoURL:          cfg.Check.URL,
+			RelayAutoURL:          cfg.Check.OutsideURL,
+			CheckDomesticURL:      cfg.Check.DomesticURL,
 			RelayAutoInterval:     cfg.Check.Interval,
 			RelayAutoTolerance:    cfg.Check.Tolerance,
 			RelayCheckConcurrency: cfg.Check.Concurrency,
@@ -986,7 +994,8 @@ func Default() *Config {
 			Select: "auto",
 		},
 		Check: Check{
-			URL:              "http://www.gstatic.com/generate_204",
+			OutsideURL:       "http://www.gstatic.com/generate_204",
+			DomesticURL:      "http://connect.rom.miui.com/generate_204",
 			Interval:         3600,
 			Tolerance:        50,
 			Concurrency:      10,
@@ -1035,8 +1044,11 @@ func applyDefaults(cfg *Config) {
 	if cfg.Relay.Select == "" {
 		cfg.Relay.Select = "auto"
 	}
-	if cfg.Check.URL == "" {
-		cfg.Check.URL = "http://www.gstatic.com/generate_204"
+	if cfg.Check.OutsideURL == "" {
+		cfg.Check.OutsideURL = "http://www.gstatic.com/generate_204"
+	}
+	if cfg.Check.DomesticURL == "" {
+		cfg.Check.DomesticURL = "http://connect.rom.miui.com/generate_204"
 	}
 	if cfg.Check.Interval == 0 {
 		cfg.Check.Interval = 300
