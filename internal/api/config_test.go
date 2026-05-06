@@ -61,7 +61,62 @@ func TestConfigHandlersGetAndSetSessionHistoryLimit(t *testing.T) {
 	}
 }
 
-func TestConfigHandlersApplyCheckInterval(t *testing.T) {
+func TestConfigHandlersApplyFullCheckInterval(t *testing.T) {
+	st, err := config.Open(filepath.Join(t.TempDir(), "punch.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := st.Close(); err != nil {
+			t.Fatalf("close store: %v", err)
+		}
+	})
+	if err := config.Init(st); err != nil {
+		t.Fatalf("seed config: %v", err)
+	}
+	cfg, err := config.Snapshot()
+	if err != nil {
+		t.Fatalf("snapshot config: %v", err)
+	}
+	cfg.Relay.Groups = []config.RelayGroup{{
+		Type:   "inline",
+		Name:   "main",
+		Select: "auto",
+		Proxies: []map[string]any{{
+			"name": "local",
+			"type": "direct",
+		}},
+	}}
+	if err := config.Replace(cfg); err != nil {
+		t.Fatalf("replace config: %v", err)
+	}
+	selector, err := relay.NewSelector(cfg.Relay, cfg.Check, nil, func(ctx context.Context, network, address string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, network, address)
+	}, st, eventbus.New(), nil)
+	if err != nil {
+		t.Fatalf("NewSelector() error = %v", err)
+	}
+	s := &Server{store: st, selector: selector}
+
+	rec := runRelayHandler(t, s.handleSetConfigValue, http.MethodPut, "/api/config/check.full_interval", map[string]string{
+		"key": "check.full_interval",
+	}, configValueRequest{Value: "120"})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("set status = %d body = %s", rec.Code, rec.Body.String())
+	}
+	found := false
+	for _, group := range selector.GroupList() {
+		if group.Name == "main" && group.CheckInterval != 120 {
+			t.Fatalf("group check interval = %d, want 120", group.CheckInterval)
+		}
+		found = found || group.Name == "main"
+	}
+	if !found {
+		t.Fatalf("main group not found: %#v", selector.GroupList())
+	}
+}
+
+func TestConfigHandlersApplySelectedCheckInterval(t *testing.T) {
 	st, err := config.Open(filepath.Join(t.TempDir(), "punch.db"))
 	if err != nil {
 		t.Fatalf("open store: %v", err)
@@ -100,19 +155,21 @@ func TestConfigHandlersApplyCheckInterval(t *testing.T) {
 
 	rec := runRelayHandler(t, s.handleSetConfigValue, http.MethodPut, "/api/config/check.interval", map[string]string{
 		"key": "check.interval",
-	}, configValueRequest{Value: "3600"})
+	}, configValueRequest{Value: "15"})
 	if rec.Code != http.StatusOK {
 		t.Fatalf("set status = %d body = %s", rec.Code, rec.Body.String())
 	}
 	found := false
-	for _, group := range selector.GroupList() {
-		if group.Name == "main" && group.CheckInterval != 3600 {
-			t.Fatalf("group check interval = %d, want 3600", group.CheckInterval)
+	for _, health := range selector.HealthList() {
+		if health.Name == "main / local" {
+			found = true
+			if health.CheckInterval != 15 {
+				t.Fatalf("selected relay check interval = %d, want 15", health.CheckInterval)
+			}
 		}
-		found = found || group.Name == "main"
 	}
 	if !found {
-		t.Fatalf("main group not found: %#v", selector.GroupList())
+		t.Fatalf("main / local relay not found: %#v", selector.HealthList())
 	}
 }
 

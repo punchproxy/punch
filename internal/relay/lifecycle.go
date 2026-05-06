@@ -106,9 +106,9 @@ func (s *Selector) anyAutoGroupLocked() bool {
 func (s *Selector) benchmarkLoopConfig() (time.Duration, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	interval := s.checkInterval
+	interval := s.fullCheckInterval
 	if interval <= 0 {
-		interval = 300 * time.Second
+		interval = defaultFullCheckInterval
 	}
 	return interval, s.mode == "auto" || s.anyAutoGroupLocked()
 }

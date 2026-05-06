@@ -32,9 +32,9 @@ func TestDirectRelayIsHealthyWithoutLatencyCheck(t *testing.T) {
 	selector, err := NewSelector(
 		config.Relay{Select: "auto"},
 		config.Check{
-			OutsideURL: "http://www.gstatic.com/generate_204",
-			Interval:   300,
-			Tolerance:  50,
+			OutsideURL:   "http://www.gstatic.com/generate_204",
+			FullInterval: 300,
+			Tolerance:    50,
 		},
 		nil, func(context.Context, string, string) (net.Conn, error) {
 			t.Fatal("direct relay should not be benchmarked")
@@ -219,7 +219,7 @@ func TestApplyConfigPreservesExistingHealthAndMarksNewRelaysPending(t *testing.T
 			}},
 		}},
 	}
-	checkCfg := config.Check{OutsideURL: "http://www.gstatic.com/generate_204", Interval: 300, Tolerance: 50}
+	checkCfg := config.Check{OutsideURL: "http://www.gstatic.com/generate_204", FullInterval: 300, Tolerance: 50}
 	selector, err := NewSelector(cfg, checkCfg, nil, nil, st, eventbus.New(), nil)
 	if err != nil {
 		t.Fatalf("NewSelector() error = %v", err)
@@ -275,7 +275,7 @@ func TestHealthListIncludesRelaySpec(t *testing.T) {
 			}},
 		}},
 	}
-	checkCfg := config.Check{OutsideURL: "http://www.gstatic.com/generate_204", Interval: 300, Tolerance: 50}
+	checkCfg := config.Check{OutsideURL: "http://www.gstatic.com/generate_204", FullInterval: 300, Tolerance: 50}
 	selector, err := NewSelector(cfg, checkCfg, nil, nil, st, eventbus.New(), nil)
 	if err != nil {
 		t.Fatalf("NewSelector() error = %v", err)
@@ -432,14 +432,14 @@ func TestSelectedCheckLoopChecksOnlyActiveRelay(t *testing.T) {
 	active := &countingDialer{testDialer: testDialer{name: "active"}}
 	inactive := &countingDialer{testDialer: testDialer{name: "inactive"}}
 	selector := &Selector{
-		health:           make(map[string]*RelayHealth),
-		mode:             "manual",
-		outsideURL:       target.URL,
-		selectedInterval: 10 * time.Millisecond,
-		store:            st,
-		bus:              eventbus.New(),
-		stopCh:           make(chan struct{}),
-		selectedConfigCh: make(chan struct{}, 1),
+		health:                make(map[string]*RelayHealth),
+		mode:                  "manual",
+		outsideURL:            target.URL,
+		selectedCheckInterval: 10 * time.Millisecond,
+		store:                 st,
+		bus:                   eventbus.New(),
+		stopCh:                make(chan struct{}),
+		selectedConfigCh:      make(chan struct{}, 1),
 	}
 	g := &group{name: "main", mode: "manual", dialers: []Dialer{active, inactive}}
 	selector.groups = []*group{g}
@@ -487,11 +487,11 @@ func TestSelectedCheckLoopChecksDomesticConnectivity(t *testing.T) {
 	t.Cleanup(target.Close)
 
 	selector := &Selector{
-		domesticURL:      target.URL,
-		selectedInterval: 10 * time.Millisecond,
-		stopCh:           make(chan struct{}),
-		selectedConfigCh: make(chan struct{}, 1),
-		bus:              eventbus.New(),
+		domesticURL:           target.URL,
+		selectedCheckInterval: 10 * time.Millisecond,
+		stopCh:                make(chan struct{}),
+		selectedConfigCh:      make(chan struct{}, 1),
+		bus:                   eventbus.New(),
 	}
 
 	done := make(chan struct{})

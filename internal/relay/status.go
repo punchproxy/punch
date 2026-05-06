@@ -77,7 +77,7 @@ func (s *Selector) GroupList() []GroupStatus {
 			Selected:        selected,
 			Select:          displaySelectMode(g.mode),
 			RemoteAddress:   g.sourceURL,
-			CheckInterval:   int64(s.checkInterval.Seconds()),
+			CheckInterval:   int64(s.fullCheckInterval.Seconds()),
 			LastRefreshedAt: g.lastRefreshedAt,
 			NextRefreshAt:   g.nextRefreshAt,
 			RefreshInterval: int64(g.refreshEvery.Seconds()),
@@ -91,8 +91,8 @@ func (s *Selector) GroupList() []GroupStatus {
 				status.CurrentLatency = h.Latency
 				status.CurrentTCPConnectLatency = h.TCPConnectLatency
 				status.LastCheckedAt = h.LastCheckedAt
-				if s.checkInterval > 0 && !h.LastCheckedAt.IsZero() && g.name != directGroupName {
-					status.NextCheckAt = h.LastCheckedAt.Add(s.checkInterval)
+				if s.fullCheckInterval > 0 && !h.LastCheckedAt.IsZero() && g.name != directGroupName {
+					status.NextCheckAt = h.LastCheckedAt.Add(s.fullCheckInterval)
 				}
 				if status.Error == "" {
 					status.Error = h.Error
@@ -110,8 +110,8 @@ func (s *Selector) GroupList() []GroupStatus {
 }
 
 func (s *Selector) relayCheckIntervalLocked(selected bool) time.Duration {
-	if selected && s.selectedInterval > 0 {
-		return s.selectedInterval
+	if selected && s.selectedCheckInterval > 0 {
+		return s.selectedCheckInterval
 	}
-	return s.checkInterval
+	return s.fullCheckInterval
 }

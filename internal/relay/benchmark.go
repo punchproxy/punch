@@ -296,6 +296,13 @@ func normalizeCheckConcurrency(n int) int {
 	return n
 }
 
+func normalizeFullCheckInterval(seconds int) time.Duration {
+	if seconds <= 0 {
+		return defaultFullCheckInterval
+	}
+	return time.Duration(seconds) * time.Second
+}
+
 func normalizeSelectedCheckInterval(seconds int) time.Duration {
 	if seconds <= 0 {
 		return defaultSelectedCheckInterval

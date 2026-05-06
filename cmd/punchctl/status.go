@@ -139,7 +139,7 @@ func writeStatus(w io.Writer, status statusInfo) error {
 	fmt.Fprintf(w, "  Reject:         %d requests, last %s\n", status.DNS.Reject.Requests, formatOptional(status.DNS.Reject.LastDomain))
 	fmt.Fprintf(w, "  Cache:          %d entries, %d hits\n", status.DNS.CacheEntries, status.DNS.CacheHits)
 	fmt.Fprintln(w)
-	fmt.Fprintf(w, "Health (every %s ms):\n", formatHealthInterval(status.Connectivity.CheckIntervalMS))
+	fmt.Fprintf(w, "Health (every %s):\n", formatHealthInterval(status.Connectivity.CheckIntervalMS))
 	fmt.Fprintln(w, "  Internet:")
 	fmt.Fprintf(w, "    %-12s %s\n", "TCP Connect:", formatHealthMetric(status.Connectivity.Domestic, healthMetricTCPConnect))
 	fmt.Fprintf(w, "    %-12s %s\n", "Round Trip:", formatHealthMetric(status.Connectivity.Domestic, healthMetricRoundTrip))
@@ -195,7 +195,7 @@ func formatHealthInterval(ms int64) string {
 	if ms <= 0 {
 		return "-"
 	}
-	return fmt.Sprintf("%d", ms)
+	return (time.Duration(ms) * time.Millisecond).String()
 }
 
 func formatHealthMetric(check statusConnectivityCheck, metric healthMetric) string {

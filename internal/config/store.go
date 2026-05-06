@@ -119,10 +119,10 @@ type configBaseModel struct {
 	RelaySelect           string `gorm:"column:relay_select;not null"`
 	RelayAutoURL          string `gorm:"column:relay_auto_url;not null"`
 	CheckDomesticURL      string `gorm:"column:check_domestic_url"`
-	RelayAutoInterval     int    `gorm:"column:relay_auto_interval;not null"`
+	CheckFullInterval     int    `gorm:"column:relay_auto_interval;not null"`
 	RelayAutoTolerance    int    `gorm:"column:relay_auto_tolerance;not null"`
 	RelayCheckConcurrency int    `gorm:"column:relay_check_concurrency;not null;default:10"`
-	CheckSelectedInterval int    `gorm:"column:check_selected_interval;not null;default:10"`
+	CheckInterval         int    `gorm:"column:check_selected_interval;not null;default:10"`
 	APIListen             string `gorm:"column:api_listen;not null"`
 	APISecret             string `gorm:"column:api_secret;not null"`
 	SessionsHistoryLimit  int    `gorm:"column:sessions_history_limit;not null;default:1000"`

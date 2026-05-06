@@ -17,6 +17,7 @@ import (
 const directGroupName = "DIRECT"
 
 const defaultCheckConcurrency = 10
+const defaultFullCheckInterval = 24 * time.Hour
 const defaultSelectedCheckInterval = 10 * time.Second
 const maxHealthRecords = 20
 
@@ -103,27 +104,27 @@ type group struct {
 }
 
 type Selector struct {
-	mu                 sync.RWMutex
-	groups             []*group
-	health             map[string]*RelayHealth
-	active             atomic.Int32
-	mode               string
-	outsideURL         string
-	domesticURL        string
-	checkInterval      time.Duration
-	selectedInterval   time.Duration
-	tolerance          time.Duration
-	domesticHealth     ConnectivityCheck
-	checkSem           chan struct{}
-	bus                *eventbus.Bus
-	stopCh             chan struct{}
-	benchmarkConfigCh  chan struct{}
-	selectedConfigCh   chan struct{}
-	store              *config.Store
-	assets             *assets.Manager
-	groupCfgs          map[string]config.RelayGroup
-	directDialContext  DialContextFunc
-	resolveRelayDomain RelayResolveFunc
+	mu                    sync.RWMutex
+	groups                []*group
+	health                map[string]*RelayHealth
+	active                atomic.Int32
+	mode                  string
+	outsideURL            string
+	domesticURL           string
+	fullCheckInterval     time.Duration
+	selectedCheckInterval time.Duration
+	tolerance             time.Duration
+	domesticHealth        ConnectivityCheck
+	checkSem              chan struct{}
+	bus                   *eventbus.Bus
+	stopCh                chan struct{}
+	benchmarkConfigCh     chan struct{}
+	selectedConfigCh      chan struct{}
+	store                 *config.Store
+	assets                *assets.Manager
+	groupCfgs             map[string]config.RelayGroup
+	directDialContext     DialContextFunc
+	resolveRelayDomain    RelayResolveFunc
 }
 
 func NewSelector(
@@ -141,24 +142,24 @@ func NewSelector(
 	adapter.UnifiedDelay.Store(true)
 
 	s := &Selector{
-		health:             make(map[string]*RelayHealth),
-		mode:               normalizeSelectMode(relayCfg.Select),
-		outsideURL:         checkCfg.OutsideURL,
-		domesticURL:        checkCfg.DomesticURL,
-		checkInterval:      time.Duration(checkCfg.Interval) * time.Second,
-		selectedInterval:   normalizeSelectedCheckInterval(checkCfg.SelectedInterval),
-		tolerance:          time.Duration(checkCfg.Tolerance) * time.Millisecond,
-		domesticHealth:     ConnectivityCheck{URL: checkCfg.DomesticURL},
-		checkSem:           make(chan struct{}, normalizeCheckConcurrency(checkCfg.Concurrency)),
-		bus:                bus,
-		stopCh:             make(chan struct{}),
-		benchmarkConfigCh:  make(chan struct{}, 1),
-		selectedConfigCh:   make(chan struct{}, 1),
-		store:              stateStore,
-		assets:             assetManager,
-		groupCfgs:          make(map[string]config.RelayGroup),
-		directDialContext:  directDialContext,
-		resolveRelayDomain: resolveRelayDomain,
+		health:                make(map[string]*RelayHealth),
+		mode:                  normalizeSelectMode(relayCfg.Select),
+		outsideURL:            checkCfg.OutsideURL,
+		domesticURL:           checkCfg.DomesticURL,
+		fullCheckInterval:     normalizeFullCheckInterval(checkCfg.FullInterval),
+		selectedCheckInterval: normalizeSelectedCheckInterval(checkCfg.Interval),
+		tolerance:             time.Duration(checkCfg.Tolerance) * time.Millisecond,
+		domesticHealth:        ConnectivityCheck{URL: checkCfg.DomesticURL},
+		checkSem:              make(chan struct{}, normalizeCheckConcurrency(checkCfg.Concurrency)),
+		bus:                   bus,
+		stopCh:                make(chan struct{}),
+		benchmarkConfigCh:     make(chan struct{}, 1),
+		selectedConfigCh:      make(chan struct{}, 1),
+		store:                 stateStore,
+		assets:                assetManager,
+		groupCfgs:             make(map[string]config.RelayGroup),
+		directDialContext:     directDialContext,
+		resolveRelayDomain:    resolveRelayDomain,
 	}
 
 	if err := s.ApplyConfig(relayCfg, checkCfg); err != nil {

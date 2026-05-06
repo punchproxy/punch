@@ -96,10 +96,10 @@ func (s *Selector) ConnectivityStatus() ConnectivityStatus {
 }
 
 func (s *Selector) selectedCheckIntervalLocked() time.Duration {
-	if s.selectedInterval <= 0 {
+	if s.selectedCheckInterval <= 0 {
 		return defaultSelectedCheckInterval
 	}
-	return s.selectedInterval
+	return s.selectedCheckInterval
 }
 
 func (s *Selector) domesticURLSnapshot() string {

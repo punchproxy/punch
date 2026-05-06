@@ -102,8 +102,8 @@ func TestRelayGroupCreateSchedulesHealthCheck(t *testing.T) {
 	}))
 	t.Cleanup(target.Close)
 	cfg.Check.OutsideURL = target.URL
-	if cfg.Check.Interval == 0 {
-		cfg.Check.Interval = 300
+	if cfg.Check.FullInterval == 0 {
+		cfg.Check.FullInterval = 300
 	}
 	if cfg.Check.Tolerance == 0 {
 		cfg.Check.Tolerance = 50

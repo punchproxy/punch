@@ -16,8 +16,11 @@ func TestLoadSeedsDefaultConfigTables(t *testing.T) {
 	if cfg.DNS.Listen != "0.0.0.0:28853" {
 		t.Fatalf("dns listen = %q, want default first-run listen", cfg.DNS.Listen)
 	}
-	if cfg.Check.SelectedInterval != 10 {
-		t.Fatalf("check selected interval = %d, want 10", cfg.Check.SelectedInterval)
+	if cfg.Check.Interval != 10 {
+		t.Fatalf("check interval = %d, want 10", cfg.Check.Interval)
+	}
+	if cfg.Check.FullInterval != 86400 {
+		t.Fatalf("check full interval = %d, want 86400", cfg.Check.FullInterval)
 	}
 	if cfg.Check.OutsideURL != "http://www.gstatic.com/generate_204" {
 		t.Fatalf("check outside url = %q, want default outside url", cfg.Check.OutsideURL)
@@ -75,12 +78,12 @@ func TestConfigSaveLoadRoundTrip(t *testing.T) {
 		}},
 	}
 	want.Check = Check{
-		OutsideURL:       "https://example.com/204",
-		DomesticURL:      "https://domestic.example/204",
-		Interval:         60,
-		Tolerance:        10,
-		Concurrency:      4,
-		SelectedInterval: 15,
+		OutsideURL:   "https://example.com/204",
+		DomesticURL:  "https://domestic.example/204",
+		FullInterval: 60,
+		Interval:     15,
+		Tolerance:    10,
+		Concurrency:  4,
 	}
 	want.API = API{Listen: "127.0.0.1:18080", Secret: "secret"}
 
@@ -157,22 +160,35 @@ func TestSingletonGetSetScalarValues(t *testing.T) {
 		t.Fatalf("persisted dns.listen = %q, want updated value", persisted.DNS.Listen)
 	}
 
-	if err := Set("check.selected_interval", "15"); err != nil {
-		t.Fatalf("set check.selected_interval: %v", err)
+	if err := Set("check.interval", "15"); err != nil {
+		t.Fatalf("set check.interval: %v", err)
 	}
-	got, err = Get("check.selected_interval")
+	got, err = Get("check.interval")
 	if err != nil {
-		t.Fatalf("get check.selected_interval: %v", err)
+		t.Fatalf("get check.interval: %v", err)
 	}
 	if got != "15" {
-		t.Fatalf("check.selected_interval = %q, want 15", got)
+		t.Fatalf("check.interval = %q, want 15", got)
+	}
+	if err := Set("check.full_interval", "60"); err != nil {
+		t.Fatalf("set check.full_interval: %v", err)
+	}
+	got, err = Get("check.full_interval")
+	if err != nil {
+		t.Fatalf("get check.full_interval: %v", err)
+	}
+	if got != "60" {
+		t.Fatalf("check.full_interval = %q, want 60", got)
 	}
 	persisted, err = Load(st)
 	if err != nil {
 		t.Fatalf("load persisted check config: %v", err)
 	}
-	if persisted.Check.SelectedInterval != 15 {
-		t.Fatalf("persisted check.selected_interval = %d, want 15", persisted.Check.SelectedInterval)
+	if persisted.Check.Interval != 15 {
+		t.Fatalf("persisted check.interval = %d, want 15", persisted.Check.Interval)
+	}
+	if persisted.Check.FullInterval != 60 {
+		t.Fatalf("persisted check.full_interval = %d, want 60", persisted.Check.FullInterval)
 	}
 
 	if err := Set("check.outside_url", "https://outside.example/204"); err != nil {
