@@ -75,8 +75,6 @@ func (s *Store) migrate() error {
 		&dnsUpstreamDomainModel{},
 		&dnsRuleSourceModel{},
 		&relayGroupModel{},
-		&relayGroupResolverModel{},
-		&relayGroupResolverDomainModel{},
 		&relayGroupProxyModel{},
 		&relaySelectionModel{},
 	); err != nil {
@@ -176,24 +174,6 @@ type relayGroupModel struct {
 }
 
 func (relayGroupModel) TableName() string { return "relay_groups" }
-
-type relayGroupResolverModel struct {
-	GroupPosition int    `gorm:"column:group_position;primaryKey;autoIncrement:false"`
-	Position      int    `gorm:"column:position;primaryKey;autoIncrement:false"`
-	URL           string `gorm:"column:url;not null"`
-	Bootstrap     string `gorm:"column:bootstrap;not null"`
-}
-
-func (relayGroupResolverModel) TableName() string { return "relay_group_resolvers" }
-
-type relayGroupResolverDomainModel struct {
-	GroupPosition    int    `gorm:"column:group_position;primaryKey;autoIncrement:false"`
-	ResolverPosition int    `gorm:"column:resolver_position;primaryKey;autoIncrement:false"`
-	Position         int    `gorm:"column:position;primaryKey;autoIncrement:false"`
-	Domain           string `gorm:"column:domain;not null"`
-}
-
-func (relayGroupResolverDomainModel) TableName() string { return "relay_group_resolver_domains" }
 
 type relayGroupProxyModel struct {
 	GroupPosition int    `gorm:"column:group_position;primaryKey;autoIncrement:false"`

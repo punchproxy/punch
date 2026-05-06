@@ -72,9 +72,6 @@ func TestConfigSaveLoadRoundTrip(t *testing.T) {
 			Select:          "manual",
 			Proxies:         []map[string]any{{"name": "p1", "type": "direct"}},
 			RefreshDuration: 120,
-			RelayDomainResolver: []Upstream{
-				{URL: "https://resolver.example/dns-query", Bootstrap: "8.8.8.8"},
-			},
 		}},
 	}
 	want.Check = Check{
@@ -109,11 +106,6 @@ func TestConfigUsesRelationalTables(t *testing.T) {
 		Name:    "inline",
 		Select:  "manual",
 		Proxies: []map[string]any{{"name": "p1", "type": "direct"}},
-		RelayDomainResolver: []Upstream{{
-			URL:       "https://resolver.example/dns-query",
-			Bootstrap: "8.8.8.8",
-			Domains:   []string{"domain:relay.example"},
-		}},
 	}}
 
 	if err := Save(st, cfg); err != nil {
@@ -124,12 +116,10 @@ func TestConfigUsesRelationalTables(t *testing.T) {
 		model any
 		want  int64
 	}{
-		"tun_routes":                   {model: &tunRouteModel{}, want: 1},
-		"dns_upstream_domains":         {model: &dnsUpstreamDomainModel{}, want: 1},
-		"relay_groups":                 {model: &relayGroupModel{}, want: 1},
-		"relay_group_resolvers":        {model: &relayGroupResolverModel{}, want: 1},
-		"relay_group_resolver_domains": {model: &relayGroupResolverDomainModel{}, want: 1},
-		"relay_group_proxies":          {model: &relayGroupProxyModel{}, want: 1},
+		"tun_routes":           {model: &tunRouteModel{}, want: 1},
+		"dns_upstream_domains": {model: &dnsUpstreamDomainModel{}, want: 1},
+		"relay_groups":         {model: &relayGroupModel{}, want: 1},
+		"relay_group_proxies":  {model: &relayGroupProxyModel{}, want: 1},
 	}
 	for name, tc := range counts {
 		var count int64

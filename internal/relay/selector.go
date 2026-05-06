@@ -69,24 +69,23 @@ type HealthRecord struct {
 }
 
 type GroupStatus struct {
-	Name                     string            `json:"name"`
-	Type                     string            `json:"type"`
-	RelayCount               int               `json:"relay_count"`
-	Selected                 bool              `json:"selected"`
-	Select                   string            `json:"select"`
-	CurrentRelay             string            `json:"current_relay,omitempty"`
-	CurrentStatus            HealthStatus      `json:"current_status,omitempty"`
-	CurrentLatency           int64             `json:"current_latency_ms,omitempty"`
-	CurrentTCPConnectLatency int64             `json:"current_tcp_connect_latency_ms,omitempty"`
-	RemoteAddress            string            `json:"remote_address,omitempty"`
-	CheckInterval            int64             `json:"check_interval,omitempty"`
-	LastCheckedAt            time.Time         `json:"last_checked_at,omitempty"`
-	NextCheckAt              time.Time         `json:"next_check_at,omitempty"`
-	LastRefreshedAt          time.Time         `json:"last_refreshed_at,omitempty"`
-	NextRefreshAt            time.Time         `json:"next_refresh_at,omitempty"`
-	RefreshInterval          int64             `json:"refresh_interval,omitempty"`
-	RelayDomainResolver      []config.Upstream `json:"relay_domain_resolver,omitempty"`
-	Error                    string            `json:"error,omitempty"`
+	Name                     string       `json:"name"`
+	Type                     string       `json:"type"`
+	RelayCount               int          `json:"relay_count"`
+	Selected                 bool         `json:"selected"`
+	Select                   string       `json:"select"`
+	CurrentRelay             string       `json:"current_relay,omitempty"`
+	CurrentStatus            HealthStatus `json:"current_status,omitempty"`
+	CurrentLatency           int64        `json:"current_latency_ms,omitempty"`
+	CurrentTCPConnectLatency int64        `json:"current_tcp_connect_latency_ms,omitempty"`
+	RemoteAddress            string       `json:"remote_address,omitempty"`
+	CheckInterval            int64        `json:"check_interval,omitempty"`
+	LastCheckedAt            time.Time    `json:"last_checked_at,omitempty"`
+	NextCheckAt              time.Time    `json:"next_check_at,omitempty"`
+	LastRefreshedAt          time.Time    `json:"last_refreshed_at,omitempty"`
+	NextRefreshAt            time.Time    `json:"next_refresh_at,omitempty"`
+	RefreshInterval          int64        `json:"refresh_interval,omitempty"`
+	Error                    string       `json:"error,omitempty"`
 }
 
 type group struct {
@@ -96,7 +95,6 @@ type group struct {
 	loadError       string
 	dialers         []Dialer
 	specs           map[string]map[string]any
-	resolvers       []config.Upstream
 	refreshEvery    time.Duration
 	lastRefreshedAt time.Time
 	nextRefreshAt   time.Time

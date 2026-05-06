@@ -74,7 +74,7 @@ func TestDedupeRelayMappingsRenamesDuplicateNames(t *testing.T) {
 	}
 }
 
-func TestRemoteRelayGroupUsesProviderResolvers(t *testing.T) {
+func TestRemoteRelayGroupIgnoresProviderResolvers(t *testing.T) {
 	dir := t.TempDir()
 	providerPath := filepath.Join(dir, "provider.yaml")
 	if err := os.WriteFile(providerPath, []byte(`
@@ -108,17 +108,20 @@ resolvers:
 
 	selector := &Selector{
 		assets: assetManager,
-		resolveRelayDomain: func(context.Context, string, string, []config.Upstream) ([]netip.Addr, time.Time, error) {
-			return nil, time.Time{}, nil
+		resolveRelayDomain: func(ctx context.Context, groupName, host string) ([]netip.Addr, time.Time, error) {
+			if groupName != "main" {
+				t.Fatalf("groupName = %q, want main", groupName)
+			}
+			if host != "relay.example" {
+				t.Fatalf("host = %q, want relay.example", host)
+			}
+			return []netip.Addr{netip.MustParseAddr("203.0.113.10")}, time.Now().Add(time.Minute), nil
 		},
 	}
 	group, err := selector.buildGroup(config.RelayGroup{
 		Type: "remote",
 		Name: "main",
 		URL:  providerPath,
-		RelayDomainResolver: []config.Upstream{{
-			URL: "https://fallback.example/dns-query",
-		}},
 	}, assetManager, map[string]relayPayload{})
 	if err != nil {
 		t.Fatalf("buildGroup() error = %v", err)
@@ -130,8 +133,12 @@ resolvers:
 	if !ok {
 		t.Fatalf("dialer type = %T, want *LazyRelayDialer", group.dialers[0])
 	}
-	if len(dialer.upstreams) != 1 || dialer.upstreams[0].URL != "https://dns.example/dns-query" {
-		t.Fatalf("upstreams = %#v", dialer.upstreams)
+	addr, err := dialer.resolvedRelayAddr(context.Background())
+	if err != nil {
+		t.Fatalf("resolvedRelayAddr() error = %v", err)
+	}
+	if addr != "203.0.113.10:443" {
+		t.Fatalf("addr = %q, want 203.0.113.10:443", addr)
 	}
 }
 

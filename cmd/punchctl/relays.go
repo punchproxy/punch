@@ -23,22 +23,15 @@ var (
 	errRelayNotFound      = errors.New("relay not found")
 )
 
-type relayUpstream struct {
-	URL       string   `json:"url" yaml:"url"`
-	Bootstrap string   `json:"bootstrap,omitempty" yaml:"bootstrap,omitempty"`
-	Domains   []string `json:"domains,omitempty" yaml:"domains,omitempty"`
-}
-
 type relayGroupConfig struct {
-	Type                string           `json:"type" yaml:"type"`
-	Name                string           `json:"name" yaml:"name"`
-	URL                 string           `json:"url,omitempty" yaml:"url,omitempty"`
-	RefreshDuration     int              `json:"refresh_duration,omitempty" yaml:"refresh_duration,omitempty"`
-	Keep                string           `json:"keep,omitempty" yaml:"keep,omitempty"`
-	Remove              string           `json:"remove,omitempty" yaml:"remove,omitempty"`
-	Select              string           `json:"select,omitempty" yaml:"select,omitempty"`
-	RelayDomainResolver []relayUpstream  `json:"relay_domain_resolver,omitempty" yaml:"relay_domain_resolver,omitempty"`
-	Proxies             []map[string]any `json:"proxies,omitempty" yaml:"proxies,omitempty"`
+	Type            string           `json:"type" yaml:"type"`
+	Name            string           `json:"name" yaml:"name"`
+	URL             string           `json:"url,omitempty" yaml:"url,omitempty"`
+	RefreshDuration int              `json:"refresh_duration,omitempty" yaml:"refresh_duration,omitempty"`
+	Keep            string           `json:"keep,omitempty" yaml:"keep,omitempty"`
+	Remove          string           `json:"remove,omitempty" yaml:"remove,omitempty"`
+	Select          string           `json:"select,omitempty" yaml:"select,omitempty"`
+	Proxies         []map[string]any `json:"proxies,omitempty" yaml:"proxies,omitempty"`
 }
 
 type relayGroupStatus struct {
@@ -125,8 +118,7 @@ type relayRow struct {
 }
 
 type relayProviderFile struct {
-	Proxies   []map[string]any `yaml:"proxies"`
-	Resolvers []relayUpstream  `yaml:"resolvers"`
+	Proxies []map[string]any `yaml:"proxies"`
 }
 
 type relaysRequest struct {
@@ -220,7 +212,6 @@ func newRelayGroupSetCommand(cfg *commandConfig) *cobra.Command {
 				group.Type = "remote"
 				group.URL = strings.TrimSpace(remoteURL)
 				group.Proxies = nil
-				group.RelayDomainResolver = nil
 				changed = true
 			}
 			if c.Flags().Changed("provider-file") {
@@ -231,7 +222,6 @@ func newRelayGroupSetCommand(cfg *commandConfig) *cobra.Command {
 				group.Type = "inline"
 				group.URL = ""
 				group.Proxies = provider.Proxies
-				group.RelayDomainResolver = provider.Resolvers
 				changed = true
 			}
 			if c.Flags().Changed("select") {
@@ -627,7 +617,7 @@ func newRelayDeleteCommand(cfg *commandConfig) *cobra.Command {
 }
 
 func addRelayGroupFlags(cmd *cobra.Command, providerFile, remoteURL, selectMode, keep, remove *string, refresh *int) {
-	cmd.Flags().StringVar(providerFile, "provider-file", "", "Mihomo proxy provider YAML with proxies and optional resolvers")
+	cmd.Flags().StringVar(providerFile, "provider-file", "", "Mihomo proxy provider YAML with proxies")
 	cmd.Flags().StringVar(remoteURL, "url", "", "remote Mihomo proxy provider URL")
 	cmd.Flags().StringVar(selectMode, "select", "", "relay selection mode for the group: auto or manual")
 	cmd.Flags().StringVar(keep, "keep", "", "regular expression of relay names to keep")
@@ -656,7 +646,6 @@ func buildRelayGroupFromFlags(name, providerFile, remoteURL, selectMode, keep, r
 		}
 		group.Type = "inline"
 		group.Proxies = provider.Proxies
-		group.RelayDomainResolver = provider.Resolvers
 	default:
 		return relayGroupConfig{}, fmt.Errorf("provide --url for a remote group or --provider-file for an inline group")
 	}
@@ -1192,20 +1181,6 @@ func writeRelayGroupDescribe(w io.Writer, group relayGroupStatus) error {
 	fmt.Fprintf(w, "Remote Address:    %s\n", formatOptional(group.RemoteAddress))
 	fmt.Fprintf(w, "Last Checked:      %s\n", formatScheduledTime(now, group.LastCheckedAt, group.NextCheckAt, group.CheckInterval))
 	fmt.Fprintf(w, "Last Refreshed:    %s\n", formatScheduledTime(now, group.LastRefreshedAt, group.NextRefreshAt, group.RefreshInterval))
-	fmt.Fprintln(w, "Resolvers:")
-	if len(group.Config.RelayDomainResolver) == 0 {
-		fmt.Fprintln(w, "  -")
-	} else {
-		for _, resolver := range group.Config.RelayDomainResolver {
-			fmt.Fprintf(w, "  - url: %s\n", resolver.URL)
-			if resolver.Bootstrap != "" {
-				fmt.Fprintf(w, "    bootstrap: %s\n", resolver.Bootstrap)
-			}
-			if len(resolver.Domains) > 0 {
-				fmt.Fprintf(w, "    domains: %s\n", strings.Join(resolver.Domains, ","))
-			}
-		}
-	}
 	fmt.Fprintf(w, "Error:             %s\n", formatOptional(group.Error))
 	return nil
 }

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -860,7 +861,7 @@ func TestRelaysCommandShowsTCPLatencyAndNoModeColumn(t *testing.T) {
 	}
 }
 
-func TestRelayGroupCreateProviderFileIncludesResolvers(t *testing.T) {
+func TestRelayGroupCreateProviderFileIgnoresResolvers(t *testing.T) {
 	dir := t.TempDir()
 	providerPath := filepath.Join(dir, "provider.yaml")
 	if err := os.WriteFile(providerPath, []byte(`
@@ -885,7 +886,14 @@ resolvers:
 		if r.URL.Path != "/api/relaygroups" {
 			t.Fatalf("path = %q, want /api/relaygroups", r.URL.Path)
 		}
-		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+		raw, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("read request: %v", err)
+		}
+		if strings.Contains(string(raw), "resolver") {
+			t.Fatalf("request should not include resolver fields: %s", raw)
+		}
+		if err := json.Unmarshal(raw, &got); err != nil {
 			t.Fatalf("decode request: %v", err)
 		}
 		w.WriteHeader(http.StatusCreated)
@@ -912,9 +920,6 @@ resolvers:
 	}
 	if len(got.Proxies) != 1 || got.Proxies[0]["name"] != "hk-1" {
 		t.Fatalf("proxies = %#v", got.Proxies)
-	}
-	if len(got.RelayDomainResolver) != 1 || got.RelayDomainResolver[0].URL != "https://dns.example/dns-query" {
-		t.Fatalf("resolvers = %#v", got.RelayDomainResolver)
 	}
 	if !strings.Contains(out.String(), "created") {
 		t.Fatalf("output = %q", out.String())
@@ -970,13 +975,9 @@ func TestRelayGroupGetDescribe(t *testing.T) {
 			LastRefreshedAt: now,
 			NextRefreshAt:   now.Add(time.Hour),
 			Config: relayGroupConfig{
-				Type: "inline",
-				Name: "main",
-				Keep: "HK",
-				RelayDomainResolver: []relayUpstream{{
-					URL:       "https://dns.example/dns-query",
-					Bootstrap: "1.1.1.1",
-				}},
+				Type:    "inline",
+				Name:    "main",
+				Keep:    "HK",
 				Proxies: []map[string]any{{"name": "hk-1", "type": "ss", "server": "relay.example"}},
 			},
 		})
@@ -995,12 +996,12 @@ func TestRelayGroupGetDescribe(t *testing.T) {
 		t.Fatalf("Execute() error = %v", err)
 	}
 	text := out.String()
-	for _, want := range []string{"Name:", "main", "Relays:            1 (keep HK)", "Selected:          no (auto)", "Current Relay:", "hk-1 (untested, latency -, tc latency -)", "Last Refreshed:", "Resolvers:", "https://dns.example/dns-query"} {
+	for _, want := range []string{"Name:", "main", "Relays:            1 (keep HK)", "Selected:          no (auto)", "Current Relay:", "hk-1 (untested, latency -, tc latency -)", "Last Refreshed:"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("describe output missing %q:\n%s", want, text)
 		}
 	}
-	for _, unwanted := range []string{"TTL:", "Next Check:", "Next Refresh:", "Spec:"} {
+	for _, unwanted := range []string{"Resolvers:", "TTL:", "Next Check:", "Next Refresh:", "Spec:"} {
 		if strings.Contains(text, unwanted) {
 			t.Fatalf("describe output should not show %q:\n%s", unwanted, text)
 		}

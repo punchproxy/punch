@@ -497,9 +497,6 @@ func relayGroupResponses(statuses []relay.GroupStatus, cfgs []config.RelayGroup)
 	responses := make([]relayGroupResponse, 0, len(statuses))
 	for _, status := range statuses {
 		cfg := byName[status.Name]
-		if len(status.RelayDomainResolver) > 0 {
-			cfg.RelayDomainResolver = status.RelayDomainResolver
-		}
 		responses = append(responses, relayGroupResponse{
 			GroupStatus: status,
 			Config:      cfg,

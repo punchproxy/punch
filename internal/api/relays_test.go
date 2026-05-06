@@ -170,32 +170,6 @@ func TestRelayResponsesUseRuntimeSpec(t *testing.T) {
 	}
 }
 
-func TestRelayGroupResponsesUseRuntimeResolvers(t *testing.T) {
-	responses := relayGroupResponses([]relay.GroupStatus{{
-		Name: "guguairport",
-		Type: "remote",
-		RelayDomainResolver: []config.Upstream{{
-			URL:       "https://dns.example/dns-query",
-			Bootstrap: "1.1.1.1",
-		}},
-	}}, []config.RelayGroup{{
-		Type: "remote",
-		Name: "guguairport",
-		URL:  "https://example.test/provider.yaml",
-		RelayDomainResolver: []config.Upstream{{
-			URL: "https://fallback.example/dns-query",
-		}},
-	}})
-
-	if len(responses) != 1 {
-		t.Fatalf("responses = %d, want 1", len(responses))
-	}
-	resolvers := responses[0].Config.RelayDomainResolver
-	if len(resolvers) != 1 || resolvers[0].URL != "https://dns.example/dns-query" || resolvers[0].Bootstrap != "1.1.1.1" {
-		t.Fatalf("resolvers = %#v", resolvers)
-	}
-}
-
 func runRelayHandler(t *testing.T, handler http.HandlerFunc, method, target string, params map[string]string, body any) *httptest.ResponseRecorder {
 	t.Helper()
 	var buf bytes.Buffer

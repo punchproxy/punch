@@ -230,12 +230,11 @@ proxies:
     port: 8388
     cipher: aes-128-gcm
     password: example
-
-# Optional: resolvers used only to look up relay server hostnames
-resolvers:
-  - url: https://hk-resolver.example/dns-query
-    bootstrap: 223.5.5.5
 ```
+
+Relay hostnames resolve through the normal DNS upstream configuration. For
+provider domains that need a specific DNS server, add a domain-scoped upstream,
+for example `punchctl dns upstreams create https://some-dns-server --bootstrap 223.5.5.5 --domains sbs`.
 
 Don't commit real relay credentials or private subscription URLs to a repo.
 

@@ -155,18 +155,9 @@ func (s *Server) FlushCache() {
 	s.cache.Flush()
 }
 
-func (s *Server) ResolveRelayDomain(ctx context.Context, groupName, host string, upstreams []config.Upstream) ([]netip.Addr, time.Time, error) {
+func (s *Server) ResolveRelayDomain(ctx context.Context, groupName, host string) ([]netip.Addr, time.Time, error) {
 	if ip, err := netip.ParseAddr(host); err == nil {
 		return []netip.Addr{ip.Unmap()}, time.Time{}, nil
-	}
-
-	var resolverOverride *ResolverGroup
-	if len(upstreams) > 0 {
-		overrideUpstreams := make([]*UpstreamResolver, 0, len(upstreams))
-		for _, upstream := range upstreams {
-			overrideUpstreams = append(overrideUpstreams, NewUpstreamResolver(upstream.URL, upstream.Bootstrap, upstream.Domains...))
-		}
-		resolverOverride = NewResolverGroup(overrideUpstreams)
 	}
 
 	source := "relay"
@@ -174,38 +165,81 @@ func (s *Server) ResolveRelayDomain(ctx context.Context, groupName, host string,
 		source = "relay:" + groupName
 	}
 
+	qtypes := []uint16{dns.TypeA, dns.TypeAAAA}
+	results := make(chan relayDomainResolveResult, len(qtypes))
+	for _, qtype := range qtypes {
+		go func(qtype uint16) {
+			results <- s.resolveRelayDomainFamily(ctx, source, host, qtype)
+		}(qtype)
+	}
+
+	byQType := make(map[uint16]relayDomainResolveResult, len(qtypes))
+	for range qtypes {
+		result := <-results
+		byQType[result.qtype] = result
+	}
+
 	var ips []netip.Addr
 	var relayExpiry time.Time
-	for _, qtype := range []uint16{dns.TypeA, dns.TypeAAAA} {
-		msg := new(dns.Msg)
-		msg.SetQuestion(dns.Fqdn(host), qtype)
-		reply, _, _, _, err := s.serveMsgWithOptions(ctx, msg, source, true, resolverOverride, true)
-		if err != nil || reply == nil {
+	for _, qtype := range qtypes {
+		result := byQType[qtype]
+		if result.err != nil {
 			continue
 		}
-		if ttl := answerMinTTL(reply); ttl > 0 {
-			expiresAt := time.Now().Add(time.Duration(ttl) * time.Second)
-			if relayExpiry.IsZero() || expiresAt.Before(relayExpiry) {
-				relayExpiry = expiresAt
-			}
-		}
-		for _, rr := range reply.Answer {
-			switch ans := rr.(type) {
-			case *dns.A:
-				if ip, ok := netip.AddrFromSlice(ans.A); ok {
-					ips = append(ips, ip.Unmap())
-				}
-			case *dns.AAAA:
-				if ip, ok := netip.AddrFromSlice(ans.AAAA); ok {
-					ips = append(ips, ip.Unmap())
-				}
-			}
+		ips = append(ips, result.ips...)
+		if !result.expiresAt.IsZero() && (relayExpiry.IsZero() || result.expiresAt.Before(relayExpiry)) {
+			relayExpiry = result.expiresAt
 		}
 	}
 	if len(ips) == 0 {
 		return nil, time.Time{}, fmt.Errorf("no addresses for %s", host)
 	}
 	return ips, relayExpiry, nil
+}
+
+type relayDomainResolveResult struct {
+	qtype     uint16
+	ips       []netip.Addr
+	expiresAt time.Time
+	err       error
+}
+
+func (s *Server) resolveRelayDomainFamily(ctx context.Context, source, host string, qtype uint16) relayDomainResolveResult {
+	result := relayDomainResolveResult{qtype: qtype}
+	msg := new(dns.Msg)
+	msg.SetQuestion(dns.Fqdn(host), qtype)
+
+	reply, _, _, _, err := s.serveMsgWithOptions(ctx, msg, source, true, nil, true)
+	if err != nil {
+		result.err = err
+		return result
+	}
+	if reply == nil {
+		result.err = fmt.Errorf("no DNS response")
+		return result
+	}
+	if ttl := answerMinTTL(reply); ttl > 0 {
+		result.expiresAt = time.Now().Add(time.Duration(ttl) * time.Second)
+	}
+	for _, rr := range reply.Answer {
+		switch ans := rr.(type) {
+		case *dns.A:
+			if qtype != dns.TypeA {
+				continue
+			}
+			if ip, ok := netip.AddrFromSlice(ans.A); ok {
+				result.ips = append(result.ips, ip.Unmap())
+			}
+		case *dns.AAAA:
+			if qtype != dns.TypeAAAA {
+				continue
+			}
+			if ip, ok := netip.AddrFromSlice(ans.AAAA); ok {
+				result.ips = append(result.ips, ip.Unmap())
+			}
+		}
+	}
+	return result
 }
 
 func (s *Server) lookupFakeIP(domain string, qtype uint16) (netip.Addr, bool) {

@@ -71,18 +71,17 @@ func (s *Selector) GroupList() []GroupStatus {
 			groupType = "direct"
 		}
 		status := GroupStatus{
-			Name:                g.name,
-			Type:                groupType,
-			RelayCount:          len(g.dialers),
-			Selected:            selected,
-			Select:              displaySelectMode(g.mode),
-			RemoteAddress:       g.sourceURL,
-			CheckInterval:       int64(s.checkInterval.Seconds()),
-			LastRefreshedAt:     g.lastRefreshedAt,
-			NextRefreshAt:       g.nextRefreshAt,
-			RefreshInterval:     int64(g.refreshEvery.Seconds()),
-			RelayDomainResolver: cloneUpstreams(g.resolvers),
-			Error:               g.loadError,
+			Name:            g.name,
+			Type:            groupType,
+			RelayCount:      len(g.dialers),
+			Selected:        selected,
+			Select:          displaySelectMode(g.mode),
+			RemoteAddress:   g.sourceURL,
+			CheckInterval:   int64(s.checkInterval.Seconds()),
+			LastRefreshedAt: g.lastRefreshedAt,
+			NextRefreshAt:   g.nextRefreshAt,
+			RefreshInterval: int64(g.refreshEvery.Seconds()),
+			Error:           g.loadError,
 		}
 		if len(g.dialers) > 0 {
 			d := g.dialers[s.activeDialerIndexLocked(g)]

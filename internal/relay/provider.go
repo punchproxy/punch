@@ -13,8 +13,7 @@ import (
 )
 
 type relayPayload struct {
-	Proxies   []map[string]any  `yaml:"proxies"`
-	Resolvers []config.Upstream `yaml:"resolvers"`
+	Proxies []map[string]any `yaml:"proxies"`
 }
 
 // onAssetReady is invoked by the asset manager once a remote relay payload
@@ -50,7 +49,6 @@ func (s *Selector) buildGroup(cfg config.RelayGroup, assetManager *assets.Manage
 	}
 
 	var mappings []map[string]any
-	upstreams := cfg.RelayDomainResolver
 	switch cfg.Type {
 	case "remote":
 		slog.Debug("load remote relay group", "group", name, "url", cfg.URL)
@@ -67,16 +65,12 @@ func (s *Selector) buildGroup(cfg config.RelayGroup, assetManager *assets.Manage
 				return g, nil
 			}
 			urlCache[cfg.URL] = loaded
-			slog.Debug("cached remote relay payload", "group", name, "url", cfg.URL, "proxies", len(loaded.Proxies), "resolvers", len(loaded.Resolvers))
+			slog.Debug("cached remote relay payload", "group", name, "url", cfg.URL, "proxies", len(loaded.Proxies))
 			payload = loaded
 		} else {
-			slog.Debug("reuse remote relay payload", "group", name, "url", cfg.URL, "proxies", len(payload.Proxies), "resolvers", len(payload.Resolvers))
+			slog.Debug("reuse remote relay payload", "group", name, "url", cfg.URL, "proxies", len(payload.Proxies))
 		}
 		mappings = payload.Proxies
-		if len(payload.Resolvers) > 0 {
-			upstreams = payload.Resolvers
-		}
-		g.resolvers = cloneUpstreams(upstreams)
 		if status, ok := assetManager.Status(cfg.URL); ok {
 			g.lastRefreshedAt = status.LastUpdated
 			if g.refreshEvery > 0 {
@@ -86,7 +80,6 @@ func (s *Selector) buildGroup(cfg config.RelayGroup, assetManager *assets.Manage
 	case "inline":
 		slog.Debug("load inline relay group", "group", name, "proxies", len(cfg.Proxies))
 		mappings = cfg.Proxies
-		g.resolvers = cloneUpstreams(upstreams)
 	default:
 		return nil, fmt.Errorf("unsupported relay group type %q", cfg.Type)
 	}
@@ -104,7 +97,7 @@ func (s *Selector) buildGroup(cfg config.RelayGroup, assetManager *assets.Manage
 
 	dialers := make([]Dialer, 0, len(filtered))
 	for _, mapping := range filtered {
-		dialer, err := s.buildDialer(name, mapping, upstreams)
+		dialer, err := s.buildDialer(name, mapping)
 		if err != nil {
 			slog.Warn("skip invalid relay in relay group", "group", name, "error", err)
 			continue
@@ -144,22 +137,8 @@ func loadRemotePayload(url string, assetManager *assets.Manager) (relayPayload, 
 		return relayPayload{}, fmt.Errorf("relay payload %s has no relays", url)
 	}
 	schema.Proxies = dedupeRelayMappings(schema.Proxies)
-	slog.Debug("parsed remote relay payload", "url", url, "proxies", len(schema.Proxies), "resolvers", len(schema.Resolvers))
+	slog.Debug("parsed remote relay payload", "url", url, "proxies", len(schema.Proxies))
 	return schema, nil
-}
-
-func cloneUpstreams(upstreams []config.Upstream) []config.Upstream {
-	if len(upstreams) == 0 {
-		return nil
-	}
-	out := make([]config.Upstream, len(upstreams))
-	for i, upstream := range upstreams {
-		out[i] = upstream
-		if len(upstream.Domains) > 0 {
-			out[i].Domains = append([]string(nil), upstream.Domains...)
-		}
-	}
-	return out
 }
 
 func dedupeRelayMappings(mappings []map[string]any) []map[string]any {
@@ -228,14 +207,16 @@ func filterRelayMappings(mappings []map[string]any, keepExpr, removeExpr string)
 	return filtered, nil
 }
 
-func (s *Selector) buildDialer(groupName string, mapping map[string]any, upstreams []config.Upstream) (Dialer, error) {
-	if len(upstreams) == 0 {
+func (s *Selector) buildDialer(groupName string, mapping map[string]any) (Dialer, error) {
+	if s.resolveRelayDomain == nil {
 		return NewDialerFromMapping(mapping)
 	}
-	if s.resolveRelayDomain == nil {
-		return nil, fmt.Errorf("relay resolver unavailable")
+	validationDialer, err := NewDialerFromMapping(mapping)
+	if err != nil {
+		return nil, err
 	}
-	return NewLazyRelayDialer(groupName, mapping, upstreams, s.resolveRelayDomain)
+	_ = validationDialer.Close()
+	return NewLazyRelayDialer(groupName, mapping, s.resolveRelayDomain)
 }
 
 func (s *Selector) directGroup() *group {

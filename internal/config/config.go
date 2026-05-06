@@ -105,15 +105,14 @@ type Check struct {
 }
 
 type RelayGroup struct {
-	Type                string           `json:"type"`
-	Name                string           `json:"name"`
-	URL                 string           `json:"url,omitempty"`
-	RefreshDuration     int              `json:"refresh_duration,omitempty"`
-	Keep                string           `json:"keep,omitempty"`
-	Remove              string           `json:"remove,omitempty"`
-	Select              string           `json:"select,omitempty"`
-	RelayDomainResolver []Upstream       `json:"relay_domain_resolver,omitempty"`
-	Proxies             []map[string]any `json:"proxies,omitempty"`
+	Type            string           `json:"type"`
+	Name            string           `json:"name"`
+	URL             string           `json:"url,omitempty"`
+	RefreshDuration int              `json:"refresh_duration,omitempty"`
+	Keep            string           `json:"keep,omitempty"`
+	Remove          string           `json:"remove,omitempty"`
+	Select          string           `json:"select,omitempty"`
+	Proxies         []map[string]any `json:"proxies,omitempty"`
 }
 
 type API struct {
@@ -470,7 +469,6 @@ func cloneRelayGroups(groups []RelayGroup) []RelayGroup {
 	out := make([]RelayGroup, len(groups))
 	for i, group := range groups {
 		out[i] = group
-		out[i].RelayDomainResolver = cloneUpstreams(group.RelayDomainResolver)
 		out[i].Proxies = make([]map[string]any, len(group.Proxies))
 		for j, proxy := range group.Proxies {
 			out[i].Proxies[j] = cloneStringAnyMap(proxy)
@@ -647,11 +645,6 @@ func loadRelayGroups(s *Store) ([]RelayGroup, error) {
 			Remove:          row.Remove,
 			Select:          row.Select,
 		}
-		resolvers, err := loadRelayGroupResolvers(s, row.Position)
-		if err != nil {
-			return nil, err
-		}
-		group.RelayDomainResolver = resolvers
 		proxies, err := loadRelayGroupProxies(s, row.Position)
 		if err != nil {
 			return nil, err
@@ -660,28 +653,6 @@ func loadRelayGroups(s *Store) ([]RelayGroup, error) {
 		groups = append(groups, group)
 	}
 	return groups, nil
-}
-
-func loadRelayGroupResolvers(s *Store, groupPosition int) ([]Upstream, error) {
-	var rows []relayGroupResolverModel
-	if err := s.db.Where("group_position = ?", groupPosition).Order("position").Find(&rows).Error; err != nil {
-		return nil, fmt.Errorf("load relay group resolvers: %w", err)
-	}
-	resolvers := make([]Upstream, 0, len(rows))
-	for _, row := range rows {
-		resolver := Upstream{URL: row.URL, Bootstrap: row.Bootstrap}
-		var domainRows []relayGroupResolverDomainModel
-		err := s.db.Where("group_position = ? AND resolver_position = ?", row.GroupPosition, row.Position).
-			Order("position").Find(&domainRows).Error
-		if err != nil {
-			return nil, fmt.Errorf("load relay group resolver domains: %w", err)
-		}
-		for _, domainRow := range domainRows {
-			resolver.Domains = append(resolver.Domains, domainRow.Domain)
-		}
-		resolvers = append(resolvers, resolver)
-	}
-	return resolvers, nil
 }
 
 func loadRelayGroupProxies(s *Store, groupPosition int) ([]map[string]any, error) {
@@ -818,12 +789,6 @@ func replaceDNSRules(tx *gorm.DB, rules DNSRules) error {
 }
 
 func replaceRelayGroups(tx *gorm.DB, groups []RelayGroup) error {
-	if err := tx.Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&relayGroupResolverDomainModel{}).Error; err != nil {
-		return fmt.Errorf("clear relay group resolver domains: %w", err)
-	}
-	if err := tx.Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&relayGroupResolverModel{}).Error; err != nil {
-		return fmt.Errorf("clear relay group resolvers: %w", err)
-	}
 	if err := tx.Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&relayGroupProxyModel{}).Error; err != nil {
 		return fmt.Errorf("clear relay group proxies: %w", err)
 	}
@@ -831,8 +796,6 @@ func replaceRelayGroups(tx *gorm.DB, groups []RelayGroup) error {
 		return fmt.Errorf("clear relay groups: %w", err)
 	}
 	rows := make([]relayGroupModel, 0, len(groups))
-	var resolverRows []relayGroupResolverModel
-	var resolverDomainRows []relayGroupResolverDomainModel
 	var proxyRows []relayGroupProxyModel
 	for i, group := range groups {
 		rows = append(rows, relayGroupModel{
@@ -845,22 +808,6 @@ func replaceRelayGroups(tx *gorm.DB, groups []RelayGroup) error {
 			Remove:          group.Remove,
 			Select:          group.Select,
 		})
-		for j, resolver := range group.RelayDomainResolver {
-			resolverRows = append(resolverRows, relayGroupResolverModel{
-				GroupPosition: i,
-				Position:      j,
-				URL:           resolver.URL,
-				Bootstrap:     resolver.Bootstrap,
-			})
-			for k, domain := range resolver.Domains {
-				resolverDomainRows = append(resolverDomainRows, relayGroupResolverDomainModel{
-					GroupPosition:    i,
-					ResolverPosition: j,
-					Position:         k,
-					Domain:           domain,
-				})
-			}
-		}
 		for j, proxy := range group.Proxies {
 			raw, err := yaml.Marshal(proxy)
 			if err != nil {
@@ -876,16 +823,6 @@ func replaceRelayGroups(tx *gorm.DB, groups []RelayGroup) error {
 	if len(rows) > 0 {
 		if err := tx.Create(&rows).Error; err != nil {
 			return fmt.Errorf("save relay groups: %w", err)
-		}
-	}
-	if len(resolverRows) > 0 {
-		if err := tx.Create(&resolverRows).Error; err != nil {
-			return fmt.Errorf("save relay group resolvers: %w", err)
-		}
-	}
-	if len(resolverDomainRows) > 0 {
-		if err := tx.Create(&resolverDomainRows).Error; err != nil {
-			return fmt.Errorf("save relay group resolver domains: %w", err)
 		}
 	}
 	if len(proxyRows) > 0 {
@@ -1113,13 +1050,6 @@ func validateConfig(cfg *Config) error {
 	for i, upstream := range cfg.DNS.Upstream {
 		if err := validateDNSUpstream(upstream); err != nil {
 			return fmt.Errorf("dns.upstream[%d]: %w", i, err)
-		}
-	}
-	for i, group := range cfg.Relay.Groups {
-		for j, upstream := range group.RelayDomainResolver {
-			if err := validateDNSUpstream(upstream); err != nil {
-				return fmt.Errorf("relay.groups[%d].relay_domain_resolver[%d]: %w", i, j, err)
-			}
 		}
 	}
 	return nil

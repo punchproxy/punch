@@ -13,7 +13,6 @@ import (
 
 	"github.com/metacubex/mihomo/adapter"
 	C "github.com/metacubex/mihomo/constant"
-	"github.com/punchproxy/punch/internal/config"
 )
 
 // Dialer represents an upstream relay that can dial connections.
@@ -28,7 +27,7 @@ type Dialer interface {
 }
 
 type DialContextFunc func(ctx context.Context, network, address string) (net.Conn, error)
-type RelayResolveFunc func(ctx context.Context, groupName, host string, upstreams []config.Upstream) ([]netip.Addr, time.Time, error)
+type RelayResolveFunc func(ctx context.Context, groupName, host string) ([]netip.Addr, time.Time, error)
 
 // RelayDialer wraps a mihomo relay adapter.
 type RelayDialer struct {
@@ -119,9 +118,8 @@ type LazyRelayDialer struct {
 	relayType string
 	addr      string
 
-	mapping   map[string]any
-	upstreams []config.Upstream
-	resolver  RelayResolveFunc
+	mapping  map[string]any
+	resolver RelayResolveFunc
 
 	resolved  Dialer
 	expiresAt time.Time
@@ -177,8 +175,8 @@ func (d *LazyRelayDialer) resolvedRelayAddr(ctx context.Context) (string, error)
 	if port == "" || port == "<nil>" {
 		return "", fmt.Errorf("relay %s missing port", d.name)
 	}
-	if net.ParseIP(server) == nil && d.resolver != nil && len(d.upstreams) > 0 {
-		ips, _, err := d.resolver(ctx, d.groupName, server, d.upstreams)
+	if net.ParseIP(server) == nil && d.resolver != nil {
+		ips, _, err := d.resolver(ctx, d.groupName, server)
 		if err != nil {
 			return "", fmt.Errorf("resolve relay server %q: %w", server, err)
 		}
@@ -206,10 +204,10 @@ func (d *LazyRelayDialer) getDialer(ctx context.Context, allowResolve bool) (Dia
 
 	mapping := cloneRelayMapping(d.mapping)
 	expiresAt := time.Time{}
-	if d.resolver != nil && len(d.upstreams) > 0 {
+	if d.resolver != nil {
 		server, _ := mapping["server"].(string)
 		if server != "" && net.ParseIP(server) == nil {
-			ips, ttlExpiry, err := d.resolver(ctx, d.groupName, server, d.upstreams)
+			ips, ttlExpiry, err := d.resolver(ctx, d.groupName, server)
 			if err != nil {
 				return nil, fmt.Errorf("resolve relay server %q: %w", server, err)
 			}
@@ -260,7 +258,7 @@ func NewDialerFromMapping(mapping map[string]any) (Dialer, error) {
 	return &RelayDialer{adapter: relay}, nil
 }
 
-func NewLazyRelayDialer(groupName string, mapping map[string]any, upstreams []config.Upstream, resolver RelayResolveFunc) (Dialer, error) {
+func NewLazyRelayDialer(groupName string, mapping map[string]any, resolver RelayResolveFunc) (Dialer, error) {
 	name, _ := mapping["name"].(string)
 	if name == "" {
 		return nil, fmt.Errorf("relay missing name")
@@ -280,7 +278,6 @@ func NewLazyRelayDialer(groupName string, mapping map[string]any, upstreams []co
 		relayType: relayType,
 		addr:      addr,
 		mapping:   cloneRelayMapping(mapping),
-		upstreams: append([]config.Upstream(nil), upstreams...),
 		resolver:  resolver,
 	}, nil
 }
