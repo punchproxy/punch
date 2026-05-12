@@ -19,10 +19,18 @@ func (s *Server) handleDNSFakeIPs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	mappings := s.dns.FakeIPPool().Snapshot()
+	activeSessions := map[string][]string(nil)
+	if s.sessions != nil {
+		activeSessions = s.sessions.ActiveSessionIDsByFakeIP()
+	}
 	entries := make([]fakeIPEntry, 0, len(mappings))
 	for _, mapping := range mappings {
+		sessionIDs := mapping.SessionIDs
+		if activeSessions != nil {
+			sessionIDs = activeSessions[mapping.IP.String()]
+		}
 		state := "idle"
-		if mapping.Active() {
+		if len(sessionIDs) > 0 {
 			state = "active"
 		}
 		entries = append(entries, fakeIPEntry{
@@ -30,7 +38,7 @@ func (s *Server) handleDNSFakeIPs(w http.ResponseWriter, r *http.Request) {
 			Domain:     mapping.Domain,
 			State:      state,
 			ExpiresAt:  mapping.ExpiresAt,
-			SessionIDs: mapping.SessionIDs,
+			SessionIDs: sessionIDs,
 		})
 	}
 	writeJSON(w, http.StatusOK, entries)

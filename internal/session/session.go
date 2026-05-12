@@ -33,14 +33,15 @@ type Session struct {
 	EndTime        time.Time    `json:"end_time,omitempty"`
 	DNSRequestedAt time.Time    `json:"dns_requested_at,omitempty"`
 
-	mu              sync.RWMutex
-	connectedAt     time.Time
-	requestSentAt   time.Time
-	firstByteAt     time.Time
-	closeReason     string
-	trace           []TraceEntry
-	closeFn         func()
-	updateFn        func()
+	mu            sync.RWMutex
+	connectedAt   time.Time
+	requestSentAt time.Time
+	firstByteAt   time.Time
+	closeReason   string
+	trace         []TraceEntry
+	closeOnce     sync.Once
+	closeFn       func()
+	updateFn      func()
 }
 
 type TraceEntry struct {
@@ -52,8 +53,9 @@ func (s *Session) UploadBytes() int64   { return s.Upload.Load() }
 func (s *Session) DownloadBytes() int64 { return s.Download.Load() }
 
 func (s *Session) Close() {
-	if s.closeFn != nil {
-		s.closeFn()
+	fn := s.closeFn
+	if fn != nil {
+		s.closeOnce.Do(fn)
 	}
 }
 

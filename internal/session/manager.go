@@ -13,6 +13,7 @@ import (
 type Manager struct {
 	mu            sync.RWMutex
 	active        map[string]*Session
+	activeFakeIPs map[string]map[string]struct{}
 	closed        []*Session
 	closedMaxSize int
 	bus           *eventbus.Bus
@@ -32,6 +33,7 @@ func NewManager(bus *eventbus.Bus, closedBufferSize int) *Manager {
 	}
 	return &Manager{
 		active:        make(map[string]*Session),
+		activeFakeIPs: make(map[string]map[string]struct{}),
 		closedMaxSize: closedBufferSize,
 		bus:           bus,
 	}
@@ -69,6 +71,7 @@ func (m *Manager) NewSession(domain, source, dstIP string, dstPort int, protocol
 
 	m.mu.Lock()
 	m.active[s.ID] = s
+	m.addActiveFakeIPLocked(s)
 	m.mu.Unlock()
 
 	s.SetUpdateFunc(func() {
@@ -94,6 +97,7 @@ func (m *Manager) CloseSession(id string, status Status) {
 		return
 	}
 	delete(m.active, id)
+	m.removeActiveFakeIPLocked(s)
 
 	s.Status = status
 	s.EndTime = time.Now()
@@ -114,6 +118,8 @@ func (m *Manager) CloseSession(id string, status Status) {
 		m.closed = nil
 	}
 	m.mu.Unlock()
+
+	s.Close()
 
 	m.bus.Publish(eventbus.Event{
 		Type: eventbus.EventSessionClose,
@@ -214,6 +220,24 @@ func (m *Manager) ActiveSessions() []*Session {
 	return result
 }
 
+func (m *Manager) ActiveSessionIDsByFakeIP() map[string][]string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	result := make(map[string][]string, len(m.activeFakeIPs))
+	for fakeIP, ids := range m.activeFakeIPs {
+		if len(ids) == 0 {
+			continue
+		}
+		list := make([]string, 0, len(ids))
+		for id := range ids {
+			list = append(list, id)
+		}
+		sort.Strings(list)
+		result[fakeIP] = list
+	}
+	return result
+}
+
 func (m *Manager) ClosedSessions() []*Session {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -268,4 +292,30 @@ func (m *Manager) TrafficRateSnapshot() (upload, download, uploadBPS, downloadBP
 	m.rateUpload = upload
 	m.rateDownload = download
 	return
+}
+
+func (m *Manager) addActiveFakeIPLocked(s *Session) {
+	if s.FakeIP == "" {
+		return
+	}
+	ids := m.activeFakeIPs[s.FakeIP]
+	if ids == nil {
+		ids = make(map[string]struct{})
+		m.activeFakeIPs[s.FakeIP] = ids
+	}
+	ids[s.ID] = struct{}{}
+}
+
+func (m *Manager) removeActiveFakeIPLocked(s *Session) {
+	if s.FakeIP == "" {
+		return
+	}
+	ids := m.activeFakeIPs[s.FakeIP]
+	if ids == nil {
+		return
+	}
+	delete(ids, s.ID)
+	if len(ids) == 0 {
+		delete(m.activeFakeIPs, s.FakeIP)
+	}
 }
