@@ -144,6 +144,42 @@ func TestStatusCommand(t *testing.T) {
 	}
 }
 
+func TestStopCommand(t *testing.T) {
+	var gotMethod string
+	var gotAuth string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotAuth = r.Header.Get("Authorization")
+		if r.URL.Path != "/api/shutdown" {
+			t.Fatalf("path = %q, want /api/shutdown", r.URL.Path)
+		}
+		w.WriteHeader(http.StatusAccepted)
+		_, _ = w.Write([]byte(`{"status":"shutting_down"}`))
+	}))
+	defer server.Close()
+
+	var out bytes.Buffer
+	cmd := newRootCommand(commandConfig{
+		out:    &out,
+		errOut: &bytes.Buffer{},
+		client: server.Client(),
+	})
+	cmd.SetArgs([]string{"--addr", server.URL, "--token", "secret", "stop"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if gotMethod != http.MethodPost {
+		t.Fatalf("method = %q, want POST", gotMethod)
+	}
+	if gotAuth != "Bearer secret" {
+		t.Fatalf("Authorization = %q, want Bearer secret", gotAuth)
+	}
+	if !strings.Contains(out.String(), "shutdown requested") {
+		t.Fatalf("output = %q", out.String())
+	}
+}
+
 func TestHealthChartEncodesLatencyHeight(t *testing.T) {
 	records := []statusHealthRecord{
 		{Status: "healthy", LatencyMS: 10},

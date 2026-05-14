@@ -28,6 +28,7 @@ type Server struct {
 	tun        *tun.Engine
 	startedAt  time.Time
 	version    string
+	shutdown   func()
 }
 
 func NewServer(cfg config.API, st *config.Store, dns *pdns.Server, selector *relay.Selector, sessions *session.Manager) *Server {
@@ -53,6 +54,10 @@ func (s *Server) SetVersion(version string) {
 	s.version = version
 }
 
+func (s *Server) SetShutdownFunc(fn func()) {
+	s.shutdown = fn
+}
+
 func (s *Server) Start() error {
 	r := chi.NewRouter()
 	r.Use(middleware.Recoverer)
@@ -64,6 +69,7 @@ func (s *Server) Start() error {
 
 	r.Route("/api", func(r chi.Router) {
 		r.Get("/status", s.handleStatus)
+		r.Post("/shutdown", s.handleShutdown)
 		r.Get("/system", s.handleSystem)
 		r.Get("/system/routes", s.handleSystemRoutes)
 		r.Get("/system/routes/get", s.handleGetSystemRoute)

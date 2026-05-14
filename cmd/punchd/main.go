@@ -171,6 +171,14 @@ func main() {
 	apiServer := api.NewServer(cfg.API, st, dnsServer, selector, sessions)
 	apiServer.SetTUNEngine(tunEngine)
 	apiServer.SetVersion(version)
+	shutdownCh := make(chan struct{})
+	apiServer.SetShutdownFunc(func() {
+		select {
+		case <-shutdownCh:
+		default:
+			close(shutdownCh)
+		}
+	})
 
 	// --- Start all components ---
 
@@ -235,6 +243,9 @@ func main() {
 		select {
 		case sig := <-sigCh:
 			slog.Info("received signal, shutting down", "signal", sig)
+			goto shutdown
+		case <-shutdownCh:
+			slog.Info("received API shutdown request")
 			goto shutdown
 		case <-reloadCh:
 			slog.Info("received SIGHUP, reloading config")
