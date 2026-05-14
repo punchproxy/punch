@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	"github.com/punchproxy/punch/internal/config"
 	pdns "github.com/punchproxy/punch/internal/dns"
 	"github.com/punchproxy/punch/internal/dnsrule"
+	"github.com/punchproxy/punch/internal/logging"
 	"github.com/punchproxy/punch/internal/relay"
 	"github.com/punchproxy/punch/internal/session"
 	"github.com/punchproxy/punch/internal/tun"
@@ -78,6 +80,8 @@ func (s *Server) Start() error {
 		r.Delete("/system/routes", s.handleDeleteSystemRoute)
 		r.Get("/config", s.handleConfig)
 		r.Put("/config/{key}", s.handleSetConfigValue)
+		r.Get("/logs", s.handleLogs)
+		r.Get("/logs/stream", s.handleLogStream)
 		r.Get("/dns/queries/stream", s.handleDNSQueryStream)
 		r.Get("/dns/upstreams", s.handleDNSUpstreams)
 		r.Post("/dns/upstreams", s.handleCreateDNSUpstream)
@@ -134,6 +138,46 @@ func (s *Server) Start() error {
 	}()
 
 	return nil
+}
+
+func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
+	since, _ := strconv.ParseUint(r.URL.Query().Get("since"), 10, 64)
+	entries, nextSeq := logging.SnapshotSince(since)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"next_seq": nextSeq,
+		"entries":  entries,
+	})
+}
+
+func (s *Server) handleLogStream(w http.ResponseWriter, r *http.Request) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming not supported", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("X-Accel-Buffering", "no")
+	w.WriteHeader(http.StatusOK)
+	flusher.Flush()
+
+	ch, unsubscribe := logging.Subscribe()
+	defer unsubscribe()
+
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case line, ok := <-ch:
+			if !ok {
+				return
+			}
+			if _, err := w.Write([]byte(line + "\n")); err != nil {
+				return
+			}
+			flusher.Flush()
+		}
+	}
 }
 
 func (s *Server) Stop() error {

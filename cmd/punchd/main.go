@@ -22,6 +22,7 @@ import (
 	pdns "github.com/punchproxy/punch/internal/dns"
 	"github.com/punchproxy/punch/internal/eventbus"
 	"github.com/punchproxy/punch/internal/fakeip"
+	"github.com/punchproxy/punch/internal/logging"
 	"github.com/punchproxy/punch/internal/relay"
 	"github.com/punchproxy/punch/internal/session"
 	"github.com/punchproxy/punch/internal/tun"
@@ -347,32 +348,5 @@ func saveFakeIPs(st *config.Store, pool *fakeip.Pool) error {
 }
 
 func setupLogging(level, file string) {
-	var logLevel slog.Level
-	switch level {
-	case "debug":
-		logLevel = slog.LevelDebug
-	case "warn":
-		logLevel = slog.LevelWarn
-	case "error":
-		logLevel = slog.LevelError
-	default:
-		logLevel = slog.LevelInfo
-	}
-
-	opts := &slog.HandlerOptions{Level: logLevel}
-
-	var handler slog.Handler
-	if file != "" {
-		f, err := os.OpenFile(file, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "warning: cannot open log file %s: %v\n", file, err)
-			handler = slog.NewTextHandler(os.Stderr, opts)
-		} else {
-			handler = slog.NewTextHandler(f, opts)
-		}
-	} else {
-		handler = slog.NewTextHandler(os.Stderr, opts)
-	}
-
-	slog.SetDefault(slog.New(handler))
+	logging.Setup(level, file)
 }

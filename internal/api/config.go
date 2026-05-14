@@ -9,6 +9,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/punchproxy/punch/internal/config"
+	"github.com/punchproxy/punch/internal/logging"
 )
 
 type configEntry struct {
@@ -62,6 +63,9 @@ func (s *Server) handleSetConfigValue(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.sessions.SetHistoryLimit(parsed)
+	}
+	if key == "system.log_level" {
+		logging.SetLevel(req.Value)
 	}
 	if s.selector != nil && isLiveRelayConfigKey(key) {
 		cfg, err := config.Snapshot()
