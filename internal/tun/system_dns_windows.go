@@ -4,12 +4,11 @@ package tun
 
 import (
 	"fmt"
-	"os/exec"
 	"strings"
 )
 
-func overrideSystemDNS(serverIP, _ string) (*systemDNSOverride, error) {
-	states, err := currentSystemDNS("")
+func overrideSystemDNS(serverIP, iface string) (*systemDNSOverride, error) {
+	states, err := currentSystemDNS(iface)
 	if err != nil {
 		return nil, err
 	}
@@ -21,19 +20,28 @@ func overrideSystemDNS(serverIP, _ string) (*systemDNSOverride, error) {
 	}
 
 	return newSystemDNSOverride(serverIP, states, func() ([]systemDNSState, error) {
-		return currentSystemDNS("")
+		return currentSystemDNS(iface)
 	}, windowsApplyDNSOverride, windowsRestoreDNS), nil
 }
 
-func currentSystemDNS(_ string) ([]systemDNSState, error) {
-	const listScript = `$ErrorActionPreference='Stop'; Get-DnsClientServerAddress -AddressFamily IPv4 | Where-Object { $_.InterfaceOperationalStatus -eq 'Up' -and $_.InterfaceAlias -notlike 'Loopback*' } | ForEach-Object { $servers = if ($_.ServerAddresses) { $_.ServerAddresses -join ',' } else { '' }; Write-Output ($_.InterfaceAlias + '|' + $servers) }`
-	out, err := exec.Command("powershell", "-NoProfile", "-Command", listScript).CombinedOutput()
+func currentSystemDNS(iface string) ([]systemDNSState, error) {
+	out, err := windowsPowerShellCommand(windowsCurrentDNSScript(iface)).CombinedOutput()
 	if err != nil {
 		return nil, fmt.Errorf("list dns client server addresses: %s: %w", strings.TrimSpace(string(out)), err)
 	}
+	return windowsParseDNSStates(string(out)), nil
+}
 
+func windowsCurrentDNSScript(excludedIface string) string {
+	return fmt.Sprintf(
+		`$ErrorActionPreference='Stop'; $excluded = %s; Get-NetAdapter | Where-Object { $_.Status -eq 'Up' -and $_.Name -notlike 'Loopback*' -and ($excluded -eq '' -or $_.Name -ine $excluded) } | ForEach-Object { $dns = Get-DnsClientServerAddress -InterfaceAlias $_.Name -AddressFamily IPv4 -ErrorAction Stop; $servers = if ($dns.ServerAddresses) { $dns.ServerAddresses -join ',' } else { '' }; Write-Output ($_.Name + '|' + $servers) }`,
+		windowsPowerShellQuote(excludedIface),
+	)
+}
+
+func windowsParseDNSStates(output string) []systemDNSState {
 	var states []systemDNSState
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+	for _, line := range strings.Split(strings.TrimSpace(output), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
@@ -48,13 +56,13 @@ func currentSystemDNS(_ string) ([]systemDNSState, error) {
 		}
 		states = append(states, state)
 	}
-	return states, nil
+	return states
 }
 
 func windowsApplyDNSOverride(states []systemDNSState, serverIP string) error {
 	for _, state := range states {
 		script := fmt.Sprintf(`$ErrorActionPreference='Stop'; Set-DnsClientServerAddress -InterfaceAlias %q -ServerAddresses @(%q)`, state.Name, serverIP)
-		if out, err := exec.Command("powershell", "-NoProfile", "-Command", script).CombinedOutput(); err != nil {
+		if out, err := windowsPowerShellCommand(script).CombinedOutput(); err != nil {
 			return fmt.Errorf("set dns servers for %s: %s: %w", state.Name, strings.TrimSpace(string(out)), err)
 		}
 	}
@@ -74,7 +82,7 @@ func windowsRestoreDNS(states []systemDNSState) error {
 			}
 			script = fmt.Sprintf(`$ErrorActionPreference='Stop'; Set-DnsClientServerAddress -InterfaceAlias %q -ServerAddresses @(%s)`, state.Name, strings.Join(quoted, ","))
 		}
-		if out, err := exec.Command("powershell", "-NoProfile", "-Command", script).CombinedOutput(); err != nil && firstErr == nil {
+		if out, err := windowsPowerShellCommand(script).CombinedOutput(); err != nil && firstErr == nil {
 			firstErr = fmt.Errorf("restore dns servers for %s: %s: %w", state.Name, strings.TrimSpace(string(out)), err)
 		}
 	}

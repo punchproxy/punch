@@ -116,7 +116,11 @@ func windowsRouteNextHop(prefix netip.Prefix) string {
 }
 
 func windowsPowerShellCommand(script string) *exec.Cmd {
-	return exec.Command("powershell", "-NoProfile", "-Command", script)
+	return exec.Command("powershell", "-NoProfile", "-Command", windowsPowerShellUTF8Script(script))
+}
+
+func windowsPowerShellUTF8Script(script string) string {
+	return `$OutputEncoding = [System.Text.UTF8Encoding]::new(); [Console]::OutputEncoding = $OutputEncoding; ` + script
 }
 
 func windowsPowerShellQuote(value string) string {
