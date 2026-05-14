@@ -100,7 +100,11 @@ func (s *Selector) BenchmarkTarget(name string) error {
 	return s.benchmarkTargets(targets, targetGroup, benchmarkWholeGroup)
 }
 
-func (s *Selector) triggerFullBenchmarkAfterSelectedCheck(target benchmarkTarget, failed bool) {
+func (s *Selector) triggerFullBenchmarkAfterSelectedCheck(target benchmarkTarget, failed bool, internetDown bool) {
+	if failed && internetDown {
+		slog.Debug("selected relay check failed while internet check is down; skipping failure count", "group", target.group.name, "relay", target.dialer.Name())
+		return
+	}
 	failures, trigger := s.recordSelectedCheckResult(target, failed)
 	if !trigger {
 		return
@@ -486,7 +490,11 @@ func tcpConnectLatencyWithDialer(ctx context.Context, dialContext DialContextFun
 		return 0, err
 	}
 	_ = conn.Close()
-	return time.Since(start), nil
+	latency := time.Since(start)
+	if latency <= 0 {
+		latency = time.Nanosecond
+	}
+	return latency, nil
 }
 
 func testURLLatencyOnce(ctx context.Context, client *http.Client, rawURL string) (time.Duration, error) {
@@ -503,7 +511,11 @@ func testURLLatencyOnce(ctx context.Context, client *http.Client, rawURL string)
 	if resp.StatusCode < 200 || resp.StatusCode >= 400 {
 		return 0, fmt.Errorf("test url returned HTTP %d", resp.StatusCode)
 	}
-	return time.Since(start), nil
+	latency := time.Since(start)
+	if latency <= 0 {
+		latency = time.Nanosecond
+	}
+	return latency, nil
 }
 
 func (s *Selector) applyRelayCheckResultLocked(h *RelayHealth, result relayCheckResult) {

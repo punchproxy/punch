@@ -35,6 +35,8 @@ func (s *Selector) CheckSelectedConnectivity() {
 	var outsideTarget benchmarkTarget
 	var outsideChecked bool
 	var outsideFailed bool
+	var domesticChecked bool
+	var domesticFailed bool
 	var wg sync.WaitGroup
 	wg.Add(2)
 	go func() {
@@ -43,11 +45,11 @@ func (s *Selector) CheckSelectedConnectivity() {
 	}()
 	go func() {
 		defer wg.Done()
-		s.CheckDomesticConnectivity()
+		domesticChecked, domesticFailed = s.CheckDomesticConnectivity()
 	}()
 	wg.Wait()
 	if outsideChecked {
-		s.triggerFullBenchmarkAfterSelectedCheck(outsideTarget, outsideFailed)
+		s.triggerFullBenchmarkAfterSelectedCheck(outsideTarget, outsideFailed, domesticChecked && domesticFailed)
 	}
 }
 
@@ -64,6 +66,9 @@ func (s *Selector) CheckOutsideConnectivity() (benchmarkTarget, bool, bool) {
 	prevActive := s.ActiveName()
 	s.setRelayCheckStatus([]benchmarkTarget{target}, HealthChecking)
 	result := s.testRelay(target.dialer)
+	if result.err != nil {
+		slog.Warn("selected relay check failed", "group", target.group.name, "relay", target.dialer.Name(), "error", result.err)
+	}
 	s.finishRelayCheck(target, result)
 	s.applyOutsideConnectivityCheckResult(target, result)
 
@@ -90,17 +95,17 @@ func (s *Selector) markOutsideUnavailableLocked(reason string) {
 	appendConnectivityHealthRecord(&s.outsideHealth)
 }
 
-func (s *Selector) CheckDomesticConnectivity() {
+func (s *Selector) CheckDomesticConnectivity() (bool, bool) {
 	url := s.domesticURLSnapshot()
 	if url == "" {
-		return
+		return false, false
 	}
 	result := testURLConnectivity(url, s.directDialContext)
 
 	s.mu.Lock()
 	if s.domesticURL != url {
 		s.mu.Unlock()
-		return
+		return false, false
 	}
 	applyConnectivityCheckResult(&s.domesticHealth, url, result)
 	check := s.domesticHealth
@@ -111,6 +116,7 @@ func (s *Selector) CheckDomesticConnectivity() {
 	} else {
 		slog.Debug("domestic connectivity check result", "url", url, "tcp_connect_latency_ms", check.TCPConnectLatency, "latency_ms", check.Latency, "status", check.Status)
 	}
+	return true, result.err != nil
 }
 
 // applyOutsideConnectivityCheckResult unconditionally records the result of

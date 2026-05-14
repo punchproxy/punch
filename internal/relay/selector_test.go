@@ -640,6 +640,64 @@ func TestSelectedCheckFailuresTriggerFullBenchmark(t *testing.T) {
 	}
 }
 
+func TestSelectedCheckFailuresIgnoredWhenInternetDown(t *testing.T) {
+	st, err := config.Open(filepath.Join(t.TempDir(), "punch.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := st.Close(); err != nil {
+			t.Fatalf("close store: %v", err)
+		}
+	})
+
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	t.Cleanup(target.Close)
+
+	bad := &failingTCPDialer{testDialer: testDialer{name: "bad"}}
+	good := &countingDialer{testDialer: testDialer{name: "good"}}
+	selector := &Selector{
+		health:              make(map[string]*RelayHealth),
+		mode:                "auto",
+		outsideURL:          target.URL,
+		domesticURL:         target.URL,
+		fullTriggerFailures: 2,
+		directDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return nil, errors.New("internet unavailable")
+		},
+		store: st,
+		bus:   eventbus.New(),
+	}
+	g := &group{name: "main", mode: "auto", dialers: []Dialer{bad, good}}
+	selector.groups = []*group{g}
+	for _, d := range g.dialers {
+		selector.health[selector.healthKey(g.name, d.Name())] = &RelayHealth{
+			Name:   selector.displayName(g.name, d.Name()),
+			Group:  g.name,
+			Status: HealthPending,
+		}
+	}
+
+	selector.CheckSelectedConnectivity()
+	selector.CheckSelectedConnectivity()
+
+	if got := good.checks.Load(); got != 0 {
+		t.Fatalf("healthy relay checks after internet outage = %d, want 0", got)
+	}
+	if got := selector.ActiveName(); got != "main / bad" {
+		t.Fatalf("active relay after internet outage = %q, want bad", got)
+	}
+	if got := selector.selectedCheckFailures; got != 0 {
+		t.Fatalf("selected check failures during internet outage = %d, want 0", got)
+	}
+	status := selector.ConnectivityStatus()
+	if status.Domestic.Status != HealthDown {
+		t.Fatalf("domestic connectivity status = %q, want %q", status.Domestic.Status, HealthDown)
+	}
+}
+
 func TestSelectedCheckLoopChecksDomesticConnectivity(t *testing.T) {
 	var requests atomic.Int64
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
