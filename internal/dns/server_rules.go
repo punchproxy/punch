@@ -5,13 +5,13 @@ import (
 	"fmt"
 	"log/slog"
 	"net/netip"
-	"strings"
 	"sync/atomic"
 	"time"
 
 	"github.com/punchproxy/punch/internal/assets"
 	"github.com/punchproxy/punch/internal/config"
 	"github.com/punchproxy/punch/internal/dnsrule"
+	src "github.com/punchproxy/punch/internal/source"
 )
 
 type RuleListEntry struct {
@@ -162,7 +162,7 @@ func (s *Server) RefreshSource(source string) error {
 	if err := s.assets.Refresh(source, false); err != nil {
 		return err
 	}
-	if isRemoteSource(source) {
+	if src.IsRemote(source) {
 		return nil
 	}
 	return s.reloadRuleSource(source)
@@ -269,7 +269,7 @@ func (s *Server) buildIPSet(decision string, rules []config.CIDRRule) (*IPSet, [
 }
 
 func (s *Server) loadDomainRule(matcher *dnsrule.Matcher, ruleLists map[string][]*ruleListEntry, bucket, decision, source string, order int) {
-	if isSource(source) {
+	if src.IsSource(source) {
 		n, err := dnsrule.Load(source, matcher, s.assets, decision, order)
 		if err != nil {
 			if errors.Is(err, assets.ErrNotCached) {
@@ -302,7 +302,7 @@ func (s *Server) loadDomainRule(matcher *dnsrule.Matcher, ruleLists map[string][
 }
 
 func (s *Server) loadCIDRRule(set *IPSet, ruleLists map[string][]*ruleListEntry, bucket, decision, source string) {
-	if isSource(source) {
+	if src.IsSource(source) {
 		n, err := LoadIPSet(source, set, s.assets)
 		if err != nil {
 			if errors.Is(err, assets.ErrNotCached) {
@@ -455,21 +455,6 @@ func buildRuleListIndex(ruleLists map[string][]*ruleListEntry) map[string]map[st
 		index[bucket] = bucketIndex
 	}
 	return index
-}
-
-// isSource returns true if the entry looks like a file path or URL
-// rather than an inline rule (domain:, keyword:, full:, regexp:, or bare CIDR).
-func isSource(entry string) bool {
-	return strings.HasPrefix(entry, "http://") ||
-		strings.HasPrefix(entry, "https://") ||
-		strings.HasPrefix(entry, "/") ||
-		strings.HasPrefix(entry, "./") ||
-		strings.HasPrefix(entry, "../") ||
-		strings.HasPrefix(entry, "~/")
-}
-
-func isRemoteSource(entry string) bool {
-	return strings.HasPrefix(entry, "http://") || strings.HasPrefix(entry, "https://")
 }
 
 func addInternalDirectCIDRs(set *IPSet, ruleLists map[string][]*ruleListEntry) {

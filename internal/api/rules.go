@@ -12,6 +12,7 @@ import (
 
 	"github.com/punchproxy/punch/internal/config"
 	"github.com/punchproxy/punch/internal/dnsrule"
+	src "github.com/punchproxy/punch/internal/source"
 )
 
 type ruleEntry struct {
@@ -496,11 +497,11 @@ func (s *Server) buildRuleEntry(index int, decision, source string, stats map[st
 }
 
 func isRemoteSource(source string) bool {
-	return strings.HasPrefix(source, "http://") || strings.HasPrefix(source, "https://")
+	return src.IsRemote(source)
 }
 
 func isLocalPath(source string) bool {
-	return strings.HasPrefix(source, "/") || strings.HasPrefix(source, "./") || strings.HasPrefix(source, "../")
+	return src.IsLocalPath(source)
 }
 
 func validateDomainRule(decision, source string) (string, error) {

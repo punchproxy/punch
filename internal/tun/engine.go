@@ -15,6 +15,7 @@ import (
 	pdns "github.com/punchproxy/punch/internal/dns"
 	"github.com/punchproxy/punch/internal/relay"
 	"github.com/punchproxy/punch/internal/session"
+	src "github.com/punchproxy/punch/internal/source"
 )
 
 // Engine manages the TUN interface and proxies traffic through it.
@@ -338,7 +339,7 @@ func (e *Engine) buildTunOptions() (LC.Tun, netip.Prefix, netip.Addr, error) {
 // every prefix is currently applied to the TUN interface.
 func (e *Engine) ResolveRoute(entry string) RouteResolution {
 	res := RouteResolution{Route: entry}
-	if isSource(entry) {
+	if src.IsSource(entry) {
 		set := pdns.NewIPSet()
 		if _, err := pdns.LoadIPSet(entry, set, e.assets); err != nil {
 			res.Err = err
@@ -387,7 +388,7 @@ func (e *Engine) buildRouteAddress(routeEntries []string, fakeRanges ...netip.Pr
 		routes = append(routes, fakeRange.Masked())
 	}
 	for _, entry := range routeEntries {
-		if isSource(entry) {
+		if src.IsSource(entry) {
 			set := pdns.NewIPSet()
 			n, err := pdns.LoadIPSet(entry, set, e.assets)
 			if err != nil {
@@ -541,15 +542,6 @@ func removedRoutes(oldRoutes, newRoutes []netip.Prefix) []netip.Prefix {
 func cloneTUNConfig(cfg config.TUN) config.TUN {
 	cfg.Routes = append([]string(nil), cfg.Routes...)
 	return cfg
-}
-
-func isSource(entry string) bool {
-	return strings.HasPrefix(entry, "http://") ||
-		strings.HasPrefix(entry, "https://") ||
-		strings.HasPrefix(entry, "/") ||
-		strings.HasPrefix(entry, "./") ||
-		strings.HasPrefix(entry, "../") ||
-		strings.HasPrefix(entry, "~/")
 }
 
 func isRouteExistsError(err error) bool {

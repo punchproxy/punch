@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/punchproxy/punch/internal/config"
+	src "github.com/punchproxy/punch/internal/source"
 )
 
 var (
@@ -328,10 +329,5 @@ func normalizeSystemRoute(route string) (string, error) {
 }
 
 func isSystemRouteSource(route string) bool {
-	return strings.HasPrefix(route, "http://") ||
-		strings.HasPrefix(route, "https://") ||
-		strings.HasPrefix(route, "/") ||
-		strings.HasPrefix(route, "./") ||
-		strings.HasPrefix(route, "../") ||
-		strings.HasPrefix(route, "~/")
+	return src.IsSource(route)
 }
