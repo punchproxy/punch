@@ -116,7 +116,7 @@ type configBaseModel struct {
 	DNSFakeIPv6Range         string `gorm:"column:dns_fake_ipv6_range"`
 	DNSFakeIPTTL             string `gorm:"column:dns_fakeip_ttl;not null;default:1h"`
 	DNSDisableIPv6FakeIP     *bool  `gorm:"column:dns_disable_ipv6_fakeip;default:1"`
-	TUNDevice                string `gorm:"column:tun_device;not null"`
+	TUNDevice                string `gorm:"column:tun_device;not null"` // Legacy column kept for existing databases.
 	RelaySelect              string `gorm:"column:relay_select;not null"`
 	RelayAutoURL             string `gorm:"column:relay_auto_url;not null"`
 	CheckDomesticURL         string `gorm:"column:check_domestic_url"`

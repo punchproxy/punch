@@ -194,7 +194,7 @@ Defaults worth knowing:
 | ----------------------- | ------------------------------------------------- |
 | DNS listener            | `0.0.0.0:28853`                                   |
 | API listener            | `127.0.0.1:28854`                                 |
-| TUN device              | `punch0`                                          |
+| TUN interface           | auto-selected `utunN` on macOS, `punch0` elsewhere |
 | DoH upstreams           | `doh.pub`, `dns.alidns.com`                       |
 | Fake IP pool            | `198.18.0.0/15`, `fdfe:dcba:9876::/64`            |
 | Outside check URL       | `http://www.gstatic.com/generate_204`             |

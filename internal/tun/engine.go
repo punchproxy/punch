@@ -1,21 +1,22 @@
 package tun
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"net/netip"
+	"runtime"
 	"strings"
 	"sync"
 
-	"github.com/metacubex/mihomo/constant"
-	LC "github.com/metacubex/mihomo/listener/config"
-	"github.com/metacubex/mihomo/listener/sing_tun"
 	"github.com/punchproxy/punch/internal/assets"
 	"github.com/punchproxy/punch/internal/config"
 	pdns "github.com/punchproxy/punch/internal/dns"
 	"github.com/punchproxy/punch/internal/relay"
 	"github.com/punchproxy/punch/internal/session"
 	src "github.com/punchproxy/punch/internal/source"
+	singtun "github.com/sagernet/sing-tun"
+	"github.com/sagernet/sing/common/control"
 )
 
 // Engine manages the TUN interface and proxies traffic through it.
@@ -28,15 +29,25 @@ type Engine struct {
 	sessions  *session.Manager
 	assets    *assets.Manager
 
-	listener     *sing_tun.Listener
-	tunnel       *handler
-	tunAddress   netip.Prefix
-	tun6Address  netip.Prefix
-	routeAddress []netip.Prefix
-	ifaceName    string
-	dnsOverride  *systemDNSOverride
-	routeMonitor *interfaceRouteMonitor
-	started      bool
+	tunIf                   singtun.Tun
+	tunStack                singtun.Stack
+	tunnel                  *handler
+	networkUpdateMonitor    singtun.NetworkUpdateMonitor
+	defaultInterfaceMonitor singtun.DefaultInterfaceMonitor
+	tunAddress              netip.Prefix
+	tun6Address             netip.Prefix
+	routeAddress            []netip.Prefix
+	ifaceName               string
+	dnsOverride             *systemDNSOverride
+	routeMonitor            *interfaceRouteMonitor
+	started                 bool
+}
+
+type runtimeTunOptions struct {
+	options          singtun.Options
+	routeAddress     []netip.Prefix
+	fakeRange        netip.Prefix
+	dnsServerAddress netip.Addr
 }
 
 type SystemInfo struct {
@@ -94,63 +105,82 @@ func (e *Engine) startLocked() error {
 		return nil
 	}
 
-	opts, fakeRange, dnsServerAddress, err := e.buildTunOptions()
+	runtimeOpts, err := e.buildTunOptions()
 	if err != nil {
 		return err
 	}
+	opts := runtimeOpts.options
 
-	e.tunnel = newHandler(e.dnsServer, e.selector, e.sessions)
-
-	listener, err := sing_tun.New(opts, e.tunnel)
+	logger := singLogger{}
+	networkMonitor, defaultInterfaceMonitor, interfaceFinder, err := newTunInterfaceMonitors(logger)
 	if err != nil {
-		if isRouteExistsError(err) {
-			slog.Warn("TUN route already exists, cleaning stale routes and retrying", "error", err)
-			cleanupTargets := buildCleanupRoutes(opts.RouteAddress, tunOptionAddresses(opts))
-			if cleanupErr := cleanupRoutes(cleanupTargets, opts.Inet4Address[0]); cleanupErr != nil {
-				e.tunnel.Close()
-				e.tunnel = nil
-				return fmt.Errorf("start TUN listener: %w (cleanup failed: %v)", err, cleanupErr)
-			}
-			listener, err = sing_tun.New(opts, e.tunnel)
-		}
-		if err != nil {
-			e.tunnel.Close()
-			e.tunnel = nil
-			return fmt.Errorf("start TUN listener: %w", err)
-		}
+		return err
+	}
+	opts.InterfaceMonitor = defaultInterfaceMonitor
+	opts.InterfaceFinder = interfaceFinder
+
+	tunnel := newHandler(e.dnsServer, e.selector, e.sessions, opts.Inet4Address, opts.Inet6Address)
+	tunIf, err := singtun.New(opts)
+	if err != nil {
+		closeTunStartResources(nil, nil, tunnel, defaultInterfaceMonitor, networkMonitor)
+		return fmt.Errorf("configure TUN interface: %w", err)
+	}
+	if ifaceName, nameErr := tunIf.Name(); nameErr == nil && ifaceName != "" {
+		opts.Name = ifaceName
+	}
+	if err := tunIf.Start(); err != nil {
+		closeTunStartResources(nil, tunIf, tunnel, defaultInterfaceMonitor, networkMonitor)
+		return fmt.Errorf("start TUN interface: %w", err)
 	}
 
-	e.listener = listener
-	e.tunAddress = opts.Inet4Address[0]
-	e.tun6Address = firstPrefix(opts.Inet6Address)
-	e.routeAddress = buildCleanupRoutes(opts.RouteAddress, tunOptionAddresses(opts))
-	e.ifaceName = parseTunInterfaceName(listener.Address())
-	if err := configureInterfaceRoutes(e.routeAddress, e.tunAddress, e.ifaceName); err != nil {
-		_ = listener.Close()
-		e.tunnel.Close()
-		e.listener = nil
-		e.tunnel = nil
-		e.tunAddress = netip.Prefix{}
-		e.tun6Address = netip.Prefix{}
-		e.routeAddress = nil
-		e.ifaceName = ""
+	tunStack, err := singtun.NewStack("system", singtun.StackOptions{
+		Context:         context.Background(),
+		Tun:             tunIf,
+		TunOptions:      opts,
+		UDPTimeout:      udpAssociationTimeout,
+		Handler:         tunnel,
+		Logger:          logger,
+		InterfaceFinder: interfaceFinder,
+	})
+	if err != nil {
+		closeTunStartResources(nil, tunIf, tunnel, defaultInterfaceMonitor, networkMonitor)
+		return fmt.Errorf("create TUN stack: %w", err)
+	}
+	if err := tunStack.Start(); err != nil {
+		closeTunStartResources(tunStack, tunIf, tunnel, defaultInterfaceMonitor, networkMonitor)
+		return fmt.Errorf("start TUN stack: %w", err)
+	}
+
+	routeAddress := buildCleanupRoutes(runtimeOpts.routeAddress)
+	ifaceName := opts.Name
+	if err := configureInterfaceRoutes(routeAddress, opts.Inet4Address[0], ifaceName); err != nil {
+		closeTunStartResources(tunStack, tunIf, tunnel, defaultInterfaceMonitor, networkMonitor)
 		return fmt.Errorf("configure interface routes: %w", err)
 	}
-	dnsOverride, err := overrideSystemDNS(dnsServerAddress.String(), e.ifaceName)
+
+	e.tunIf = tunIf
+	e.tunStack = tunStack
+	e.tunnel = tunnel
+	e.networkUpdateMonitor = networkMonitor
+	e.defaultInterfaceMonitor = defaultInterfaceMonitor
+	e.tunAddress = opts.Inet4Address[0]
+	e.tun6Address = firstPrefix(opts.Inet6Address)
+	e.routeAddress = routeAddress
+	e.ifaceName = ifaceName
+	dnsOverride, err := overrideSystemDNS(runtimeOpts.dnsServerAddress.String(), e.ifaceName)
 	if err != nil {
-		slog.Warn("failed to override system DNS", "dns", dnsServerAddress.String(), "interface", e.ifaceName, "error", err)
+		slog.Warn("failed to override system DNS", "dns", runtimeOpts.dnsServerAddress.String(), "interface", e.ifaceName, "error", err)
 	} else if dnsOverride != nil {
 		e.dnsOverride = dnsOverride
-		slog.Info("system DNS overridden", "dns", dnsServerAddress.String(), "interface", e.ifaceName)
+		slog.Info("system DNS overridden", "dns", runtimeOpts.dnsServerAddress.String(), "interface", e.ifaceName)
 	}
 	e.routeMonitor = newInterfaceRouteMonitor(e.routeAddress, e.tunAddress, e.ifaceName, missingInterfaceRoutes, configureInterfaceRoutes)
 	e.started = true
 
 	slog.Info("TUN engine started",
-		"device", opts.Device,
-		"stack", opts.Stack.String(),
-		"address", listener.Address(),
-		"fake-ip-range", fakeRange.String(),
+		"device", opts.Name,
+		"stack", "system",
+		"fake-ip-range", runtimeOpts.fakeRange.String(),
 	)
 	return nil
 }
@@ -182,9 +212,18 @@ func (e *Engine) stopLocked() error {
 	if err := cleanupRoutes(e.routeAddress, e.tunAddress); err != nil && firstErr == nil {
 		firstErr = err
 	}
-	if e.listener != nil {
-		if err := e.listener.Close(); err != nil && firstErr == nil {
+	if e.tunStack != nil {
+		if err := e.tunStack.Close(); err != nil && firstErr == nil {
 			firstErr = err
+		}
+	}
+	if e.tunIf != nil {
+		if err := e.tunIf.Close(); err != nil {
+			if isIgnorableTunCloseError(err) {
+				slog.Debug("ignored TUN close cleanup error", "error", err)
+			} else if firstErr == nil {
+				firstErr = err
+			}
 		}
 	}
 	if e.tunnel != nil {
@@ -192,9 +231,22 @@ func (e *Engine) stopLocked() error {
 			firstErr = err
 		}
 	}
+	if e.defaultInterfaceMonitor != nil {
+		if err := e.defaultInterfaceMonitor.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	if e.networkUpdateMonitor != nil {
+		if err := e.networkUpdateMonitor.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
 
-	e.listener = nil
+	e.tunIf = nil
+	e.tunStack = nil
 	e.tunnel = nil
+	e.networkUpdateMonitor = nil
+	e.defaultInterfaceMonitor = nil
 	e.tunAddress = netip.Prefix{}
 	e.tun6Address = netip.Prefix{}
 	e.routeAddress = nil
@@ -232,7 +284,7 @@ func (e *Engine) ApplyConfig(cfg config.TUN) error {
 		return stopErr
 	}
 
-	routeAddress := buildCleanupRoutes(routes, e.tunAddresses())
+	routeAddress := buildCleanupRoutes(routes)
 	if err := configureInterfaceRoutes(routeAddress, e.tunAddress, e.ifaceName); err != nil {
 		return fmt.Errorf("configure interface routes: %w", err)
 	}
@@ -297,15 +349,15 @@ func (e *Engine) SystemInfo() SystemInfo {
 	return info
 }
 
-func (e *Engine) buildTunOptions() (LC.Tun, netip.Prefix, netip.Addr, error) {
+func (e *Engine) buildTunOptions() (runtimeTunOptions, error) {
 	fakeRange := e.dnsServer.FakeIPPool().IPNet()
 	tunAddress, err := buildTunAddress(fakeRange)
 	if err != nil {
-		return LC.Tun{}, netip.Prefix{}, netip.Addr{}, err
+		return runtimeTunOptions{}, err
 	}
 	dnsServerAddress, err := buildDNSServerAddress(fakeRange)
 	if err != nil {
-		return LC.Tun{}, netip.Prefix{}, netip.Addr{}, err
+		return runtimeTunOptions{}, err
 	}
 
 	var tun6Address netip.Prefix
@@ -314,24 +366,26 @@ func (e *Engine) buildTunOptions() (LC.Tun, netip.Prefix, netip.Addr, error) {
 	if hasFakeRange6 {
 		tun6Address, err = buildTunAddress(fakeRange6)
 		if err != nil {
-			return LC.Tun{}, netip.Prefix{}, netip.Addr{}, err
+			return runtimeTunOptions{}, err
 		}
 		inet6Address = []netip.Prefix{tun6Address}
 	}
 	routes := e.buildRouteAddress(e.cfg.Routes, fakeRange, fakeRange6)
 
-	return LC.Tun{
-		Enable:              true,
-		Device:              e.cfg.Device,
-		Stack:               constant.TunSystem,
-		AutoRoute:           true,
-		AutoDetectInterface: true,
-		DNSHijack:           []string{"any:53"},
-		MTU:                 1500,
-		Inet4Address:        []netip.Prefix{tunAddress},
-		Inet6Address:        inet6Address,
-		RouteAddress:        routes,
-	}, fakeRange, dnsServerAddress, nil
+	return runtimeTunOptions{
+		options: singtun.Options{
+			Name:                 resolveTunDeviceName(),
+			MTU:                  1500,
+			Inet4Address:         []netip.Prefix{tunAddress},
+			Inet6Address:         inet6Address,
+			AutoRoute:            false,
+			EXP_DisableDNSHijack: true,
+			Logger:               singLogger{},
+		},
+		routeAddress:     routes,
+		fakeRange:        fakeRange,
+		dnsServerAddress: dnsServerAddress,
+	}, nil
 }
 
 // ResolveRoute parses a single route entry (a CIDR or a URL/file source)
@@ -469,9 +523,9 @@ func buildDNSServerAddress(fakeRange netip.Prefix) (netip.Addr, error) {
 	return addr, nil
 }
 
-func buildCleanupRoutes(routeAddress []netip.Prefix, interfaceAddress []netip.Prefix) []netip.Prefix {
-	seen := make(map[netip.Prefix]struct{}, len(routeAddress)+len(interfaceAddress))
-	routes := make([]netip.Prefix, 0, len(routeAddress)+len(interfaceAddress))
+func buildCleanupRoutes(routeAddress []netip.Prefix) []netip.Prefix {
+	seen := make(map[netip.Prefix]struct{}, len(routeAddress))
+	routes := make([]netip.Prefix, 0, len(routeAddress))
 
 	add := func(prefix netip.Prefix) {
 		prefix = prefix.Masked()
@@ -484,11 +538,6 @@ func buildCleanupRoutes(routeAddress []netip.Prefix, interfaceAddress []netip.Pr
 
 	for _, prefix := range routeAddress {
 		add(prefix)
-	}
-	for _, prefix := range interfaceAddress {
-		if prefix.Bits() < prefix.Addr().BitLen() {
-			add(prefix)
-		}
 	}
 	return routes
 }
@@ -509,19 +558,68 @@ func firstPrefix(prefixes []netip.Prefix) netip.Prefix {
 	return prefixes[0]
 }
 
-func tunOptionAddresses(opts LC.Tun) []netip.Prefix {
-	addresses := make([]netip.Prefix, 0, len(opts.Inet4Address)+len(opts.Inet6Address))
-	addresses = append(addresses, opts.Inet4Address...)
-	addresses = append(addresses, opts.Inet6Address...)
-	return addresses
+func newTunInterfaceMonitors(logger singLogger) (singtun.NetworkUpdateMonitor, singtun.DefaultInterfaceMonitor, control.InterfaceFinder, error) {
+	interfaceFinder := control.NewDefaultInterfaceFinder()
+	networkMonitor, err := singtun.NewNetworkUpdateMonitor(logger)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("create network update monitor: %w", err)
+	}
+	if err := networkMonitor.Start(); err != nil {
+		_ = networkMonitor.Close()
+		return nil, nil, nil, fmt.Errorf("start network update monitor: %w", err)
+	}
+	defaultInterfaceMonitor, err := singtun.NewDefaultInterfaceMonitor(networkMonitor, logger, singtun.DefaultInterfaceMonitorOptions{
+		InterfaceFinder:    interfaceFinder,
+		OverrideAndroidVPN: true,
+	})
+	if err != nil {
+		_ = networkMonitor.Close()
+		return nil, nil, nil, fmt.Errorf("create default interface monitor: %w", err)
+	}
+	if err := defaultInterfaceMonitor.Start(); err != nil {
+		_ = defaultInterfaceMonitor.Close()
+		_ = networkMonitor.Close()
+		return nil, nil, nil, fmt.Errorf("start default interface monitor: %w", err)
+	}
+	return networkMonitor, defaultInterfaceMonitor, interfaceFinder, nil
 }
 
-func (e *Engine) tunAddresses() []netip.Prefix {
-	addresses := []netip.Prefix{e.tunAddress}
-	if e.tun6Address.IsValid() {
-		addresses = append(addresses, e.tun6Address)
+func closeTunStartResources(tunStack singtun.Stack, tunIf singtun.Tun, tunnel *handler, defaultInterfaceMonitor singtun.DefaultInterfaceMonitor, networkMonitor singtun.NetworkUpdateMonitor) {
+	if tunStack != nil {
+		_ = tunStack.Close()
 	}
-	return addresses
+	if tunIf != nil {
+		_ = tunIf.Close()
+	}
+	if tunnel != nil {
+		_ = tunnel.Close()
+	}
+	if defaultInterfaceMonitor != nil {
+		_ = defaultInterfaceMonitor.Close()
+	}
+	if networkMonitor != nil {
+		_ = networkMonitor.Close()
+	}
+}
+
+func resolveTunDeviceName() string {
+	if runtime.GOOS == "darwin" {
+		return singtun.CalculateInterfaceName("")
+	}
+	return "punch0"
+}
+
+func isIgnorableTunCloseError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	if !strings.Contains(msg, "delete route") {
+		return false
+	}
+	return strings.Contains(msg, "not in table") ||
+		strings.Contains(msg, "no such process") ||
+		strings.Contains(msg, "no such route")
 }
 
 func removedRoutes(oldRoutes, newRoutes []netip.Prefix) []netip.Prefix {
@@ -542,20 +640,4 @@ func removedRoutes(oldRoutes, newRoutes []netip.Prefix) []netip.Prefix {
 func cloneTUNConfig(cfg config.TUN) config.TUN {
 	cfg.Routes = append([]string(nil), cfg.Routes...)
 	return cfg
-}
-
-func isRouteExistsError(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "file exists") && strings.Contains(msg, "route")
-}
-
-func parseTunInterfaceName(addr string) string {
-	name, _, ok := strings.Cut(addr, "(")
-	if !ok {
-		return ""
-	}
-	return strings.TrimSpace(name)
 }

@@ -8,18 +8,21 @@ import (
 	"log/slog"
 	"net"
 	"net/netip"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
 
-	"github.com/metacubex/mihomo/common/utils"
-	"github.com/metacubex/mihomo/component/nat"
-	C "github.com/metacubex/mihomo/constant"
-	"github.com/metacubex/mihomo/constant/provider"
+	"github.com/miekg/dns"
 	pdns "github.com/punchproxy/punch/internal/dns"
 	"github.com/punchproxy/punch/internal/relay"
 	"github.com/punchproxy/punch/internal/session"
+	singtun "github.com/sagernet/sing-tun"
+	"github.com/sagernet/sing-tun/ping"
+	singbuf "github.com/sagernet/sing/common/buf"
+	M "github.com/sagernet/sing/common/metadata"
+	N "github.com/sagernet/sing/common/network"
 )
 
 const udpAssociationTimeout = 2 * time.Minute
@@ -49,35 +52,119 @@ type handler struct {
 	dnsServer *pdns.Server
 	selector  *relay.Selector
 	sessions  *session.Manager
-	natTable  C.NatTable
-	callbacks *utils.Callback[provider.RuleProvider]
-	udp       udpCounters
+
+	inet4Address []netip.Prefix
+	inet6Address []netip.Prefix
+	udp          udpCounters
 
 	closeOnce sync.Once
 }
 
-func newHandler(dnsServer *pdns.Server, selector *relay.Selector, sessions *session.Manager) *handler {
+func newHandler(dnsServer *pdns.Server, selector *relay.Selector, sessions *session.Manager, inet4Address, inet6Address []netip.Prefix) *handler {
 	return &handler{
-		dnsServer: dnsServer,
-		selector:  selector,
-		sessions:  sessions,
-		natTable:  nat.New(),
-		callbacks: utils.NewCallback[provider.RuleProvider](),
+		dnsServer:    dnsServer,
+		selector:     selector,
+		sessions:     sessions,
+		inet4Address: clonePrefixes(inet4Address),
+		inet6Address: clonePrefixes(inet6Address),
 	}
 }
 
-func (h *handler) HandleTCPConn(conn net.Conn, metadata *C.Metadata) {
+func (h *handler) NewConnectionEx(ctx context.Context, conn net.Conn, source M.Socksaddr, destination M.Socksaddr, onClose N.CloseHandlerFunc) {
+	var closeErr error
+	defer func() {
+		if onClose != nil {
+			onClose(closeErr)
+		}
+	}()
+
+	if isDNSDestination(destination) {
+		closeErr = h.handleDNSConn(ctx, conn)
+		return
+	}
+	closeErr = h.handleTCPConn(conn, source, destination)
+}
+
+func (h *handler) NewPacketConnectionEx(ctx context.Context, conn N.PacketConn, source M.Socksaddr, _ M.Socksaddr, onClose N.CloseHandlerFunc) {
+	var closeErr error
+	defer func() {
+		if onClose != nil {
+			onClose(closeErr)
+		}
+	}()
 	defer conn.Close()
 
-	target, domain, dstIP, rule, err := h.targetForMetadata(metadata)
+	writer := &packetWriteBack{conn: conn}
+	senders := make(map[string]*udpSender)
+	defer func() {
+		for _, sender := range senders {
+			sender.Close()
+		}
+	}()
+
+	for {
+		packet := singbuf.NewPacket()
+		destination, err := conn.ReadPacket(packet)
+		if err != nil {
+			packet.Release()
+			if relayFailed(err) {
+				closeErr = err
+			}
+			return
+		}
+
+		if isDNSDestination(destination) {
+			h.handleDNSPacket(ctx, writer, packet, destination)
+			continue
+		}
+
+		key := destination.String()
+		sender := senders[key]
+		if sender == nil {
+			sender = newUDPSender(h, source.String()+"->"+key, writer, source, destination)
+			senders[key] = sender
+			go sender.Process()
+		}
+		sender.Send(&udpTunPacket{buffer: packet, destination: destination})
+	}
+}
+
+func (h *handler) PrepareConnection(network string, _ M.Socksaddr, destination M.Socksaddr, routeContext singtun.DirectRouteContext, timeout time.Duration) (singtun.DirectRouteDestination, error) {
+	if network != N.NetworkICMP || !destination.Addr.IsValid() || h.skipPingForwarding(destination.Addr) {
+		return nil, nil
+	}
+	directRouteDestination, err := ping.ConnectDestination(context.Background(), singLogger{}, nil, destination.Addr, routeContext, timeout)
+	if err != nil {
+		slog.Debug("failed to forward ICMP destination directly", "destination", destination.String(), "error", err)
+		return nil, err
+	}
+	return directRouteDestination, nil
+}
+
+func (h *handler) UDPStats() UDPStats {
+	if h == nil {
+		return UDPStats{}
+	}
+	return h.udp.stats()
+}
+
+func (h *handler) Close() error {
+	h.closeOnce.Do(func() {})
+	return nil
+}
+
+func (h *handler) handleTCPConn(conn net.Conn, source M.Socksaddr, destination M.Socksaddr) error {
+	defer conn.Close()
+
+	target, domain, dstIP, rule, err := h.targetForDestination(destination)
 	if err != nil {
 		slog.Debug("drop invalid TCP TUN connection", "error", err)
-		return
+		return err
 	}
 
 	relayName := h.selector.ActiveName()
 	opts := h.sessionOpts(rule, domain, dstIP)
-	sess := h.sessions.NewSession(domain, sourceAddress(metadata), dstIP.String(), int(metadata.DstPort), "TCP", relayName, rule, opts)
+	sess := h.sessions.NewSession(domain, source.String(), dstIP.String(), int(destination.Port), "TCP", relayName, rule, opts)
 	releaseFakeIP := h.pinFakeIP(rule, dstIP, sess.ID)
 	defer func() {
 		if releaseFakeIP != nil {
@@ -89,7 +176,7 @@ func (h *handler) HandleTCPConn(conn net.Conn, metadata *C.Metadata) {
 		"target", target,
 		"domain", domain,
 		"dst_ip", dstIP.String(),
-		"dst_port", metadata.DstPort,
+		"dst_port", destination.Port,
 		"relay", relayName,
 		"rule", rule,
 	)
@@ -100,7 +187,7 @@ func (h *handler) HandleTCPConn(conn net.Conn, metadata *C.Metadata) {
 	if err != nil {
 		sess.SetCloseReason(fmt.Sprintf("dial relay: %v", err))
 		h.sessions.CloseSession(sess.ID, session.StatusError)
-		return
+		return err
 	}
 	defer remoteConn.Close()
 
@@ -131,61 +218,19 @@ func (h *handler) HandleTCPConn(conn net.Conn, metadata *C.Metadata) {
 	if relayFailed(first.err) {
 		status = session.StatusError
 		sess.SetCloseReason(fmt.Sprintf("%s copy: %v", first.dir, first.err))
+		h.sessions.CloseSession(sess.ID, status)
+		return first.err
 	}
 	h.sessions.CloseSession(sess.ID, status)
-}
-
-func (h *handler) HandleUDPPacket(packet C.UDPPacket, metadata *C.Metadata) {
-	packetAdapter := C.NewPacketAdapter(packet, metadata)
-	key := packetAdapter.Key()
-
-	sender, loaded := h.natTable.GetOrCreate(key, func() C.PacketSender {
-		s := newUDPSender(h, key)
-		go s.Process(nil, nil)
-		return s
-	})
-	if !loaded {
-		slog.Debug("UDP association created", "key", key)
-	}
-	sender.Send(packetAdapter)
-}
-
-func (h *handler) NatTable() C.NatTable {
-	return h.natTable
-}
-
-func (h *handler) Providers() map[string]provider.ProxyProvider {
-	return map[string]provider.ProxyProvider{}
-}
-
-func (h *handler) RuleProviders() map[string]provider.RuleProvider {
-	return map[string]provider.RuleProvider{}
-}
-
-func (h *handler) RuleUpdateCallback() *utils.Callback[provider.RuleProvider] {
-	return h.callbacks
-}
-
-func (h *handler) UDPStats() UDPStats {
-	if h == nil {
-		return UDPStats{}
-	}
-	return h.udp.stats()
-}
-
-func (h *handler) Close() error {
-	h.closeOnce.Do(func() {
-		// NAT entries are closed by their own session lifecycle.
-	})
 	return nil
 }
 
-func (h *handler) targetForMetadata(metadata *C.Metadata) (target string, domain string, dstIP netip.Addr, rule string, err error) {
-	dstIP = metadata.DstIP.Unmap()
-	host := metadata.Host
+func (h *handler) targetForDestination(destination M.Socksaddr) (target string, domain string, dstIP netip.Addr, rule string, err error) {
+	dstIP = destination.Addr.Unmap()
+	host := destination.Fqdn
 	rule = "additional-ip"
 
-	if dstIP.IsValid() {
+	if dstIP.IsValid() && h.dnsServer != nil {
 		if mapped, ok := h.dnsServer.FakeIPPool().LookBack(dstIP); ok {
 			domain = mapped
 			host = mapped
@@ -205,7 +250,7 @@ func (h *handler) targetForMetadata(metadata *C.Metadata) (target string, domain
 		domain = host
 	}
 
-	target = net.JoinHostPort(host, fmt.Sprintf("%d", metadata.DstPort))
+	target = net.JoinHostPort(host, strconv.Itoa(int(destination.Port)))
 	return target, domain, dstIP, rule, nil
 }
 
@@ -225,7 +270,7 @@ func (h *handler) bindSessionCloser(sess *session.Session, conns ...io.Closer) {
 
 func (h *handler) sessionOpts(rule string, domain string, dstIP netip.Addr) session.SessionOpts {
 	var opts session.SessionOpts
-	if rule == "fake-ip" && dstIP.IsValid() {
+	if h.dnsServer != nil && rule == "fake-ip" && dstIP.IsValid() {
 		opts.FakeIP = dstIP.String()
 		opts.DNSRequestedAt = h.dnsServer.FakeIPPool().LastLookupTime(domain)
 	}
@@ -233,7 +278,7 @@ func (h *handler) sessionOpts(rule string, domain string, dstIP netip.Addr) sess
 }
 
 func (h *handler) pinFakeIP(rule string, dstIP netip.Addr, sessionID string) io.Closer {
-	if rule != "fake-ip" || !dstIP.IsValid() {
+	if h.dnsServer == nil || rule != "fake-ip" || !dstIP.IsValid() {
 		return nil
 	}
 	if !h.dnsServer.FakeIPPool().Acquire(dstIP, sessionID) {
@@ -247,34 +292,134 @@ func (h *handler) pinFakeIP(rule string, dstIP netip.Addr, sessionID string) io.
 	})
 }
 
+func (h *handler) skipPingForwarding(addr netip.Addr) bool {
+	for _, prefix := range h.inet4Address {
+		if prefix.Contains(addr) {
+			return true
+		}
+	}
+	for _, prefix := range h.inet6Address {
+		if prefix.Contains(addr) {
+			return true
+		}
+	}
+	return h.dnsServer != nil && h.dnsServer.FakeIPPool().Contains(addr)
+}
+
+func isDNSDestination(destination M.Socksaddr) bool {
+	return destination.Port == 53
+}
+
+func (h *handler) handleDNSConn(ctx context.Context, conn net.Conn) error {
+	defer conn.Close()
+	dnsConn := &dns.Conn{Conn: conn}
+	for {
+		_ = conn.SetReadDeadline(time.Now().Add(udpAssociationTimeout))
+		query, err := dnsConn.ReadMsg()
+		if err != nil {
+			if relayFailed(err) {
+				return err
+			}
+			return nil
+		}
+		response, serveErr := h.serveDNSMsg(ctx, query)
+		_ = conn.SetWriteDeadline(time.Now().Add(udpAssociationTimeout))
+		if err := dnsConn.WriteMsg(response); err != nil {
+			return err
+		}
+		if serveErr != nil {
+			slog.Debug("served TUN DNS TCP query with failure response", "error", serveErr)
+		}
+	}
+}
+
+func (h *handler) handleDNSPacket(ctx context.Context, writer N.PacketWriter, packet *singbuf.Buffer, destination M.Socksaddr) {
+	defer packet.Release()
+	query := new(dns.Msg)
+	if err := query.Unpack(packet.Bytes()); err != nil {
+		slog.Debug("drop invalid TUN DNS packet", "destination", destination.String(), "error", err)
+		return
+	}
+	response, serveErr := h.serveDNSMsg(ctx, query)
+	if serveErr != nil {
+		slog.Debug("served TUN DNS packet with failure response", "destination", destination.String(), "error", serveErr)
+	}
+	payload, err := response.Pack()
+	if err != nil {
+		slog.Debug("failed to pack TUN DNS response", "destination", destination.String(), "error", err)
+		return
+	}
+	buffer := singbuf.NewPacket()
+	buffer.Write(payload)
+	if err := writer.WritePacket(buffer, destination); err != nil {
+		slog.Debug("failed to write TUN DNS response", "destination", destination.String(), "error", err)
+	}
+}
+
+func (h *handler) serveDNSMsg(ctx context.Context, query *dns.Msg) (*dns.Msg, error) {
+	if h.dnsServer == nil {
+		response := new(dns.Msg)
+		response.SetRcode(query, dns.RcodeServerFailure)
+		return response, nil
+	}
+	response, err := h.dnsServer.ServeMsg(ctx, query)
+	if err != nil {
+		response = new(dns.Msg)
+		response.SetRcode(query, dns.RcodeServerFailure)
+		return response, err
+	}
+	return response, nil
+}
+
+type packetWriteBack struct {
+	mu   sync.Mutex
+	conn N.PacketConn
+}
+
+func (w *packetWriteBack) WritePacket(buffer *singbuf.Buffer, destination M.Socksaddr) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.conn.WritePacket(buffer, destination)
+}
+
+type udpTunPacket struct {
+	buffer      *singbuf.Buffer
+	destination M.Socksaddr
+}
+
 type udpSender struct {
-	handler *handler
-	key     string
-	ctx     context.Context
-	cancel  context.CancelFunc
-	ch      chan C.PacketAdapter
+	handler     *handler
+	key         string
+	writer      N.PacketWriter
+	source      M.Socksaddr
+	destination M.Socksaddr
+	ctx         context.Context
+	cancel      context.CancelFunc
+	ch          chan *udpTunPacket
 
 	conn          net.Conn
 	sess          *session.Session
-	writeBack     C.WriteBackProxy
 	sessionStatus session.Status
 	closeReason   string
 	closeOnce     sync.Once
 }
 
-func newUDPSender(h *handler, key string) *udpSender {
+func newUDPSender(h *handler, key string, writer N.PacketWriter, source M.Socksaddr, destination M.Socksaddr) *udpSender {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &udpSender{
 		handler:       h,
 		key:           key,
+		writer:        writer,
+		source:        source,
+		destination:   destination,
 		ctx:           ctx,
 		cancel:        cancel,
-		ch:            make(chan C.PacketAdapter, udpPacketQueueSize),
+		ch:            make(chan *udpTunPacket, udpPacketQueueSize),
 		sessionStatus: session.StatusClosed,
 	}
 }
 
-func (s *udpSender) Process(_ C.PacketConn, _ C.WriteBackProxy) {
+func (s *udpSender) Process() {
 	defer s.cleanup()
 
 	for {
@@ -294,7 +439,7 @@ func (s *udpSender) Process(_ C.PacketConn, _ C.WriteBackProxy) {
 	}
 }
 
-func (s *udpSender) Send(packet C.PacketAdapter) {
+func (s *udpSender) Send(packet *udpTunPacket) {
 	select {
 	case <-s.ctx.Done():
 		s.dropPacket(packet, udpDropClosed)
@@ -326,48 +471,32 @@ func (s *udpSender) Close() {
 	s.dropPending()
 }
 
-func (s *udpSender) DoSniff(*C.Metadata) error { return nil }
-
-func (s *udpSender) AddMapping(*C.Metadata, *C.Metadata) {}
-
-func (s *udpSender) RestoreReadFrom(addr netip.Addr) netip.Addr { return addr }
-
-func (s *udpSender) handlePacket(packet C.PacketAdapter) error {
-	if s.writeBack == nil {
-		s.writeBack = nat.NewWriteBackProxy(packet)
-	} else {
-		s.writeBack.UpdateWriteBack(packet)
-	}
+func (s *udpSender) handlePacket(packet *udpTunPacket) error {
+	defer packet.buffer.Release()
 
 	if s.conn == nil {
-		if err := s.init(packet.Metadata()); err != nil {
-			packet.Drop()
+		if err := s.init(); err != nil {
 			return err
 		}
 	}
 
 	_ = s.conn.SetDeadline(time.Now().Add(udpAssociationTimeout))
-
-	n, err := s.conn.Write(packet.Data())
-	packet.Drop()
+	n, err := s.conn.Write(packet.buffer.Bytes())
 	if n > 0 && s.sess != nil {
 		s.sess.RecordUpload(n)
 	}
-	if err != nil {
-		return err
-	}
-	return nil
+	return err
 }
 
-func (s *udpSender) init(metadata *C.Metadata) error {
-	target, domain, dstIP, rule, err := s.handler.targetForMetadata(metadata)
+func (s *udpSender) init() error {
+	target, domain, dstIP, rule, err := s.handler.targetForDestination(s.destination)
 	if err != nil {
 		return err
 	}
 
 	relayName := s.handler.selector.ActiveName()
 	opts := s.handler.sessionOpts(rule, domain, dstIP)
-	s.sess = s.handler.sessions.NewSession(domain, sourceAddress(metadata), dstIP.String(), int(metadata.DstPort), "UDP", relayName, rule, opts)
+	s.sess = s.handler.sessions.NewSession(domain, s.source.String(), dstIP.String(), int(s.destination.Port), "UDP", relayName, rule, opts)
 	releaseFakeIP := s.handler.pinFakeIP(rule, dstIP, s.sess.ID)
 	defer func() {
 		if releaseFakeIP != nil {
@@ -379,7 +508,7 @@ func (s *udpSender) init(metadata *C.Metadata) error {
 		"target", target,
 		"domain", domain,
 		"dst_ip", dstIP.String(),
-		"dst_port", metadata.DstPort,
+		"dst_port", s.destination.Port,
 		"relay", relayName,
 		"rule", rule,
 		"nat_key", s.key,
@@ -413,8 +542,10 @@ func (s *udpSender) readBack() {
 			if s.sess != nil {
 				s.sess.RecordDownload(n)
 			}
-			if s.writeBack != nil {
-				if _, writeErr := s.writeBack.WriteBack(buf[:n], nil); writeErr != nil {
+			if s.writer != nil {
+				buffer := singbuf.NewPacket()
+				buffer.Write(buf[:n])
+				if writeErr := s.writer.WritePacket(buffer, s.destination); writeErr != nil {
 					s.sessionStatus = session.StatusError
 					s.closeReason = fmt.Sprintf("write back: %v", writeErr)
 					s.Close()
@@ -439,7 +570,6 @@ func (s *udpSender) cleanup() {
 	s.closeOnce.Do(func() {
 		s.cancel()
 		s.dropPending()
-		s.handler.natTable.Delete(s.key)
 		if s.conn != nil {
 			_ = s.conn.Close()
 		}
@@ -477,9 +607,9 @@ const (
 	udpDropPending
 )
 
-func (s *udpSender) dropPacket(packet C.PacketAdapter, reason udpDropReason) {
-	if packet != nil {
-		packet.Drop()
+func (s *udpSender) dropPacket(packet *udpTunPacket, reason udpDropReason) {
+	if packet != nil && packet.buffer != nil {
+		packet.buffer.Release()
 	}
 	if s.handler == nil {
 		return
@@ -523,11 +653,4 @@ func relayFailed(err error) bool {
 		return false
 	}
 	return true
-}
-
-func sourceAddress(metadata *C.Metadata) string {
-	if metadata == nil || !metadata.SourceAddrPort().IsValid() {
-		return ""
-	}
-	return metadata.SourceAddress()
 }

@@ -85,8 +85,9 @@ const (
 	DecisionDirect = "direct"
 )
 
+const fixedTUNDeviceName = "punch0"
+
 type TUN struct {
-	Device string   `json:"device"`
 	Routes []string `json:"routes,omitempty"`
 }
 
@@ -161,7 +162,6 @@ var scalarKeys = []string{
 	"dns.fakeipv6_range",
 	"dns.fakeip_ttl",
 	"dns.disable_ipv6_fakeip",
-	"tun.device",
 	"relay.select",
 	"check.outside_url",
 	"check.domestic_url",
@@ -309,8 +309,6 @@ func getValue(cfg *Config, key string) (string, error) {
 		return cfg.DNS.FakeIPTTL, nil
 	case "dns.disable_ipv6_fakeip":
 		return strconv.FormatBool(disableIPv6FakeIPValue(cfg)), nil
-	case "tun.device":
-		return cfg.TUN.Device, nil
 	case "relay.select":
 		return cfg.Relay.Select, nil
 	case "check.outside_url":
@@ -370,8 +368,6 @@ func setValue(cfg *Config, key, value string) error {
 			return fmt.Errorf("dns.disable_ipv6_fakeip must be a boolean")
 		}
 		cfg.DNS.DisableIPv6FakeIP = &parsed
-	case "tun.device":
-		cfg.TUN.Device = value
 	case "relay.select":
 		cfg.Relay.Select = value
 	case "check.outside_url":
@@ -419,7 +415,7 @@ func setValue(cfg *Config, key, value string) error {
 		}
 		cfg.Sessions.HistoryLimit = parsed
 	default:
-		return fmt.Errorf("unknown config key %q", key)
+		return ErrNotFound
 	}
 	return nil
 }
@@ -533,9 +529,6 @@ func loadTables(s *Store) (*Config, error) {
 			FakeIPv6Range:     base.DNSFakeIPv6Range,
 			FakeIPTTL:         base.DNSFakeIPTTL,
 			DisableIPv6FakeIP: base.DNSDisableIPv6FakeIP,
-		},
-		TUN: TUN{
-			Device: base.TUNDevice,
 		},
 		Relay: Relay{
 			Select: base.RelaySelect,
@@ -695,7 +688,7 @@ func saveTables(s *Store, cfg *Config) error {
 			DNSFakeIPv6Range:         cfg.DNS.FakeIPv6Range,
 			DNSFakeIPTTL:             cfg.DNS.FakeIPTTL,
 			DNSDisableIPv6FakeIP:     cfg.DNS.DisableIPv6FakeIP,
-			TUNDevice:                cfg.TUN.Device,
+			TUNDevice:                fixedTUNDeviceName,
 			RelaySelect:              cfg.Relay.Select,
 			RelayAutoURL:             cfg.Check.OutsideURL,
 			CheckDomesticURL:         cfg.Check.DomesticURL,
@@ -936,9 +929,7 @@ func Default() *Config {
 				},
 			},
 		},
-		TUN: TUN{
-			Device: "punch0",
-		},
+		TUN: TUN{},
 		Relay: Relay{
 			Select: "auto",
 		},
@@ -987,9 +978,6 @@ func applyDefaults(cfg *Config) {
 	}
 	if cfg.AssetRefreshInterval == 0 {
 		cfg.AssetRefreshInterval = 3600
-	}
-	if cfg.TUN.Device == "" {
-		cfg.TUN.Device = "punch0"
 	}
 	if cfg.Relay.Select == "" {
 		cfg.Relay.Select = "auto"

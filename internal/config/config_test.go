@@ -69,7 +69,7 @@ func TestConfigSaveLoadRoundTrip(t *testing.T) {
 			{Decision: DecisionReject, Source: "203.0.113.0/24"},
 		},
 	}
-	want.TUN = TUN{Device: "utun9", Routes: []string{"0.0.0.0/1", "128.0.0.0/1"}}
+	want.TUN = TUN{Routes: []string{"0.0.0.0/1", "128.0.0.0/1"}}
 	want.Relay = Relay{
 		Select: "manual",
 		Groups: []RelayGroup{{
@@ -230,6 +230,12 @@ func TestSingletonGetSetScalarValues(t *testing.T) {
 	}
 	if _, err := Get("check.url"); err != ErrNotFound {
 		t.Fatalf("get check.url error = %v, want ErrNotFound", err)
+	}
+	if _, err := Get("tun.device"); err != ErrNotFound {
+		t.Fatalf("get tun.device error = %v, want ErrNotFound", err)
+	}
+	if err := Set("tun.device", "utun9"); err != ErrNotFound {
+		t.Fatalf("set tun.device error = %v, want ErrNotFound", err)
 	}
 }
 

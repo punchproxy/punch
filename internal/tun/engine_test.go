@@ -1,9 +1,12 @@
 package tun
 
 import (
+	"errors"
 	"net/netip"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -35,6 +38,31 @@ func TestBuildTunAndDNSServerAddresses(t *testing.T) {
 	}
 }
 
+func TestResolveTunDeviceNameFixedByPlatform(t *testing.T) {
+	got := resolveTunDeviceName()
+	if runtime.GOOS == "darwin" {
+		if !strings.HasPrefix(got, "utun") {
+			t.Fatalf("resolveTunDeviceName() = %q, want auto-selected utun name", got)
+		}
+		return
+	}
+	if got != "punch0" {
+		t.Fatalf("resolveTunDeviceName() = %q, want punch0", got)
+	}
+}
+
+func TestIgnorableTunCloseError(t *testing.T) {
+	if !isIgnorableTunCloseError(errors.New("(no such process | delete route: 198.18.0.0/30: no such process)")) {
+		t.Fatal("missing route during TUN close should be ignorable")
+	}
+	if isIgnorableTunCloseError(errors.New("delete route: permission denied")) {
+		t.Fatal("permission errors during TUN close should not be ignorable")
+	}
+	if isIgnorableTunCloseError(errors.New("no such process")) {
+		t.Fatal("unrelated no such process errors should not be ignorable")
+	}
+}
+
 func TestBuildRouteAddressUsesProvidedRoutes(t *testing.T) {
 	engine := &Engine{}
 	got := engine.buildRouteAddress(
@@ -57,18 +85,17 @@ func TestBuildRouteAddressUsesProvidedRoutes(t *testing.T) {
 	}
 }
 
-func TestBuildCleanupRoutesIncludesIPv6InterfaceAddress(t *testing.T) {
+func TestBuildCleanupRoutesNormalizesConfiguredRoutes(t *testing.T) {
 	got := buildCleanupRoutes(
-		[]netip.Prefix{netip.MustParsePrefix("2001:b28:f23d::/48")},
 		[]netip.Prefix{
-			netip.MustParsePrefix("198.18.0.1/30"),
-			netip.MustParsePrefix("fdfe:dcba:9876::1/126"),
+			netip.MustParsePrefix("2001:b28:f23d::1/48"),
+			netip.MustParsePrefix("2001:b28:f23d::/48"),
+			netip.MustParsePrefix("198.18.0.0/15"),
 		},
 	)
 	want := []netip.Prefix{
 		netip.MustParsePrefix("2001:b28:f23d::/48"),
-		netip.MustParsePrefix("198.18.0.0/30"),
-		netip.MustParsePrefix("fdfe:dcba:9876::/126"),
+		netip.MustParsePrefix("198.18.0.0/15"),
 	}
 	if len(got) != len(want) {
 		t.Fatalf("routes = %#v, want %#v", got, want)
