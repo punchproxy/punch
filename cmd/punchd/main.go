@@ -15,7 +15,6 @@ import (
 	"syscall"
 	"time"
 
-	mresolver "github.com/metacubex/mihomo/component/resolver"
 	"github.com/punchproxy/punch/internal/api"
 	"github.com/punchproxy/punch/internal/assets"
 	"github.com/punchproxy/punch/internal/config"
@@ -23,6 +22,7 @@ import (
 	"github.com/punchproxy/punch/internal/eventbus"
 	"github.com/punchproxy/punch/internal/fakeip"
 	"github.com/punchproxy/punch/internal/logging"
+	pmihomo "github.com/punchproxy/punch/internal/mihomo"
 	"github.com/punchproxy/punch/internal/relay"
 	"github.com/punchproxy/punch/internal/session"
 	"github.com/punchproxy/punch/internal/tun"
@@ -128,9 +128,7 @@ func main() {
 		os.Exit(1)
 	}
 	dnsResolver = pdns.NewServerResolver(dnsServer)
-	mresolver.DefaultResolver = dnsResolver
-	mresolver.ProxyServerHostResolver = dnsResolver
-	mresolver.DirectHostResolver = dnsResolver
+	unregisterMihomoDNS := pmihomo.RegisterDNS(dnsServer, dnsResolver)
 
 	if err := dnsServer.LoadInitialRules(); err != nil {
 		slog.Error("failed to load DNS rules", "error", err)
@@ -271,6 +269,7 @@ shutdown:
 		slog.Error("TUN shutdown error", "error", err)
 	}
 	selector.Stop()
+	unregisterMihomoDNS()
 	if err := dnsServer.Stop(); err != nil {
 		slog.Error("DNS shutdown error", "error", err)
 	}

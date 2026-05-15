@@ -8,12 +8,10 @@ import (
 	"strings"
 	"time"
 
-	mresolver "github.com/metacubex/mihomo/component/resolver"
-
 	mdns "github.com/miekg/dns"
 )
 
-// ServerResolver adapts Punch's DNS server to mihomo's resolver interface.
+// ServerResolver adapts Punch's DNS server to internal host resolution callers.
 // Internal lookups use the same rule/cache/upstream path as external DNS
 // queries, but disable fake-IP substitution so callers receive real addresses.
 type ServerResolver struct {
@@ -41,7 +39,7 @@ func (r *ServerResolver) LookupIP(ctx context.Context, host string) ([]netip.Add
 	if err6 != nil {
 		return nil, err6
 	}
-	return nil, mresolver.ErrIPNotFound
+	return nil, ErrIPNotFound
 }
 
 func (r *ServerResolver) LookupIPv4(ctx context.Context, host string) ([]netip.Addr, error) {
@@ -58,7 +56,7 @@ func (r *ServerResolver) lookup(ctx context.Context, host string, qtype uint16) 
 		if (qtype == mdns.TypeA && ip.Is4()) || (qtype == mdns.TypeAAAA && ip.Is6()) {
 			return []netip.Addr{ip}, nil
 		}
-		return nil, mresolver.ErrIPVersion
+		return nil, ErrIPVersion
 	}
 
 	msg := new(mdns.Msg)
@@ -86,7 +84,7 @@ func (r *ServerResolver) lookup(ctx context.Context, host string, qtype uint16) 
 		}
 	}
 	if len(ips) == 0 {
-		return nil, mresolver.ErrIPNotFound
+		return nil, ErrIPNotFound
 	}
 	return ips, nil
 }

@@ -8,7 +8,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	mresolver "github.com/metacubex/mihomo/component/resolver"
 	"github.com/miekg/dns"
 	"github.com/punchproxy/punch/internal/assets"
 	"github.com/punchproxy/punch/internal/config"
@@ -150,16 +149,12 @@ func (s *Server) Start() error {
 	default:
 	}
 
-	mresolver.DefaultService = s
 	slog.Info("DNS server started", "listen", s.listenAddr)
 	return nil
 }
 
 func (s *Server) Stop() error {
 	var errs []error
-	if mresolver.DefaultService == s {
-		mresolver.DefaultService = nil
-	}
 	if s.udpServer != nil {
 		if err := s.udpServer.Shutdown(); err != nil {
 			errs = append(errs, err)
