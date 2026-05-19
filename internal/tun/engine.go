@@ -379,6 +379,7 @@ func (e *Engine) buildTunOptions() (runtimeTunOptions, error) {
 			Inet4Address:         []netip.Prefix{tunAddress},
 			Inet6Address:         inet6Address,
 			AutoRoute:            false,
+			InterfaceScope:       true,
 			EXP_DisableDNSHijack: true,
 			Logger:               singLogger{},
 		},
