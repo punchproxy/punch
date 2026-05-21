@@ -177,7 +177,7 @@ func (s *Server) Stop() error {
 func (s *Server) DisableIPv6FakeIP() bool { return s.disableIPv6FakeIP }
 
 func (s *Server) handleDNS(w dns.ResponseWriter, r *dns.Msg) {
-	resp, _, _, _, err := s.serveMsg(context.Background(), r, w.RemoteAddr().String())
+	resp, _, _, _, _, err := s.serveMsg(context.Background(), r, w.RemoteAddr().String())
 	if err != nil {
 		dns.HandleFailed(w, r)
 		return
@@ -188,6 +188,6 @@ func (s *Server) handleDNS(w dns.ResponseWriter, r *dns.Msg) {
 }
 
 func (s *Server) ServeMsg(ctx context.Context, r *dns.Msg) (*dns.Msg, error) {
-	resp, _, _, _, err := s.serveMsg(ctx, r, "tun")
+	resp, _, _, _, _, err := s.serveMsg(ctx, r, "tun")
 	return resp, err
 }

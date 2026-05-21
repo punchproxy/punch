@@ -83,7 +83,7 @@ func BenchmarkServeMsgCachedDirectHit(b *testing.B) {
 	query := new(mdns.Msg)
 	query.SetQuestion("direct.example.", mdns.TypeA)
 
-	_, decision, _, result, err := server.serveMsgWithOptions(context.Background(), query, "bench", false, nil, false)
+	_, decision, _, _, result, err := server.serveMsgWithOptions(context.Background(), query, "bench", false, nil, false)
 	if err != nil || decision != DecisionDirect || result != "203.0.113.1" {
 		b.Fatalf("warmup = (%s, %q, %v), want direct cached result", decision, result, err)
 	}
@@ -91,7 +91,7 @@ func BenchmarkServeMsgCachedDirectHit(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_, decision, _, result, err := server.serveMsgWithOptions(context.Background(), query, "bench", false, nil, false)
+		_, decision, _, _, result, err := server.serveMsgWithOptions(context.Background(), query, "bench", false, nil, false)
 		if err != nil || decision != DecisionDirect || result != "203.0.113.1" {
 			b.Fatalf("serveMsgWithOptions() = (%s, %q, %v), want direct cached result", decision, result, err)
 		}

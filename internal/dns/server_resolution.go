@@ -209,7 +209,7 @@ func (s *Server) resolveRelayDomainFamily(ctx context.Context, source, host stri
 	msg := new(dns.Msg)
 	msg.SetQuestion(dns.Fqdn(host), qtype)
 
-	reply, _, _, _, err := s.serveMsgWithOptions(ctx, msg, source, true, nil, true)
+	reply, _, _, _, _, err := s.serveMsgWithOptions(ctx, msg, source, true, nil, true)
 	if err != nil {
 		result.err = err
 		return result

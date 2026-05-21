@@ -12,6 +12,7 @@ func newDNSCommand(cfg *commandConfig) *cobra.Command {
 	cmd.AddCommand(newRoutesCommand(cfg))
 	cmd.AddCommand(newFakeIPsCommand(cfg))
 	cmd.AddCommand(newCacheCommand(cfg))
+	cmd.AddCommand(newResolveCommand(cfg))
 	cmd.AddCommand(newTraceCommand(cfg))
 	return cmd
 }

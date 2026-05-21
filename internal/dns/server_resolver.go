@@ -114,7 +114,7 @@ func (r *ServerResolver) ExchangeContext(ctx context.Context, msg *mdns.Msg) (*m
 	}
 	timeoutCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	reply, _, _, _, err := r.server.serveMsgWithOptions(timeoutCtx, msg.Copy(), r.source, true, nil, true)
+	reply, _, _, _, _, err := r.server.serveMsgWithOptions(timeoutCtx, msg.Copy(), r.source, true, nil, true)
 	return reply, err
 }
 

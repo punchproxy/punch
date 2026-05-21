@@ -23,11 +23,11 @@ const (
 	DecisionReject Decision = "REJECT"
 )
 
-func (s *Server) serveMsg(ctx context.Context, r *dns.Msg, source string) (*dns.Msg, Decision, string, string, error) {
+func (s *Server) serveMsg(ctx context.Context, r *dns.Msg, source string) (*dns.Msg, Decision, string, string, string, error) {
 	return s.serveMsgWithOptions(ctx, r, source, false, nil, false)
 }
 
-func (s *Server) serveMsgWithOptions(ctx context.Context, r *dns.Msg, source string, disableFakeIP bool, resolverOverride *ResolverGroup, respectAnswerTTL bool) (*dns.Msg, Decision, string, string, error) {
+func (s *Server) serveMsgWithOptions(ctx context.Context, r *dns.Msg, source string, disableFakeIP bool, resolverOverride *ResolverGroup, respectAnswerTTL bool) (*dns.Msg, Decision, string, string, string, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -35,7 +35,7 @@ func (s *Server) serveMsgWithOptions(ctx context.Context, r *dns.Msg, source str
 	s.totalQueries.Add(1)
 
 	if len(r.Question) == 0 {
-		return nil, "", "", "", fmt.Errorf("empty dns question")
+		return nil, "", "", "", "", fmt.Errorf("empty dns question")
 	}
 
 	q := r.Question[0]
@@ -114,7 +114,152 @@ func (s *Server) serveMsgWithOptions(ctx context.Context, r *dns.Msg, source str
 		"latency_ms", latency,
 	)
 
-	return resp, decision, rule, resultStr, nil
+	return resp, decision, rule, upstream, resultStr, nil
+}
+
+// QueryResolution is a single DNS lookup run through Punch's normal rule,
+// upstream, cache, and fake-IP decision path.
+type QueryResolution struct {
+	Domain   string      `json:"domain"`
+	QType    string      `json:"qtype"`
+	Decision Decision    `json:"decision"`
+	Rule     string      `json:"rule"`
+	Upstream string      `json:"upstream"`
+	Response string      `json:"response"`
+	RCode    string      `json:"rcode"`
+	Latency  int64       `json:"latency_ms"`
+	Cached   bool        `json:"cached"`
+	Answers  []DNSAnswer `json:"answers,omitempty"`
+}
+
+// DNSAnswer is one resource record from a resolved DNS response.
+type DNSAnswer struct {
+	Name  string `json:"name"`
+	Type  string `json:"type"`
+	TTL   uint32 `json:"ttl"`
+	Value string `json:"value"`
+}
+
+// ResolveQuery resolves domain with qtype through the server's normal DNS path
+// and returns the observable decision details for diagnostics.
+func (s *Server) ResolveQuery(ctx context.Context, domain string, qtype uint16) (QueryResolution, error) {
+	domain = strings.TrimSuffix(strings.TrimSpace(domain), ".")
+	if domain == "" {
+		return QueryResolution{}, fmt.Errorf("missing domain")
+	}
+
+	query := new(dns.Msg)
+	query.SetQuestion(dns.Fqdn(domain), qtype)
+
+	start := time.Now()
+	resp, decision, rule, upstream, response, err := s.serveMsgWithOptions(ctx, query, "punchctl", false, nil, false)
+	if err != nil {
+		return QueryResolution{}, err
+	}
+
+	result := QueryResolution{
+		Domain:   domain,
+		QType:    qtypeName(qtype),
+		Decision: decision,
+		Rule:     rule,
+		Upstream: upstream,
+		Response: response,
+		Latency:  time.Since(start).Milliseconds(),
+		Cached:   strings.HasPrefix(upstream, "Cache"),
+	}
+	if resp != nil {
+		result.RCode = rcodeName(resp.Rcode)
+		result.Answers = dnsAnswers(resp.Answer)
+		if result.Response == "" {
+			result.Response = responseText(resp)
+		}
+	}
+	if result.Response == "" {
+		result.Response = result.RCode
+	}
+	return result, nil
+}
+
+func qtypeName(qtype uint16) string {
+	if name := dns.TypeToString[qtype]; name != "" {
+		return name
+	}
+	return fmt.Sprintf("TYPE%d", qtype)
+}
+
+func rcodeName(rcode int) string {
+	if name := dns.RcodeToString[rcode]; name != "" {
+		return name
+	}
+	return fmt.Sprintf("RCODE%d", rcode)
+}
+
+func dnsAnswers(rrs []dns.RR) []DNSAnswer {
+	if len(rrs) == 0 {
+		return nil
+	}
+	answers := make([]DNSAnswer, 0, len(rrs))
+	for _, rr := range rrs {
+		header := rr.Header()
+		answers = append(answers, DNSAnswer{
+			Name:  header.Name,
+			Type:  qtypeName(header.Rrtype),
+			TTL:   header.Ttl,
+			Value: rrValue(rr),
+		})
+	}
+	return answers
+}
+
+func responseText(msg *dns.Msg) string {
+	if msg == nil {
+		return ""
+	}
+	if text := answerToString(msg); text != "" {
+		return text
+	}
+	if len(msg.Answer) == 0 {
+		return rcodeName(msg.Rcode)
+	}
+	parts := make([]string, 0, len(msg.Answer))
+	for _, rr := range msg.Answer {
+		if value := rrValue(rr); value != "" {
+			parts = append(parts, value)
+		}
+	}
+	if len(parts) == 0 {
+		return rcodeName(msg.Rcode)
+	}
+	return strings.Join(parts, ", ")
+}
+
+func rrValue(rr dns.RR) string {
+	switch v := rr.(type) {
+	case *dns.A:
+		return v.A.String()
+	case *dns.AAAA:
+		return v.AAAA.String()
+	case *dns.CNAME:
+		return v.Target
+	case *dns.NS:
+		return v.Ns
+	case *dns.PTR:
+		return v.Ptr
+	case *dns.MX:
+		return fmt.Sprintf("%d %s", v.Preference, v.Mx)
+	case *dns.TXT:
+		return strings.Join(v.Txt, " ")
+	case *dns.SRV:
+		return fmt.Sprintf("%d %d %d %s", v.Priority, v.Weight, v.Port, v.Target)
+	case *dns.SOA:
+		return fmt.Sprintf("%s %s %d %d %d %d %d", v.Ns, v.Mbox, v.Serial, v.Refresh, v.Retry, v.Expire, v.Minttl)
+	default:
+		fields := strings.Fields(rr.String())
+		if len(fields) > 4 {
+			return strings.Join(fields[4:], " ")
+		}
+		return rr.String()
+	}
 }
 
 func (s *Server) handleRelayRule(ctx context.Context, r *dns.Msg, domain string, qtype uint16, disableFakeIP bool, resolverOverride *ResolverGroup, respectAnswerTTL bool) (*dns.Msg, string, string) {

@@ -83,6 +83,7 @@ func (s *Server) Start() error {
 		r.Get("/logs", s.handleLogs)
 		r.Get("/logs/stream", s.handleLogStream)
 		r.Get("/dns/queries/stream", s.handleDNSQueryStream)
+		r.Get("/dns/resolve", s.handleDNSResolve)
 		r.Get("/dns/upstreams", s.handleDNSUpstreams)
 		r.Post("/dns/upstreams", s.handleCreateDNSUpstream)
 		r.Put("/dns/upstreams", s.handleUpdateDNSUpstream)

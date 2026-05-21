@@ -13,6 +13,7 @@ import (
 	mdns "github.com/miekg/dns"
 	"github.com/punchproxy/punch/internal/assets"
 	"github.com/punchproxy/punch/internal/config"
+	"github.com/punchproxy/punch/internal/dnsrule"
 	"github.com/punchproxy/punch/internal/fakeip"
 )
 
@@ -38,7 +39,7 @@ func TestServerQueryTraceDoesNotUseEventBus(t *testing.T) {
 
 	query := new(mdns.Msg)
 	query.SetQuestion("example.com.", mdns.TypeAAAA)
-	_, decision, _, _, err := server.serveMsg(context.Background(), query, "test")
+	_, decision, _, _, _, err := server.serveMsg(context.Background(), query, "test")
 	if err != nil {
 		t.Fatalf("serveMsg() error = %v", err)
 	}
@@ -78,7 +79,7 @@ func TestRelayAAAAAllocatesIPv6FakeIP(t *testing.T) {
 
 	query := new(mdns.Msg)
 	query.SetQuestion("www.example.com.", mdns.TypeAAAA)
-	resp, decision, rule, result, err := server.serveMsg(context.Background(), query, "test")
+	resp, decision, rule, _, result, err := server.serveMsg(context.Background(), query, "test")
 	if err != nil {
 		t.Fatalf("serveMsg() error = %v", err)
 	}
@@ -170,7 +171,7 @@ func TestServerCachedDirectResultUsesStoredCacheResult(t *testing.T) {
 
 	query := new(mdns.Msg)
 	query.SetQuestion("direct.example.", mdns.TypeA)
-	_, decision, rule, result, err := server.serveMsgWithOptions(context.Background(), query, "test", false, nil, false)
+	_, decision, rule, _, result, err := server.serveMsgWithOptions(context.Background(), query, "test", false, nil, false)
 	if err != nil {
 		t.Fatalf("serveMsgWithOptions() error = %v", err)
 	}
@@ -179,6 +180,49 @@ func TestServerCachedDirectResultUsesStoredCacheResult(t *testing.T) {
 	}
 	if result != "stored-result" {
 		t.Fatalf("result = %q, want cached query result", result)
+	}
+}
+
+func TestResolveQueryReportsUpstreamResponseAndDecision(t *testing.T) {
+	upstreamAddr, closeUpstream, counts := startRelayDNSUpstream(t, map[uint16][]netip.Addr{
+		mdns.TypeA: {netip.MustParseAddr("203.0.113.80")},
+	})
+	defer closeUpstream()
+
+	domainMatcher := dnsrule.NewMatcher()
+	if err := domainMatcher.AddRule("domain:example.test", config.DecisionDirect, 0); err != nil {
+		t.Fatalf("AddRule() error = %v", err)
+	}
+
+	server := &Server{
+		cache:         NewCache(10, 0, 60),
+		resolver:      NewResolverGroup([]*UpstreamResolver{NewUpstreamResolver(upstreamAddr, "")}),
+		domainMatcher: domainMatcher,
+		ruleLists:     make(map[string][]*ruleListEntry),
+		refreshing:    make(map[string]struct{}),
+	}
+
+	result, err := server.ResolveQuery(context.Background(), "www.example.test.", mdns.TypeA)
+	if err != nil {
+		t.Fatalf("ResolveQuery() error = %v", err)
+	}
+	if result.Domain != "www.example.test" || result.QType != "A" {
+		t.Fatalf("query identity = %s/%s, want www.example.test/A", result.Domain, result.QType)
+	}
+	if result.Decision != DecisionDirect || result.Rule != "direct-domain" {
+		t.Fatalf("decision/rule = %s/%s, want %s/direct-domain", result.Decision, result.Rule, DecisionDirect)
+	}
+	if result.Upstream != upstreamAddr {
+		t.Fatalf("upstream = %q, want %q", result.Upstream, upstreamAddr)
+	}
+	if result.Response != "203.0.113.80" || result.RCode != "NOERROR" {
+		t.Fatalf("response/rcode = %q/%q, want 203.0.113.80/NOERROR", result.Response, result.RCode)
+	}
+	if len(result.Answers) != 1 || result.Answers[0].Type != "A" || result.Answers[0].Value != "203.0.113.80" {
+		t.Fatalf("answers = %#v, want A 203.0.113.80", result.Answers)
+	}
+	if counts.a.Load() != 1 {
+		t.Fatalf("A upstream queries = %d, want 1", counts.a.Load())
 	}
 }
 
@@ -377,7 +421,7 @@ func TestServerDomainRulesUseConfiguredOrder(t *testing.T) {
 
 			query := new(mdns.Msg)
 			query.SetQuestion("www.example.com.", mdns.TypeA)
-			_, decision, _, _, err := server.serveMsgWithOptions(context.Background(), query, "test", false, nil, false)
+			_, decision, _, _, _, err := server.serveMsgWithOptions(context.Background(), query, "test", false, nil, false)
 			if err != nil {
 				t.Fatalf("serveMsgWithOptions() error = %v", err)
 			}
@@ -429,7 +473,7 @@ func TestServerQTypeRulesUseConfiguredOrder(t *testing.T) {
 
 			query := new(mdns.Msg)
 			query.SetQuestion("www.example.com.", mdns.TypeAAAA)
-			_, decision, _, _, err := server.serveMsgWithOptions(context.Background(), query, "test", false, nil, false)
+			_, decision, _, _, _, err := server.serveMsgWithOptions(context.Background(), query, "test", false, nil, false)
 			if err != nil {
 				t.Fatalf("serveMsgWithOptions() error = %v", err)
 			}

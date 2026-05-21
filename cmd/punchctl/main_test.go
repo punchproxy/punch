@@ -54,6 +54,61 @@ func TestDNSUpstreamsCommand(t *testing.T) {
 	}
 }
 
+func TestDNSResolveCommand(t *testing.T) {
+	var gotAuth string
+	var gotDomain string
+	var gotType string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/dns/resolve" {
+			t.Fatalf("path = %q, want /api/dns/resolve", r.URL.Path)
+		}
+		gotAuth = r.Header.Get("Authorization")
+		gotDomain = r.URL.Query().Get("domain")
+		gotType = r.URL.Query().Get("type")
+		_ = json.NewEncoder(w).Encode(dnsResolveResult{
+			Domain:   "www.baidu.com",
+			QType:    "AAAA",
+			Decision: "DIRECT",
+			Rule:     "direct-domain",
+			Upstream: "https://dns.example/dns-query",
+			Response: "2001:db8::1",
+			RCode:    "NOERROR",
+			Latency:  12,
+			Answers: []dnsResolveAnswer{{
+				Name:  "www.baidu.com.",
+				Type:  "AAAA",
+				TTL:   60,
+				Value: "2001:db8::1",
+			}},
+		})
+	}))
+	defer server.Close()
+
+	var out bytes.Buffer
+	cmd := newRootCommand(commandConfig{
+		out:    &out,
+		errOut: &bytes.Buffer{},
+		client: server.Client(),
+	})
+	cmd.SetArgs([]string{"--addr", server.URL, "--token", "secret", "dns", "resolve", "www.baidu.com", "--type", "AAAA"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if gotAuth != "Bearer secret" {
+		t.Fatalf("Authorization = %q, want Bearer secret", gotAuth)
+	}
+	if gotDomain != "www.baidu.com" || gotType != "AAAA" {
+		t.Fatalf("query = domain %q type %q, want www.baidu.com AAAA", gotDomain, gotType)
+	}
+	text := out.String()
+	for _, want := range []string{"DOMAIN", "QTYPE", "DECISION", "UPSTREAM", "RESPONSE", "www.baidu.com", "AAAA", "DIRECT", "https://dns.example/dns-query", "2001:db8::1"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("output missing %q:\n%s", want, text)
+		}
+	}
+}
+
 func TestStatusCommand(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/status" {
