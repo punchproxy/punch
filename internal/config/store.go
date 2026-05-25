@@ -65,6 +65,8 @@ func (s *Store) DB() *gorm.DB { return s.db }
 func (s *Store) SQLDB() (*sql.DB, error) { return s.db.DB() }
 
 func (s *Store) migrate() error {
+	hadDNSListenAddress := s.db.Migrator().HasColumn(&configBaseModel{}, "dns_listen_address")
+	hadDNSCustomPort := s.db.Migrator().HasColumn(&configBaseModel{}, "dns_custom_port")
 	if err := s.db.AutoMigrate(
 		&settingModel{},
 		&assetModel{},
@@ -80,6 +82,34 @@ func (s *Store) migrate() error {
 		&fakeIPModel{},
 	); err != nil {
 		return fmt.Errorf("migrate: %w", err)
+	}
+	if !hadDNSListenAddress || !hadDNSCustomPort {
+		if err := s.migrateSplitDNSListen(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Store) migrateSplitDNSListen() error {
+	var rows []configBaseModel
+	if err := s.db.Find(&rows).Error; err != nil {
+		return fmt.Errorf("load config rows for dns listen migration: %w", err)
+	}
+	for _, row := range rows {
+		if row.DNSListen == "" {
+			continue
+		}
+		address, port, err := splitDNSListen(row.DNSListen)
+		if err != nil {
+			return fmt.Errorf("migrate dns listen %q: %w", row.DNSListen, err)
+		}
+		if err := s.db.Model(&configBaseModel{}).Where("id = ?", row.ID).Updates(map[string]any{
+			"dns_listen_address": address,
+			"dns_custom_port":    port,
+		}).Error; err != nil {
+			return fmt.Errorf("save split dns listen for config row %d: %w", row.ID, err)
+		}
 	}
 	return nil
 }
@@ -110,7 +140,9 @@ type configBaseModel struct {
 	LogLevel                 string `gorm:"column:log_level;not null"`
 	LogFile                  string `gorm:"column:log_file;not null"`
 	AssetRefreshInterval     int    `gorm:"column:asset_refresh_interval;not null"`
-	DNSListen                string `gorm:"column:dns_listen;not null"`
+	DNSListen                string `gorm:"column:dns_listen;not null"` // Legacy combined listen address kept for existing databases.
+	DNSListenAddress         string `gorm:"column:dns_listen_address;not null;default:0.0.0.0"`
+	DNSCustomPort            int    `gorm:"column:dns_custom_port;not null;default:53"`
 	DNSCacheSize             int    `gorm:"column:dns_cache_size;not null"`
 	DNSFakeIPRange           string `gorm:"column:dns_fake_ip_range;not null"`
 	DNSFakeIPv6Range         string `gorm:"column:dns_fake_ipv6_range"`

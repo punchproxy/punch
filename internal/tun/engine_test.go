@@ -29,6 +29,36 @@ func TestBuildTunAndDNSServerAddresses(t *testing.T) {
 		t.Fatalf("dns server address = %s, want %s", dnsAddress, want)
 	}
 
+	overrideAddress, warn, err := buildSystemDNSOverrideAddress(fakeRange, "0.0.0.0:53", "windows")
+	if err != nil {
+		t.Fatalf("buildSystemDNSOverrideAddress(:53) error = %v", err)
+	}
+	if want := netip.MustParseAddr("127.0.0.1"); overrideAddress != want {
+		t.Fatalf("dns override address = %s, want %s", overrideAddress, want)
+	}
+	if warn {
+		t.Fatal("port 53 override should not warn on Windows")
+	}
+
+	overrideAddress, warn, err = buildSystemDNSOverrideAddress(fakeRange, "0.0.0.0:28853", "windows")
+	if err != nil {
+		t.Fatalf("buildSystemDNSOverrideAddress(:28853) error = %v", err)
+	}
+	if want := netip.MustParseAddr("198.18.0.2"); overrideAddress != want {
+		t.Fatalf("custom-port dns override address = %s, want %s", overrideAddress, want)
+	}
+	if !warn {
+		t.Fatal("custom-port override should warn on Windows")
+	}
+
+	_, warn, err = buildSystemDNSOverrideAddress(fakeRange, "0.0.0.0:28853", "linux")
+	if err != nil {
+		t.Fatalf("buildSystemDNSOverrideAddress(linux custom port) error = %v", err)
+	}
+	if warn {
+		t.Fatal("custom-port override should only warn on Windows")
+	}
+
 	tun6Address, err := buildTunAddress(netip.MustParsePrefix("fdfe:dcba:9876::/64"))
 	if err != nil {
 		t.Fatalf("buildTunAddress(IPv6) error = %v", err)

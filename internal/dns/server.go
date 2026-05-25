@@ -87,7 +87,7 @@ func NewServer(assetManager *assets.Manager) (*Server, error) {
 	}
 
 	s := &Server{
-		listenAddr:         cfg.DNS.Listen,
+		listenAddr:         config.DNSListenAddr(cfg.DNS),
 		fakeIPPool:         fakePool,
 		disableIPv6FakeIP:  disableIPv6FakeIP,
 		cache:              NewCache(cfg.DNS.CacheSize, 60, 86400),
@@ -171,6 +171,14 @@ func (s *Server) Stop() error {
 		return fmt.Errorf("dns server shutdown errors: %v", errs)
 	}
 	return nil
+}
+
+// ListenAddr reports the configured DNS listener address.
+func (s *Server) ListenAddr() string {
+	if s == nil {
+		return ""
+	}
+	return s.listenAddr
 }
 
 // DisableIPv6FakeIP reports whether IPv6 fake-IP allocation is disabled.

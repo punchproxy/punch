@@ -52,7 +52,7 @@ docker exec punch punchctl status
 
 Notes for Docker:
 - `--network host` is recommended — transparent capture via TUN is only useful when sharing the host network namespace.
-- Without host networking, expose ports explicitly: `-p 127.0.0.1:28854:28854 -p 28853:28853/udp`.
+- Without host networking, expose ports explicitly: `-p 127.0.0.1:28854:28854 -p 53:53/udp -p 53:53/tcp`.
 - The daemon's database lives at `/var/lib/punch` inside the container; mount a volume to persist it.
 - If `/dev/net/tun` is missing on the host, run `modprobe tun` first.
 
@@ -172,7 +172,8 @@ Punch keeps its configuration in a SQLite database (`punch.db`), seeded with sen
 
 ```sh
 punchctl config                                 # list everything
-punchctl config get dns.listen
+punchctl config get dns.listen_address
+punchctl config get dns.custom_port
 punchctl config set api.secret "change-me"
 punchctl config set check.full_interval 86400
 punchctl config set check.full_trigger_failures 5
@@ -184,7 +185,7 @@ punchctl config set check.interval 10
 If you need to override a value at startup (for example to bring the daemon up on a different port), use `-s` on `punchd`. The new value is persisted, so it survives restarts:
 
 ```sh
-sudo punchd -s dns.listen=0.0.0.0:53 -s api.listen=127.0.0.1:8080
+sudo punchd -s dns.listen_address=0.0.0.0 -s dns.custom_port=53 -s api.listen=127.0.0.1:8080
 sudo punchd -s system.log_level=debug
 ```
 
@@ -192,7 +193,7 @@ Defaults worth knowing:
 
 | Setting                 | Default                                           |
 | ----------------------- | ------------------------------------------------- |
-| DNS listener            | `0.0.0.0:28853`                                   |
+| DNS listener            | `0.0.0.0`, port `53`                              |
 | API listener            | `127.0.0.1:28854`                                 |
 | TUN interface           | auto-selected `utunN` on macOS, `punch0` elsewhere |
 | DoH upstreams           | `doh.pub`, `dns.alidns.com`                       |
@@ -247,7 +248,7 @@ Don't commit real relay credentials or private subscription URLs to a repo.
 applications
     |
     v
- system DNS -> Punch DNS :28853 -> rules -> reject | direct | relay
+ system DNS -> Punch DNS :53 -> rules -> reject | direct | relay
     |                               |
     |                               v
     +-> fake IP pool ---------> Punch TUN engine

@@ -4,8 +4,10 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/netip"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -44,10 +46,12 @@ type Engine struct {
 }
 
 type runtimeTunOptions struct {
-	options          singtun.Options
-	routeAddress     []netip.Prefix
-	fakeRange        netip.Prefix
-	dnsServerAddress netip.Addr
+	options                    singtun.Options
+	routeAddress               []netip.Prefix
+	fakeRange                  netip.Prefix
+	dnsServerAddress           netip.Addr
+	dnsListenAddr              string
+	warnWindowsCustomDNSListen bool
 }
 
 type SystemInfo struct {
@@ -156,6 +160,12 @@ func (e *Engine) startLocked() error {
 	if err := configureInterfaceRoutes(routeAddress, opts.Inet4Address[0], ifaceName); err != nil {
 		closeTunStartResources(tunStack, tunIf, tunnel, defaultInterfaceMonitor, networkMonitor)
 		return fmt.Errorf("configure interface routes: %w", err)
+	}
+
+	if runtimeOpts.warnWindowsCustomDNSListen {
+		slog.Warn("DNS override may fail on Windows because dns.custom_port is not 53; change dns.custom_port back to 53",
+			"dns_listen", runtimeOpts.dnsListenAddr,
+		)
 	}
 
 	e.tunIf = tunIf
@@ -355,7 +365,8 @@ func (e *Engine) buildTunOptions() (runtimeTunOptions, error) {
 	if err != nil {
 		return runtimeTunOptions{}, err
 	}
-	dnsServerAddress, err := buildDNSServerAddress(fakeRange)
+	dnsListenAddr := e.dnsServer.ListenAddr()
+	dnsOverrideAddress, warnWindowsCustomDNSListen, err := buildSystemDNSOverrideAddress(fakeRange, dnsListenAddr, runtime.GOOS)
 	if err != nil {
 		return runtimeTunOptions{}, err
 	}
@@ -383,9 +394,11 @@ func (e *Engine) buildTunOptions() (runtimeTunOptions, error) {
 			EXP_DisableDNSHijack: true,
 			Logger:               singLogger{},
 		},
-		routeAddress:     routes,
-		fakeRange:        fakeRange,
-		dnsServerAddress: dnsServerAddress,
+		routeAddress:               routes,
+		fakeRange:                  fakeRange,
+		dnsServerAddress:           dnsOverrideAddress,
+		dnsListenAddr:              dnsListenAddr,
+		warnWindowsCustomDNSListen: warnWindowsCustomDNSListen,
 	}, nil
 }
 
@@ -522,6 +535,33 @@ func buildDNSServerAddress(fakeRange netip.Prefix) (netip.Addr, error) {
 		return netip.Addr{}, fmt.Errorf("dns server address %s is outside fake-ip range %s", addr, fakeRange)
 	}
 	return addr, nil
+}
+
+func buildSystemDNSOverrideAddress(fakeRange netip.Prefix, dnsListenAddr, goos string) (netip.Addr, bool, error) {
+	port, err := dnsListenPort(dnsListenAddr)
+	if err != nil {
+		return netip.Addr{}, false, err
+	}
+	if port == 53 {
+		return netip.MustParseAddr("127.0.0.1"), false, nil
+	}
+	addr, err := buildDNSServerAddress(fakeRange)
+	if err != nil {
+		return netip.Addr{}, false, err
+	}
+	return addr, goos == "windows", nil
+}
+
+func dnsListenPort(addr string) (int, error) {
+	_, portText, err := net.SplitHostPort(addr)
+	if err != nil {
+		return 0, fmt.Errorf("parse dns listen address %q: %w", addr, err)
+	}
+	port, err := strconv.Atoi(portText)
+	if err != nil {
+		return 0, fmt.Errorf("parse dns listen port %q: %w", portText, err)
+	}
+	return port, nil
 }
 
 func buildCleanupRoutes(routeAddress []netip.Prefix) []netip.Prefix {

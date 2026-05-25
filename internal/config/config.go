@@ -32,7 +32,8 @@ type Config struct {
 }
 
 type DNS struct {
-	Listen            string      `json:"listen"`
+	ListenAddress     string      `json:"listen_address"`
+	CustomPort        int         `json:"custom_port"`
 	Upstream          []Upstream  `json:"upstream"`
 	CacheSize         int         `json:"cache_size"`
 	FakeIPRange       string      `json:"fakeip_range"`
@@ -152,11 +153,17 @@ const (
 	KindCIDR   = "cidr"
 )
 
+const (
+	defaultDNSListenAddress = "0.0.0.0"
+	defaultDNSCustomPort    = 53
+)
+
 var scalarKeys = []string{
 	"system.log_level",
 	"system.log_file",
 	"system.asset_refresh_interval",
-	"dns.listen",
+	"dns.listen_address",
+	"dns.custom_port",
 	"dns.cache_size",
 	"dns.fakeip_range",
 	"dns.fakeipv6_range",
@@ -297,8 +304,10 @@ func getValue(cfg *Config, key string) (string, error) {
 		return cfg.LogFile, nil
 	case "system.asset_refresh_interval":
 		return strconv.Itoa(cfg.AssetRefreshInterval), nil
-	case "dns.listen":
-		return cfg.DNS.Listen, nil
+	case "dns.listen_address":
+		return cfg.DNS.ListenAddress, nil
+	case "dns.custom_port":
+		return strconv.Itoa(cfg.DNS.CustomPort), nil
 	case "dns.cache_size":
 		return strconv.Itoa(cfg.DNS.CacheSize), nil
 	case "dns.fakeip_range":
@@ -348,8 +357,14 @@ func setValue(cfg *Config, key, value string) error {
 			return err
 		}
 		cfg.AssetRefreshInterval = parsed
-	case "dns.listen":
-		cfg.DNS.Listen = value
+	case "dns.listen_address":
+		cfg.DNS.ListenAddress = value
+	case "dns.custom_port":
+		parsed, err := parsePort(key, value)
+		if err != nil {
+			return err
+		}
+		cfg.DNS.CustomPort = parsed
 	case "dns.cache_size":
 		parsed, err := parsePositiveInt(key, value)
 		if err != nil {
@@ -441,6 +456,31 @@ func parsePositiveInt(key, value string) (int, error) {
 	return parsed, nil
 }
 
+func parsePort(key, value string) (int, error) {
+	parsed, err := strconv.Atoi(value)
+	if err != nil || parsed < 1 || parsed > 65535 {
+		return 0, fmt.Errorf("%s must be a TCP/UDP port between 1 and 65535", key)
+	}
+	return parsed, nil
+}
+
+// DNSListenAddr returns the network address used by the DNS server.
+func DNSListenAddr(d DNS) string {
+	return net.JoinHostPort(d.ListenAddress, strconv.Itoa(d.CustomPort))
+}
+
+func splitDNSListen(listen string) (string, int, error) {
+	address, portText, err := net.SplitHostPort(listen)
+	if err != nil {
+		return "", 0, err
+	}
+	port, err := parsePort("dns.custom_port", portText)
+	if err != nil {
+		return "", 0, err
+	}
+	return address, port, nil
+}
+
 func cloneConfig(cfg *Config) *Config {
 	if cfg == nil {
 		return nil
@@ -523,7 +563,8 @@ func loadTables(s *Store) (*Config, error) {
 		LogFile:              base.LogFile,
 		AssetRefreshInterval: base.AssetRefreshInterval,
 		DNS: DNS{
-			Listen:            base.DNSListen,
+			ListenAddress:     base.DNSListenAddress,
+			CustomPort:        base.DNSCustomPort,
 			CacheSize:         base.DNSCacheSize,
 			FakeIPRange:       base.DNSFakeIPRange,
 			FakeIPv6Range:     base.DNSFakeIPv6Range,
@@ -682,7 +723,9 @@ func saveTables(s *Store, cfg *Config) error {
 			LogLevel:                 cfg.LogLevel,
 			LogFile:                  cfg.LogFile,
 			AssetRefreshInterval:     cfg.AssetRefreshInterval,
-			DNSListen:                cfg.DNS.Listen,
+			DNSListen:                DNSListenAddr(cfg.DNS),
+			DNSListenAddress:         cfg.DNS.ListenAddress,
+			DNSCustomPort:            cfg.DNS.CustomPort,
 			DNSCacheSize:             cfg.DNS.CacheSize,
 			DNSFakeIPRange:           cfg.DNS.FakeIPRange,
 			DNSFakeIPv6Range:         cfg.DNS.FakeIPv6Range,
@@ -901,7 +944,8 @@ func Default() *Config {
 		LogLevel:             "info",
 		AssetRefreshInterval: 3600,
 		DNS: DNS{
-			Listen: "0.0.0.0:28853",
+			ListenAddress: defaultDNSListenAddress,
+			CustomPort:    defaultDNSCustomPort,
 			Upstream: []Upstream{
 				{URL: "https://doh.pub/dns-query", Bootstrap: "119.29.29.29"},
 				{URL: "https://dns.alidns.com/dns-query", Bootstrap: "223.5.5.5"},
@@ -957,8 +1001,11 @@ func applyDefaults(cfg *Config) {
 	if cfg.LogLevel == "" {
 		cfg.LogLevel = "info"
 	}
-	if cfg.DNS.Listen == "" {
-		cfg.DNS.Listen = "0.0.0.0:53"
+	if cfg.DNS.ListenAddress == "" {
+		cfg.DNS.ListenAddress = defaultDNSListenAddress
+	}
+	if cfg.DNS.CustomPort == 0 {
+		cfg.DNS.CustomPort = defaultDNSCustomPort
 	}
 	if cfg.DNS.CacheSize == 0 {
 		cfg.DNS.CacheSize = 100000
@@ -1036,6 +1083,12 @@ func applyLegacyDNSOptions(cfg *Config) {
 }
 
 func validateConfig(cfg *Config) error {
+	if strings.TrimSpace(cfg.DNS.ListenAddress) == "" {
+		return fmt.Errorf("dns.listen_address must not be empty")
+	}
+	if cfg.DNS.CustomPort < 1 || cfg.DNS.CustomPort > 65535 {
+		return fmt.Errorf("dns.custom_port must be a TCP/UDP port between 1 and 65535")
+	}
 	if err := validateFakeIPRange("dns.fakeip_range", cfg.DNS.FakeIPRange, false); err != nil {
 		return err
 	}

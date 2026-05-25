@@ -47,7 +47,7 @@ var (
 )
 
 func main() {
-	flag.Var(&setFlags, "set", "override a config key and persist it (e.g. -set dns.listen=0.0.0.0:53); may be repeated")
+	flag.Var(&setFlags, "set", "override a config key and persist it (e.g. -set dns.listen_address=0.0.0.0 -set dns.custom_port=53); may be repeated")
 	flag.Var(&setFlags, "s", "shorthand for -set")
 	flag.Parse()
 
@@ -226,7 +226,7 @@ func main() {
 
 	assetManager.MarkReady()
 	slog.Info("Punch is ready",
-		"dns", cfg.DNS.Listen,
+		"dns", config.DNSListenAddr(cfg.DNS),
 		"api", cfg.API.Listen,
 	)
 

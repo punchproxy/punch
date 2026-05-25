@@ -4,6 +4,9 @@ import (
 	"path/filepath"
 	"reflect"
 	"testing"
+
+	"github.com/glebarez/sqlite"
+	"gorm.io/gorm"
 )
 
 func TestLoadSeedsDefaultConfigTables(t *testing.T) {
@@ -13,8 +16,14 @@ func TestLoadSeedsDefaultConfigTables(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	if cfg.DNS.Listen != "0.0.0.0:28853" {
-		t.Fatalf("dns listen = %q, want default first-run listen", cfg.DNS.Listen)
+	if cfg.DNS.ListenAddress != "0.0.0.0" {
+		t.Fatalf("dns listen address = %q, want default first-run address", cfg.DNS.ListenAddress)
+	}
+	if cfg.DNS.CustomPort != 53 {
+		t.Fatalf("dns custom port = %d, want default first-run port", cfg.DNS.CustomPort)
+	}
+	if got := DNSListenAddr(cfg.DNS); got != "0.0.0.0:53" {
+		t.Fatalf("dns listen = %q, want default first-run listen", got)
 	}
 	if cfg.Check.Interval != 10 {
 		t.Fatalf("check interval = %d, want 10", cfg.Check.Interval)
@@ -47,7 +56,8 @@ func TestConfigSaveLoadRoundTrip(t *testing.T) {
 	want.LogLevel = "debug"
 	want.LogFile = "/tmp/punch.log"
 	want.AssetRefreshInterval = 42
-	want.DNS.Listen = "127.0.0.1:5353"
+	want.DNS.ListenAddress = "127.0.0.1"
+	want.DNS.CustomPort = 5353
 	want.DNS.Upstream = []Upstream{
 		{URL: "https://dns.example/dns-query", Bootstrap: "1.1.1.1", Domains: []string{"domain:example.com"}},
 		{URL: "tls://1.0.0.1:853"},
@@ -139,29 +149,71 @@ func TestConfigUsesRelationalTables(t *testing.T) {
 	}
 }
 
+func TestOpenMigratesLegacyDNSListen(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "punch.db")
+	seedLegacyConfigBase(t, path, "127.0.0.1:5353")
+
+	st, err := Open(path)
+	if err != nil {
+		t.Fatalf("open migrated store: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := st.Close(); err != nil {
+			t.Fatalf("close store: %v", err)
+		}
+	})
+
+	cfg, err := Load(st)
+	if err != nil {
+		t.Fatalf("load migrated config: %v", err)
+	}
+	if cfg.DNS.ListenAddress != "127.0.0.1" {
+		t.Fatalf("migrated dns.listen_address = %q, want 127.0.0.1", cfg.DNS.ListenAddress)
+	}
+	if cfg.DNS.CustomPort != 5353 {
+		t.Fatalf("migrated dns.custom_port = %d, want 5353", cfg.DNS.CustomPort)
+	}
+}
+
 func TestSingletonGetSetScalarValues(t *testing.T) {
 	st := openTestStore(t)
 	if err := Init(st); err != nil {
 		t.Fatalf("init: %v", err)
 	}
 
-	if err := Set("dns.listen", "127.0.0.1:5354"); err != nil {
-		t.Fatalf("set dns.listen: %v", err)
+	if err := Set("dns.listen_address", "127.0.0.1"); err != nil {
+		t.Fatalf("set dns.listen_address: %v", err)
 	}
-	got, err := Get("dns.listen")
+	got, err := Get("dns.listen_address")
 	if err != nil {
-		t.Fatalf("get dns.listen: %v", err)
+		t.Fatalf("get dns.listen_address: %v", err)
 	}
-	if got != "127.0.0.1:5354" {
-		t.Fatalf("dns.listen = %q, want updated value", got)
+	if got != "127.0.0.1" {
+		t.Fatalf("dns.listen_address = %q, want updated value", got)
+	}
+	if err := Set("dns.custom_port", "5354"); err != nil {
+		t.Fatalf("set dns.custom_port: %v", err)
+	}
+	got, err = Get("dns.custom_port")
+	if err != nil {
+		t.Fatalf("get dns.custom_port: %v", err)
+	}
+	if got != "5354" {
+		t.Fatalf("dns.custom_port = %q, want updated value", got)
 	}
 
 	persisted, err := Load(st)
 	if err != nil {
 		t.Fatalf("load persisted: %v", err)
 	}
-	if persisted.DNS.Listen != "127.0.0.1:5354" {
-		t.Fatalf("persisted dns.listen = %q, want updated value", persisted.DNS.Listen)
+	if persisted.DNS.ListenAddress != "127.0.0.1" {
+		t.Fatalf("persisted dns.listen_address = %q, want updated value", persisted.DNS.ListenAddress)
+	}
+	if persisted.DNS.CustomPort != 5354 {
+		t.Fatalf("persisted dns.custom_port = %d, want updated value", persisted.DNS.CustomPort)
+	}
+	if got := DNSListenAddr(persisted.DNS); got != "127.0.0.1:5354" {
+		t.Fatalf("persisted dns listen = %q, want updated value", got)
 	}
 
 	if err := Set("check.interval", "15"); err != nil {
@@ -231,6 +283,12 @@ func TestSingletonGetSetScalarValues(t *testing.T) {
 	if _, err := Get("check.url"); err != ErrNotFound {
 		t.Fatalf("get check.url error = %v, want ErrNotFound", err)
 	}
+	if _, err := Get("dns.listen"); err != ErrNotFound {
+		t.Fatalf("get dns.listen error = %v, want ErrNotFound", err)
+	}
+	if err := Set("dns.listen", "127.0.0.1:5354"); err != ErrNotFound {
+		t.Fatalf("set dns.listen error = %v, want ErrNotFound", err)
+	}
 	if _, err := Get("tun.device"); err != ErrNotFound {
 		t.Fatalf("get tun.device error = %v, want ErrNotFound", err)
 	}
@@ -238,6 +296,75 @@ func TestSingletonGetSetScalarValues(t *testing.T) {
 		t.Fatalf("set tun.device error = %v, want ErrNotFound", err)
 	}
 }
+
+func seedLegacyConfigBase(t *testing.T, path, dnsListen string) {
+	t.Helper()
+	db, err := gorm.Open(sqlite.Open(path), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open legacy sqlite: %v", err)
+	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatalf("legacy sqlite handle: %v", err)
+	}
+	defer sqlDB.Close()
+	if err := db.AutoMigrate(&legacyConfigBaseModel{}); err != nil {
+		t.Fatalf("create legacy config_base: %v", err)
+	}
+	disableIPv6FakeIP := true
+	row := legacyConfigBaseModel{
+		ID:                       1,
+		LogLevel:                 "info",
+		AssetRefreshInterval:     3600,
+		DNSListen:                dnsListen,
+		DNSCacheSize:             100000,
+		DNSFakeIPRange:           "198.18.0.0/15",
+		DNSFakeIPv6Range:         "fdfe:dcba:9876::/64",
+		DNSFakeIPTTL:             "1h",
+		DNSDisableIPv6FakeIP:     &disableIPv6FakeIP,
+		TUNDevice:                "punch0",
+		RelaySelect:              "auto",
+		RelayAutoURL:             "http://www.gstatic.com/generate_204",
+		CheckDomesticURL:         "http://connect.rom.miui.com/generate_204",
+		CheckFullInterval:        86400,
+		RelayAutoTolerance:       50,
+		RelayCheckConcurrency:    10,
+		CheckInterval:            10,
+		CheckFullTriggerFailures: 5,
+		APIListen:                "127.0.0.1:28854",
+		SessionsHistoryLimit:     1000,
+	}
+	if err := db.Create(&row).Error; err != nil {
+		t.Fatalf("insert legacy config_base: %v", err)
+	}
+}
+
+type legacyConfigBaseModel struct {
+	ID                       int    `gorm:"column:id;primaryKey;autoIncrement:false"`
+	LogLevel                 string `gorm:"column:log_level;not null"`
+	LogFile                  string `gorm:"column:log_file;not null"`
+	AssetRefreshInterval     int    `gorm:"column:asset_refresh_interval;not null"`
+	DNSListen                string `gorm:"column:dns_listen;not null"`
+	DNSCacheSize             int    `gorm:"column:dns_cache_size;not null"`
+	DNSFakeIPRange           string `gorm:"column:dns_fake_ip_range;not null"`
+	DNSFakeIPv6Range         string `gorm:"column:dns_fake_ipv6_range"`
+	DNSFakeIPTTL             string `gorm:"column:dns_fakeip_ttl;not null;default:1h"`
+	DNSDisableIPv6FakeIP     *bool  `gorm:"column:dns_disable_ipv6_fakeip;default:1"`
+	TUNDevice                string `gorm:"column:tun_device;not null"`
+	RelaySelect              string `gorm:"column:relay_select;not null"`
+	RelayAutoURL             string `gorm:"column:relay_auto_url;not null"`
+	CheckDomesticURL         string `gorm:"column:check_domestic_url"`
+	CheckFullInterval        int    `gorm:"column:relay_auto_interval;not null"`
+	RelayAutoTolerance       int    `gorm:"column:relay_auto_tolerance;not null"`
+	RelayCheckConcurrency    int    `gorm:"column:relay_check_concurrency;not null;default:10"`
+	CheckInterval            int    `gorm:"column:check_selected_interval;not null;default:10"`
+	CheckFullTriggerFailures int    `gorm:"column:check_full_trigger_failures;not null;default:5"`
+	APIListen                string `gorm:"column:api_listen;not null"`
+	APISecret                string `gorm:"column:api_secret;not null"`
+	SessionsHistoryLimit     int    `gorm:"column:sessions_history_limit;not null;default:1000"`
+}
+
+func (legacyConfigBaseModel) TableName() string { return "config_base" }
 
 func openTestStore(t *testing.T) *Store {
 	t.Helper()
