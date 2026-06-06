@@ -37,6 +37,7 @@ jobs:
               goamd64: v3,
               output: amd64,
               debian: amd64,
+              pacman: x86_64,
               rpm: x86_64,
             }
           - {
@@ -44,6 +45,7 @@ jobs:
               goarch: arm64,
               output: arm64,
               debian: arm64,
+              pacman: aarch64,
               rpm: aarch64,
             }
 
@@ -134,6 +136,34 @@ jobs:
             --architecture ${{ matrix.jobs.rpm }} \
             punchd=/usr/bin/punchd \
             punchctl=/usr/bin/punchctl
+
+      - name: Package Arch Linux
+        if: matrix.jobs.pacman != ''
+        run: |
+          set -xeuo pipefail
+          sudo gem install --no-document fpm
+
+          PKGVER="${TAG#v}"
+          PKGVER="${PKGVER//-/_}"
+
+          fpm -s dir -t pacman \
+            -n punch \
+            -v "${PKGVER}" \
+            --iteration 1 \
+            --license GPL-3.0 \
+            --vendor "punchproxy" \
+            --description "punch tunneling proxy" \
+            --url "https://github.com/punchproxy/punch" \
+            --maintainer "punchproxy" \
+            --architecture ${{ matrix.jobs.pacman }} \
+            --depends ca-certificates \
+            --depends iproute2 \
+            --pacman-optional-depends "systemd: manage punchd with the packaged systemd unit" \
+            --pacman-compression zstd \
+            -p "punch-${{ matrix.jobs.goos }}-${{ matrix.jobs.output }}-${TAG}.pkg.tar.zst" \
+            punchd=/usr/bin/punchd \
+            punchctl=/usr/bin/punchctl \
+            .github/release/punchd.service=/usr/lib/systemd/system/punchd.service
 
       - name: Upload assets to release
         env:

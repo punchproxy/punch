@@ -33,6 +33,17 @@ brew tap punchproxy/punch
 brew install punch
 ```
 
+### Arch Linux
+
+Download the `.pkg.tar.zst` asset from the [release page](https://github.com/punchproxy/punch/releases), then install it with pacman:
+
+```sh
+sudo pacman -U ./punch-linux-amd64-vX.Y.Z.pkg.tar.zst
+sudo systemctl enable --now punchd
+```
+
+Use the `arm64` package on Arch Linux ARM/aarch64 systems. The package installs `punchd`, `punchctl`, and the `punchd.service` systemd unit.
+
 ### Docker
 
 ```sh
