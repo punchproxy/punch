@@ -630,7 +630,7 @@ func TestDNSCacheCommand(t *testing.T) {
 		t.Fatalf("Execute() error = %v", err)
 	}
 	text := out.String()
-	for _, want := range []string{"NAME", "QTYPE", "STATE", "TTL", "UPSTREAM", "example.com.", "live", "https://dns.example/dns-query"} {
+	for _, want := range []string{"NAME", "QTYPE", "STATE", "TTL", "IP", "UPSTREAM", "example.com.", "93.184.216.34", "live", "https://dns.example/dns-query"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("output missing %q:\n%s", want, text)
 		}
@@ -640,7 +640,7 @@ func TestDNSCacheCommand(t *testing.T) {
 	}
 }
 
-func TestDNSCacheCommandWideShowsResult(t *testing.T) {
+func TestDNSCacheCommandWideShowsIPAndMetadata(t *testing.T) {
 	now := time.Now().UTC()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode([]cacheEntry{{
@@ -667,10 +667,13 @@ func TestDNSCacheCommandWideShowsResult(t *testing.T) {
 		t.Fatalf("Execute() error = %v", err)
 	}
 	text := out.String()
-	for _, want := range []string{"RESULT", "UPSTREAM", "EXPIRES", "2606:2800::1", "https://dns.example/dns-query", "stale", "expired"} {
+	for _, want := range []string{"IP", "UPSTREAM", "EXPIRES", "2606:2800::1", "https://dns.example/dns-query", "stale", "expired"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("wide output missing %q:\n%s", want, text)
 		}
+	}
+	if strings.Contains(text, "RESULT") {
+		t.Fatalf("wide output should not include RESULT column:\n%s", text)
 	}
 }
 

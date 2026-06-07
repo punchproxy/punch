@@ -28,7 +28,7 @@ type cacheRow struct {
 	QType         string `json:"qtype" yaml:"qtype"`
 	State         string `json:"state" yaml:"state"`
 	TTL           string `json:"ttl" yaml:"ttl"`
-	Result        string `json:"result,omitempty" yaml:"result,omitempty"`
+	IP            string `json:"ip,omitempty" yaml:"ip,omitempty"`
 	Upstream      string `json:"upstream,omitempty" yaml:"upstream,omitempty"`
 	StoredAt      string `json:"stored_at,omitempty" yaml:"stored_at,omitempty"`
 	ExpiresAt     string `json:"expires_at,omitempty" yaml:"expires_at,omitempty"`
@@ -108,8 +108,8 @@ func writeCache(w io.Writer, entries []cacheEntry, flags listFlags) error {
 		flags.output = ""
 	}
 	printer, err := klo.PrinterFromFlag(flags.output, &klo.Specs{
-		DefaultColumnSpec: "NAME:{.Name},QTYPE:{.QType},STATE:{.State},TTL:{.TTL},UPSTREAM:{.Upstream}",
-		WideColumnSpec:    "NAME:{.Name},QTYPE:{.QType},STATE:{.State},TTL:{.TTL},RESULT:{.Result},UPSTREAM:{.Upstream},STORED:{.StoredAt},EXPIRES:{.ExpiresAt},LAZY-EXPIRES:{.LazyExpiresAt}",
+		DefaultColumnSpec: "NAME:{.Name},QTYPE:{.QType},STATE:{.State},TTL:{.TTL},IP:{.IP},UPSTREAM:{.Upstream}",
+		WideColumnSpec:    "NAME:{.Name},QTYPE:{.QType},STATE:{.State},TTL:{.TTL},IP:{.IP},UPSTREAM:{.Upstream},STORED:{.StoredAt},EXPIRES:{.ExpiresAt},LAZY-EXPIRES:{.LazyExpiresAt}",
 		GoTemplateArg:     flags.template,
 	})
 	if err != nil {
@@ -131,7 +131,7 @@ func cacheRows(entries []cacheEntry) []cacheRow {
 			QType:         entry.QType,
 			State:         entry.State,
 			TTL:           formatRemaining(now, entry.ExpiresAt),
-			Result:        formatOptional(entry.Result),
+			IP:            formatOptional(entry.Result),
 			Upstream:      formatOptional(entry.Upstream),
 			StoredAt:      formatTime(entry.StoredAt),
 			ExpiresAt:     formatTime(entry.ExpiresAt),
