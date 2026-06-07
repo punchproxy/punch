@@ -55,14 +55,14 @@ func TestServerResolverUsesServerPathWithoutFakeIP(t *testing.T) {
 func TestResolveRelayDomainUsesConfiguredUpstreamDomains(t *testing.T) {
 	defaultAddr, closeDefault, defaultRequests := startSlowDNSUpstream(t, 10*time.Millisecond)
 	defer closeDefault()
-	sbsAddr, closeSBS, sbsRequests := startSlowDNSUpstream(t, 10*time.Millisecond)
-	defer closeSBS()
+	scopedAddr, closeScoped, scopedRequests := startSlowDNSUpstream(t, 10*time.Millisecond)
+	defer closeScoped()
 
 	server := &Server{
 		cache: NewCache(10, 0, 60),
 		resolver: NewResolverGroup([]*UpstreamResolver{
 			NewUpstreamResolver(defaultAddr, ""),
-			NewUpstreamResolver(sbsAddr, "", "sbs"),
+			NewUpstreamResolver(scopedAddr, "", "scoped.example"),
 		}),
 		domainMatcher: dnsrule.NewMatcher(),
 		directIPs:     NewIPSet(),
@@ -71,7 +71,7 @@ func TestResolveRelayDomainUsesConfiguredUpstreamDomains(t *testing.T) {
 		refreshing:    make(map[string]struct{}),
 	}
 
-	got, _, err := server.ResolveRelayDomain(context.Background(), "main", "relay.sbs")
+	got, _, err := server.ResolveRelayDomain(context.Background(), "main", "relay.scoped.example")
 	if err != nil {
 		t.Fatalf("ResolveRelayDomain() error = %v", err)
 	}
@@ -79,7 +79,7 @@ func TestResolveRelayDomainUsesConfiguredUpstreamDomains(t *testing.T) {
 	if len(got) == 0 || got[0] != want {
 		t.Fatalf("ResolveRelayDomain() = %v, want first %s", got, want)
 	}
-	if sbsRequests.Load() == 0 {
+	if scopedRequests.Load() == 0 {
 		t.Fatal("domain-specific upstream was not queried")
 	}
 	if defaultRequests.Load() != 0 {

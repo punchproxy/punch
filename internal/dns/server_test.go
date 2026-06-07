@@ -106,7 +106,7 @@ func TestServerStaleCacheRefreshDoesNotStampede(t *testing.T) {
 	defer closeUpstream()
 
 	cache := NewCache(10, 0, 60)
-	cache.Put("stale.example", mdns.TypeA, cacheTestAResponse("stale.example.", "203.0.113.1", 60), "cache-test")
+	cache.Put("stale.example", mdns.TypeA, cacheTestAResponse("stale.example.", "203.0.113.1", 60), upstreamAddr)
 	setCacheEntryTimes(t, cache, "stale.example", mdns.TypeA, time.Now().Add(-2*time.Second), time.Now().Add(-1*time.Second))
 
 	server := &Server{
@@ -180,6 +180,33 @@ func TestServerCachedDirectResultUsesStoredCacheResult(t *testing.T) {
 	}
 	if result != "stored-result" {
 		t.Fatalf("result = %q, want cached query result", result)
+	}
+}
+
+func TestServerCacheLookupIsScopedToSelectedUpstream(t *testing.T) {
+	cache := NewCache(10, 0, 60)
+	cache.Put("relay.scoped.example", mdns.TypeA, cacheTestAResponse("relay.scoped.example.", "203.0.113.1", 60), "default:53")
+	cache.Put("relay.scoped.example", mdns.TypeA, cacheTestAResponse("relay.scoped.example.", "203.0.113.2", 60), "scoped:53")
+
+	server := &Server{
+		cache: cache,
+		resolver: NewResolverGroup([]*UpstreamResolver{
+			NewUpstreamResolver("default:53", ""),
+			NewUpstreamResolver("scoped:53", "", "scoped.example"),
+		}),
+	}
+
+	query := new(mdns.Msg)
+	query.SetQuestion("relay.scoped.example.", mdns.TypeA)
+	resp, upstream, result := server.resolveAndCacheWithResolver(context.Background(), query, "relay.scoped.example", mdns.TypeA, nil, false)
+	if upstream != "Cache" {
+		t.Fatalf("upstream = %q, want Cache", upstream)
+	}
+	if result != "203.0.113.2" {
+		t.Fatalf("result = %q, want scoped cache answer", result)
+	}
+	if got := answerToString(resp); got != "203.0.113.2" {
+		t.Fatalf("response = %q, want scoped cache answer", got)
 	}
 }
 

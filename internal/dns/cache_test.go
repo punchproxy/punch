@@ -86,6 +86,44 @@ func TestCacheSnapshotIncludesUpstream(t *testing.T) {
 	}
 }
 
+func TestCacheAllowsSameNameFromDifferentUpstreams(t *testing.T) {
+	cache := NewCache(4, 0, 60)
+	cache.Put("resolver.example", mdns.TypeA, cacheTestAResponse("resolver.example.", "203.0.113.1", 60), "https://dns-one.example/dns-query")
+	cache.Put("resolver.example", mdns.TypeA, cacheTestAResponse("resolver.example.", "203.0.113.2", 60), "223.5.5.5")
+
+	first, ok := cache.lookupForUpstream("resolver.example", mdns.TypeA, "https://dns-one.example/dns-query")
+	if !ok {
+		t.Fatal("lookupForUpstream(first) miss, want hit")
+	}
+	if got := answerToString(first.message()); got != "203.0.113.1" {
+		t.Fatalf("first upstream answer = %q, want 203.0.113.1", got)
+	}
+
+	second, ok := cache.lookupForUpstream("resolver.example", mdns.TypeA, "223.5.5.5")
+	if !ok {
+		t.Fatal("lookupForUpstream(second) miss, want hit")
+	}
+	if got := answerToString(second.message()); got != "203.0.113.2" {
+		t.Fatalf("second upstream answer = %q, want 203.0.113.2", got)
+	}
+
+	if _, ok := cache.lookupForUpstream("resolver.example", mdns.TypeA, "https://dns-missing.example/dns-query"); ok {
+		t.Fatal("lookupForUpstream(missing) hit, want miss")
+	}
+
+	snapshot := cache.Snapshot()
+	if len(snapshot) != 2 {
+		t.Fatalf("Snapshot() length = %d, want 2", len(snapshot))
+	}
+	seen := map[string]string{}
+	for _, entry := range snapshot {
+		seen[entry.Upstream] = entry.Result
+	}
+	if seen["https://dns-one.example/dns-query"] != "203.0.113.1" || seen["223.5.5.5"] != "203.0.113.2" {
+		t.Fatalf("snapshot by upstream = %#v, want both scoped answers", seen)
+	}
+}
+
 func TestCacheLookupIncludesQueryResult(t *testing.T) {
 	cache := NewCache(2, 0, 60)
 
@@ -239,7 +277,7 @@ func setCacheEntryTimes(t *testing.T, cache *Cache, name string, qtype uint16, s
 	cache.mu.Lock()
 	defer cache.mu.Unlock()
 
-	value, ok := cache.entries.Peek(cacheKey(name, qtype))
+	value, ok := peekAnyCacheEntryLocked(cache, name, qtype)
 	if !ok {
 		t.Fatalf("cache entry %s not found", cacheKey(name, qtype))
 	}
@@ -253,12 +291,22 @@ func setCacheEntryQueryResult(t *testing.T, cache *Cache, name string, qtype uin
 	cache.mu.Lock()
 	defer cache.mu.Unlock()
 
-	value, ok := cache.entries.Peek(cacheKey(name, qtype))
+	value, ok := peekAnyCacheEntryLocked(cache, name, qtype)
 	if !ok {
 		t.Fatalf("cache entry %s not found", cacheKey(name, qtype))
 	}
 	entry := value.(*cacheEntry)
 	entry.queryResult = result
+}
+
+func peekAnyCacheEntryLocked(cache *Cache, name string, qtype uint16) (interface{}, bool) {
+	keys := cache.lookupKeysLocked(name, qtype, nil)
+	for _, key := range keys {
+		if value, ok := cache.entries.Peek(key); ok {
+			return value, true
+		}
+	}
+	return nil, false
 }
 
 func hasCacheDeleteEvent(events []CacheEvent, name, qtype string) bool {

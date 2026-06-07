@@ -1,6 +1,7 @@
 package dns
 
 import (
+	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -49,10 +50,11 @@ const (
 // CacheEvent describes a single cache mutation. Subscribers compose these
 // into their own view of the cache without needing periodic full snapshots.
 type CacheEvent struct {
-	Op    CacheEventOp        `json:"op"`
-	Entry *CacheSnapshotEntry `json:"entry,omitempty"`
-	Name  string              `json:"name,omitempty"`
-	QType string              `json:"qtype,omitempty"`
+	Op       CacheEventOp        `json:"op"`
+	Entry    *CacheSnapshotEntry `json:"entry,omitempty"`
+	Name     string              `json:"name,omitempty"`
+	QType    string              `json:"qtype,omitempty"`
+	Upstream string              `json:"upstream,omitempty"`
 }
 
 type CacheEventHandler func(CacheEvent)
@@ -84,8 +86,23 @@ func NewCache(maxSize int, minTTL, lazyTTL int) *Cache {
 	}
 }
 
-func cacheKey(name string, qtype uint16) string {
-	return name + ":" + dns.TypeToString[qtype]
+func cacheKey(name string, qtype uint16, upstream ...string) string {
+	scope := ""
+	if len(upstream) > 0 {
+		scope = upstream[0]
+	}
+	return cacheName(name) + "\x00" + cacheQType(qtype) + "\x00" + scope
+}
+
+func cacheName(name string) string {
+	return strings.TrimSuffix(strings.TrimSpace(name), ".")
+}
+
+func cacheQType(qtype uint16) string {
+	if name := dns.TypeToString[qtype]; name != "" {
+		return name
+	}
+	return fmt.Sprintf("TYPE%d", qtype)
 }
 
 // Get retrieves a cached entry. Returns (msg, stale) where stale indicates
@@ -101,37 +118,92 @@ func (c *Cache) Get(name string, qtype uint16) (msg *dns.Msg, stale bool) {
 // lookup retrieves a cache entry as an immutable hit view. The returned view
 // may share internal cache state, so callers must not mutate h.msg or its RRs.
 func (c *Cache) lookup(name string, qtype uint16) (cacheHit, bool) {
-	key := cacheKey(name, qtype)
+	return c.lookupForUpstreams(name, qtype, nil)
+}
+
+func (c *Cache) lookupForUpstream(name string, qtype uint16, upstream string) (cacheHit, bool) {
+	return c.lookupForUpstreams(name, qtype, []string{upstream})
+}
+
+func (c *Cache) lookupForUpstreams(name string, qtype uint16, upstreams []string) (cacheHit, bool) {
 	c.mu.Lock()
 
-	value, ok := c.entries.Get(key)
-	if !ok {
-		c.mu.Unlock()
-		return cacheHit{}, false
-	}
-	entry := value.(*cacheEntry)
-
 	now := time.Now()
+	var events []CacheEvent
+	var staleHit cacheHit
+	staleFound := false
 
-	// Check if completely expired (past lazy TTL)
-	lazyDeadline := entry.expireAt.Add(c.lazyTTL)
-	if now.After(lazyDeadline) {
-		c.entries.Remove(key)
+	for _, key := range c.lookupKeysLocked(name, qtype, upstreams) {
+		value, ok := c.entries.Get(key)
+		if !ok {
+			continue
+		}
+		entry := value.(*cacheEntry)
+
+		// Check if completely expired (past lazy TTL)
+		lazyDeadline := entry.expireAt.Add(c.lazyTTL)
+		if now.After(lazyDeadline) {
+			c.entries.Remove(key)
+			events = append(events, CacheEvent{Op: CacheEventDelete, Name: entry.name, QType: entry.qtype, Upstream: entry.upstream})
+			continue
+		}
+
+		staleEntry := now.After(entry.expireAt)
+		hit := cacheHit{
+			msg:         entry.msg,
+			queryResult: entry.queryResult,
+			stale:       staleEntry,
+			elapsed:     elapsedSeconds(entry.storedAt, now),
+		}
+		if staleEntry {
+			if !staleFound {
+				staleHit = hit
+				staleFound = true
+			}
+			continue
+		}
+
 		handlers := append([]CacheEventHandler(nil), c.handlers...)
 		c.mu.Unlock()
-		fireCacheEvents(handlers, []CacheEvent{{Op: CacheEventDelete, Name: entry.name, QType: entry.qtype}})
-		return cacheHit{}, false
+		fireCacheEvents(handlers, events)
+		return hit, true
 	}
 
-	staleEntry := now.After(entry.expireAt)
-	hit := cacheHit{
-		msg:         entry.msg,
-		queryResult: entry.queryResult,
-		stale:       staleEntry,
-		elapsed:     elapsedSeconds(entry.storedAt, now),
-	}
+	handlers := append([]CacheEventHandler(nil), c.handlers...)
 	c.mu.Unlock()
-	return hit, true
+	fireCacheEvents(handlers, events)
+	if staleFound {
+		return staleHit, true
+	}
+	return cacheHit{}, false
+}
+
+func (c *Cache) lookupKeysLocked(name string, qtype uint16, upstreams []string) []string {
+	if len(upstreams) > 0 {
+		keys := make([]string, 0, len(upstreams))
+		for _, upstream := range upstreams {
+			keys = append(keys, cacheKey(name, qtype, upstream))
+		}
+		return keys
+	}
+
+	name = cacheName(name)
+	qtypeName := cacheQType(qtype)
+	keys := c.entries.Keys()
+	matches := make([]string, 0, len(keys))
+	for i := len(keys) - 1; i >= 0; i-- {
+		value, ok := c.entries.Peek(keys[i])
+		if !ok {
+			continue
+		}
+		entry := value.(*cacheEntry)
+		if entry.name == name && entry.qtype == qtypeName {
+			if key, ok := keys[i].(string); ok {
+				matches = append(matches, key)
+			}
+		}
+	}
+	return matches
 }
 
 func (h cacheHit) message() *dns.Msg {
@@ -194,11 +266,18 @@ func elapsedSeconds(storedAt, now time.Time) uint32 {
 // Put stores a DNS response and the upstream that produced it in the cache. It
 // returns the query-log result string formatted from the stored response.
 func (c *Cache) Put(name string, qtype uint16, msg *dns.Msg, upstream string) string {
+	return c.PutForUpstream(name, qtype, msg, upstream)
+}
+
+func (c *Cache) PutForUpstream(name string, qtype uint16, msg *dns.Msg, upstream string) string {
 	if msg == nil || len(msg.Answer) == 0 {
 		return ""
 	}
 
 	key := cacheKey(name, qtype)
+	if upstream != "" {
+		key = cacheKey(name, qtype, upstream)
+	}
 	ttl := c.getMinTTL(msg)
 	if ttl < c.minTTL {
 		ttl = c.minTTL
@@ -214,14 +293,14 @@ func (c *Cache) Put(name string, qtype uint16, msg *dns.Msg, upstream string) st
 	if _, exists := c.entries.Peek(key); !exists && c.entries.Len() >= c.maxSize {
 		if _, value, ok := c.entries.RemoveOldest(); ok {
 			evicted := value.(*cacheEntry)
-			events = append(events, CacheEvent{Op: CacheEventDelete, Name: evicted.name, QType: evicted.qtype})
+			events = append(events, CacheEvent{Op: CacheEventDelete, Name: evicted.name, QType: evicted.qtype, Upstream: evicted.upstream})
 		}
 	}
 
 	now := time.Now()
 	entry := &cacheEntry{
-		name:        name,
-		qtype:       dns.TypeToString[qtype],
+		name:        cacheName(name),
+		qtype:       cacheQType(qtype),
 		msg:         cachedMsg,
 		queryResult: queryResult,
 		upstream:    upstream,
@@ -279,7 +358,7 @@ func (c *Cache) Snapshot() []CacheSnapshotEntry {
 		}
 		entry := value.(*cacheEntry)
 		if now.After(entry.expireAt.Add(c.lazyTTL)) {
-			events = append(events, CacheEvent{Op: CacheEventDelete, Name: entry.name, QType: entry.qtype})
+			events = append(events, CacheEvent{Op: CacheEventDelete, Name: entry.name, QType: entry.qtype, Upstream: entry.upstream})
 			c.entries.Remove(key)
 			continue
 		}

@@ -115,3 +115,41 @@ func TestResolverGroupSelectsDomainSpecificUpstream(t *testing.T) {
 		})
 	}
 }
+
+func TestUpstreamResolverBootstrapUsesCache(t *testing.T) {
+	bootstrapAddr, closeBootstrap, requests := startSlowDNSUpstream(t, 0)
+	defer closeBootstrap()
+
+	cache := NewCache(10, 0, 60)
+	resolver := NewUpstreamResolverWithCache("https://doh.example/dns-query", bootstrapAddr, cache)
+
+	ips, err := resolver.resolveBootstrapHost(context.Background(), "doh.example")
+	if err != nil {
+		t.Fatalf("first resolveBootstrapHost() error = %v", err)
+	}
+	if len(ips) != 1 || ips[0] != "203.0.113.99" {
+		t.Fatalf("first resolveBootstrapHost() = %v, want [203.0.113.99]", ips)
+	}
+	if got := requests.Load(); got != 1 {
+		t.Fatalf("bootstrap requests after first lookup = %d, want 1", got)
+	}
+
+	ips, err = resolver.resolveBootstrapHost(context.Background(), "doh.example")
+	if err != nil {
+		t.Fatalf("second resolveBootstrapHost() error = %v", err)
+	}
+	if len(ips) != 1 || ips[0] != "203.0.113.99" {
+		t.Fatalf("second resolveBootstrapHost() = %v, want [203.0.113.99]", ips)
+	}
+	if got := requests.Load(); got != 1 {
+		t.Fatalf("bootstrap requests after cached lookup = %d, want 1", got)
+	}
+
+	snapshot := cache.Snapshot()
+	if len(snapshot) != 1 {
+		t.Fatalf("Snapshot() length = %d, want 1", len(snapshot))
+	}
+	if snapshot[0].Name != "doh.example" || snapshot[0].QType != "A" || snapshot[0].Upstream != bootstrapAddr || snapshot[0].Result != "203.0.113.99" {
+		t.Fatalf("Snapshot()[0] = %+v, want cached bootstrap A lookup", snapshot[0])
+	}
+}

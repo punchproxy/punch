@@ -35,6 +35,7 @@ type UpstreamResolver struct {
 	isDoH     bool
 	domains   []string
 	matcher   *dnsrule.Matcher
+	cache     *Cache
 
 	queries           atomic.Int64
 	totalLatency      atomic.Int64
@@ -44,10 +45,15 @@ type UpstreamResolver struct {
 }
 
 func NewUpstreamResolver(url, bootstrap string, domains ...string) *UpstreamResolver {
+	return NewUpstreamResolverWithCache(url, bootstrap, nil, domains...)
+}
+
+func NewUpstreamResolverWithCache(url, bootstrap string, cache *Cache, domains ...string) *UpstreamResolver {
 	u := &UpstreamResolver{
 		url:       url,
 		bootstrap: bootstrap,
 		isDoH:     strings.HasPrefix(url, "https://"),
+		cache:     cache,
 	}
 	for _, domain := range domains {
 		rule := dnsrule.Normalize(domain)
@@ -69,7 +75,7 @@ func NewUpstreamResolver(url, bootstrap string, domains ...string) *UpstreamReso
 		transport.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
 			host, port, _ := net.SplitHostPort(addr)
 			// Resolve the DoH server using bootstrap
-			ips, err := resolveWithBootstrap(host, bootstrap)
+			ips, err := u.resolveBootstrapHost(ctx, host)
 			if err != nil {
 				return nil, err
 			}
@@ -221,6 +227,15 @@ func (g *ResolverGroup) UpstreamStats() []UpstreamStats {
 	return stats
 }
 
+func (g *ResolverGroup) selectedUpstreamURLs(msg *dns.Msg) []string {
+	upstreams := g.selectUpstreams(msg)
+	urls := make([]string, 0, len(upstreams))
+	for _, upstream := range upstreams {
+		urls = append(urls, upstream.url)
+	}
+	return urls
+}
+
 func (g *ResolverGroup) Resolve(ctx context.Context, msg *dns.Msg) (ResolveResult, error) {
 	upstreams := g.selectUpstreams(msg)
 	if len(upstreams) == 0 {
@@ -299,15 +314,38 @@ func (g *ResolverGroup) selectUpstreams(msg *dns.Msg) []*UpstreamResolver {
 	return g.upstreams
 }
 
-func resolveWithBootstrap(host, bootstrap string) ([]string, error) {
+func (u *UpstreamResolver) resolveBootstrapHost(ctx context.Context, host string) ([]string, error) {
 	if net.ParseIP(host) != nil {
 		return []string{host}, nil
 	}
 
+	if u.cache != nil {
+		if hit, ok := u.cache.lookupForUpstream(host, dns.TypeA, u.bootstrap); ok {
+			ips := bootstrapIPs(hit.message())
+			if len(ips) > 0 && !hit.stale {
+				return ips, nil
+			}
+			refreshed, err := u.queryBootstrapHost(ctx, host)
+			if err == nil && len(refreshed) > 0 {
+				return refreshed, nil
+			}
+			if len(ips) > 0 {
+				return ips, nil
+			}
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	return u.queryBootstrapHost(ctx, host)
+}
+
+func (u *UpstreamResolver) queryBootstrapHost(ctx context.Context, host string) ([]string, error) {
 	msg := new(dns.Msg)
 	msg.SetQuestion(dns.Fqdn(host), dns.TypeA)
 
-	addr := bootstrap
+	addr := u.bootstrap
 	if !strings.Contains(addr, ":") {
 		addr += ":53"
 	}
@@ -316,16 +354,26 @@ func resolveWithBootstrap(host, bootstrap string) ([]string, error) {
 		Net:     "udp",
 		Timeout: 5 * time.Second,
 	}
-	reply, _, err := client.Exchange(msg, addr)
+	reply, _, err := client.ExchangeContext(ctx, msg, addr)
 	if err != nil {
 		return nil, err
 	}
 
-	var ips []string
+	if u.cache != nil {
+		u.cache.PutForUpstream(host, dns.TypeA, reply, u.bootstrap)
+	}
+	return bootstrapIPs(reply), nil
+}
+
+func bootstrapIPs(reply *dns.Msg) []string {
+	if reply == nil {
+		return nil
+	}
+	ips := make([]string, 0, len(reply.Answer))
 	for _, rr := range reply.Answer {
 		if a, ok := rr.(*dns.A); ok {
 			ips = append(ips, a.A.String())
 		}
 	}
-	return ips, nil
+	return ips
 }

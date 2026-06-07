@@ -86,12 +86,13 @@ func NewServer(assetManager *assets.Manager) (*Server, error) {
 		return nil, fmt.Errorf("create fake ip pool: %w", err)
 	}
 
+	cache := NewCache(cfg.DNS.CacheSize, 60, 86400)
 	s := &Server{
 		listenAddr:         config.DNSListenAddr(cfg.DNS),
 		fakeIPPool:         fakePool,
 		disableIPv6FakeIP:  disableIPv6FakeIP,
-		cache:              NewCache(cfg.DNS.CacheSize, 60, 86400),
-		resolver:           NewResolverGroup(buildUpstreams()),
+		cache:              cache,
+		resolver:           NewResolverGroup(buildUpstreams(cache)),
 		domainMatcher:      dnsrule.NewMatcher(),
 		directIPs:          NewIPSet(),
 		rejectIPs:          NewIPSet(),
@@ -110,17 +111,17 @@ func NewServer(assetManager *assets.Manager) (*Server, error) {
 	return s, nil
 }
 
-func buildUpstreams() []*UpstreamResolver {
+func buildUpstreams(cache *Cache) []*UpstreamResolver {
 	cfg, err := config.Snapshot()
 	if err != nil {
 		cfg = &config.Config{}
 	}
 	var upstreams []*UpstreamResolver
 	for _, u := range cfg.DNS.Upstream {
-		upstreams = append(upstreams, NewUpstreamResolver(u.URL, u.Bootstrap, u.Domains...))
+		upstreams = append(upstreams, NewUpstreamResolverWithCache(u.URL, u.Bootstrap, cache, u.Domains...))
 	}
 	if len(upstreams) == 0 {
-		upstreams = append(upstreams, NewUpstreamResolver("8.8.8.8:53", ""))
+		upstreams = append(upstreams, NewUpstreamResolverWithCache("8.8.8.8:53", "", cache))
 	}
 	return upstreams
 }

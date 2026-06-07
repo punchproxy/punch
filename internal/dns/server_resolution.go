@@ -13,7 +13,8 @@ import (
 )
 
 func (s *Server) resolveAndClassifyWithResolver(ctx context.Context, r *dns.Msg, domain string, qtype uint16, disableFakeIP bool, resolverOverride *ResolverGroup, respectAnswerTTL bool) (*dns.Msg, Decision, string, string, string) {
-	if cached, ok := s.cache.lookup(domain, qtype); ok {
+	cacheUpstreams := s.cacheUpstreamsFor(r, resolverOverride)
+	if cached, ok := s.cache.lookupForUpstreams(domain, qtype, cacheUpstreams); ok {
 		if !cached.stale && !(respectAnswerTTL && cached.answerMinTTL() == 0) {
 			s.cacheHits.Add(1)
 			return s.processCachedResponse(r, domain, qtype, disableFakeIP, cached, "Cache")
@@ -34,7 +35,8 @@ func (s *Server) resolveAndClassifyWithResolver(ctx context.Context, r *dns.Msg,
 }
 
 func (s *Server) resolveAndCacheWithResolver(ctx context.Context, r *dns.Msg, domain string, qtype uint16, resolverOverride *ResolverGroup, respectAnswerTTL bool) (*dns.Msg, string, string) {
-	if cached, ok := s.cache.lookup(domain, qtype); ok {
+	cacheUpstreams := s.cacheUpstreamsFor(r, resolverOverride)
+	if cached, ok := s.cache.lookupForUpstreams(domain, qtype, cacheUpstreams); ok {
 		if !cached.stale && !(respectAnswerTTL && cached.answerMinTTL() == 0) {
 			s.cacheHits.Add(1)
 			return cached.message(), "Cache", cached.queryResult
@@ -124,6 +126,17 @@ func (s *Server) refreshCacheWithResolver(domain string, qtype uint16, r *dns.Ms
 	s.cache.Put(domain, qtype, result.Msg, result.Upstream)
 }
 
+func (s *Server) cacheUpstreamsFor(r *dns.Msg, resolverOverride *ResolverGroup) []string {
+	resolver := s.currentResolver()
+	if resolverOverride != nil {
+		resolver = resolverOverride
+	}
+	if resolver == nil {
+		return nil
+	}
+	return resolver.selectedUpstreamURLs(r)
+}
+
 func (s *Server) FakeIPPool() *fakeip.Pool { return s.fakeIPPool }
 func (s *Server) Cache() *Cache            { return s.cache }
 
@@ -134,10 +147,10 @@ func (s *Server) UpstreamStats() []UpstreamStats {
 func (s *Server) UpdateUpstreams(upstreams []config.Upstream) {
 	next := make([]*UpstreamResolver, 0, len(upstreams))
 	for _, upstream := range upstreams {
-		next = append(next, NewUpstreamResolver(upstream.URL, upstream.Bootstrap, upstream.Domains...))
+		next = append(next, NewUpstreamResolverWithCache(upstream.URL, upstream.Bootstrap, s.cache, upstream.Domains...))
 	}
 	if len(next) == 0 {
-		next = append(next, NewUpstreamResolver("8.8.8.8:53", ""))
+		next = append(next, NewUpstreamResolverWithCache("8.8.8.8:53", "", s.cache))
 	}
 
 	s.resolverMu.Lock()
