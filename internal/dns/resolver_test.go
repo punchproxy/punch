@@ -2,6 +2,13 @@ package dns
 
 import (
 	"context"
+	"crypto/tls"
+	"encoding/base64"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"net/netip"
+	"net/url"
 	"testing"
 	"time"
 
@@ -154,32 +161,88 @@ func TestUpstreamResolverBootstrapUsesCache(t *testing.T) {
 	}
 }
 
-func TestUpstreamResolverEnsuresBootstrapHostIsCached(t *testing.T) {
-	bootstrapAddr, closeBootstrap, requests := startSlowDNSUpstream(t, 0)
-	defer closeBootstrap()
+func TestUpstreamResolverDoHReusesConnectionWithoutBootstrapCache(t *testing.T) {
+	doh := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		packed, err := base64.RawURLEncoding.DecodeString(r.URL.Query().Get("dns"))
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		req := new(mdns.Msg)
+		if err := req.Unpack(packed); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		resp := new(mdns.Msg)
+		resp.SetReply(req)
+		resp.RecursionAvailable = true
+		resp.Answer = []mdns.RR{&mdns.A{
+			Hdr: mdns.RR_Header{
+				Name:   req.Question[0].Name,
+				Rrtype: mdns.TypeA,
+				Class:  mdns.ClassINET,
+				Ttl:    60,
+			},
+			A: net.ParseIP("198.51.100.8").To4(),
+		}}
+		reply, err := resp.Pack()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/dns-message")
+		_, _ = w.Write(reply)
+	}))
+	defer doh.Close()
+
+	parsedURL, err := url.Parse(doh.URL)
+	if err != nil {
+		t.Fatalf("parse test DoH URL: %v", err)
+	}
+	_, port, err := net.SplitHostPort(parsedURL.Host)
+	if err != nil {
+		t.Fatalf("split test DoH host: %v", err)
+	}
+
+	bootstrapAddr, closeBootstrap, requests := startRelayDNSUpstream(t, map[uint16][]netip.Addr{
+		mdns.TypeA: {netip.MustParseAddr("127.0.0.1")},
+	})
+	bootstrapClosed := false
+	t.Cleanup(func() {
+		if !bootstrapClosed {
+			closeBootstrap()
+		}
+	})
 
 	cache := NewCache(10, 0, 60)
-	resolver := NewUpstreamResolverWithCache("https://doh.example:8443/dns-query/path", bootstrapAddr, cache)
+	resolver := NewUpstreamResolverWithCache("https://doh.example:"+port+"/dns-query", bootstrapAddr, cache)
+	transport := resolver.client.Transport.(*http.Transport)
+	transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
 
-	if err := resolver.ensureBootstrapHostCached(context.Background()); err != nil {
-		t.Fatalf("ensureBootstrapHostCached() error = %v", err)
-	}
-	if got := requests.Load(); got != 1 {
-		t.Fatalf("bootstrap requests after ensure = %d, want 1", got)
-	}
-
-	snapshot := cache.Snapshot()
-	if len(snapshot) != 1 {
-		t.Fatalf("Snapshot() length = %d, want 1", len(snapshot))
-	}
-	if snapshot[0].Name != "doh.example" || snapshot[0].Upstream != bootstrapAddr {
-		t.Fatalf("Snapshot()[0] = %+v, want bootstrap hostname cached under bootstrap upstream", snapshot[0])
+	resolve := func(name string) {
+		t.Helper()
+		msg := new(mdns.Msg)
+		msg.SetQuestion(name, mdns.TypeA)
+		reply, _, err := resolver.Resolve(context.Background(), msg)
+		if err != nil {
+			t.Fatalf("Resolve(%s) error = %v", name, err)
+		}
+		if got := answerToString(reply); got != "198.51.100.8" {
+			t.Fatalf("Resolve(%s) = %q, want 198.51.100.8", name, got)
+		}
 	}
 
-	if err := resolver.ensureBootstrapHostCached(context.Background()); err != nil {
-		t.Fatalf("second ensureBootstrapHostCached() error = %v", err)
+	resolve("first.example.")
+	if got := requests.a.Load(); got != 1 {
+		t.Fatalf("bootstrap requests after first DoH query = %d, want 1", got)
 	}
-	if got := requests.Load(); got != 1 {
-		t.Fatalf("bootstrap requests after cached ensure = %d, want 1", got)
+
+	cache.Flush()
+	closeBootstrap()
+	bootstrapClosed = true
+
+	resolve("second.example.")
+	if got := requests.a.Load(); got != 1 {
+		t.Fatalf("bootstrap requests after reused DoH connection = %d, want 1", got)
 	}
 }

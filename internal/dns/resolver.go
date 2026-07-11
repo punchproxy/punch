@@ -8,7 +8,6 @@ import (
 	"math/rand"
 	"net"
 	"net/http"
-	"net/url"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -152,10 +151,6 @@ func (u *UpstreamResolver) Stats() UpstreamStats {
 }
 
 func (u *UpstreamResolver) resolveDoH(ctx context.Context, msg *dns.Msg) (*dns.Msg, error) {
-	if err := u.ensureBootstrapHostCached(ctx); err != nil {
-		return nil, err
-	}
-
 	packed, err := msg.Pack()
 	if err != nil {
 		return nil, fmt.Errorf("pack dns msg: %w", err)
@@ -191,28 +186,6 @@ func (u *UpstreamResolver) resolveDoH(ctx context.Context, msg *dns.Msg) (*dns.M
 		return nil, fmt.Errorf("doh unpack: %w", err)
 	}
 	return reply, nil
-}
-
-func (u *UpstreamResolver) ensureBootstrapHostCached(ctx context.Context) error {
-	if u.bootstrap == "" || !u.isDoH {
-		return nil
-	}
-	reqURL, err := url.Parse(u.url)
-	if err != nil {
-		return fmt.Errorf("parse doh url: %w", err)
-	}
-	host := reqURL.Hostname()
-	if host == "" || net.ParseIP(host) != nil {
-		return nil
-	}
-	ips, err := u.resolveBootstrapHost(ctx, host)
-	if err != nil {
-		return err
-	}
-	if len(ips) == 0 {
-		return fmt.Errorf("bootstrap: no IPs for %s", host)
-	}
-	return nil
 }
 
 func (u *UpstreamResolver) resolveUDP(ctx context.Context, msg *dns.Msg) (*dns.Msg, error) {
