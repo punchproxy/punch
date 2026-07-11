@@ -153,3 +153,33 @@ func TestUpstreamResolverBootstrapUsesCache(t *testing.T) {
 		t.Fatalf("Snapshot()[0] = %+v, want cached bootstrap A lookup", snapshot[0])
 	}
 }
+
+func TestUpstreamResolverEnsuresBootstrapHostIsCached(t *testing.T) {
+	bootstrapAddr, closeBootstrap, requests := startSlowDNSUpstream(t, 0)
+	defer closeBootstrap()
+
+	cache := NewCache(10, 0, 60)
+	resolver := NewUpstreamResolverWithCache("https://doh.example:8443/dns-query/path", bootstrapAddr, cache)
+
+	if err := resolver.ensureBootstrapHostCached(context.Background()); err != nil {
+		t.Fatalf("ensureBootstrapHostCached() error = %v", err)
+	}
+	if got := requests.Load(); got != 1 {
+		t.Fatalf("bootstrap requests after ensure = %d, want 1", got)
+	}
+
+	snapshot := cache.Snapshot()
+	if len(snapshot) != 1 {
+		t.Fatalf("Snapshot() length = %d, want 1", len(snapshot))
+	}
+	if snapshot[0].Name != "doh.example" || snapshot[0].Upstream != bootstrapAddr {
+		t.Fatalf("Snapshot()[0] = %+v, want bootstrap hostname cached under bootstrap upstream", snapshot[0])
+	}
+
+	if err := resolver.ensureBootstrapHostCached(context.Background()); err != nil {
+		t.Fatalf("second ensureBootstrapHostCached() error = %v", err)
+	}
+	if got := requests.Load(); got != 1 {
+		t.Fatalf("bootstrap requests after cached ensure = %d, want 1", got)
+	}
+}
