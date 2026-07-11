@@ -115,6 +115,34 @@ punchctl dns trace
 
 That's the loop: `punchctl` to inspect, change, and watch; `punchd` keeps running.
 
+## Web dashboard
+
+`punchd` also serves a web dashboard on the **same address as the API** (default
+`http://127.0.0.1:28854`). Open that URL in a browser for a visual, interactive
+view of everything `punchctl` exposes:
+
+- **Overview** — live throughput chart, DNS decision mix, connectivity health, and the active relay's latency at a glance.
+- **Relays** — health and latency for every relay and group; select the active path or trigger checks/refreshes with a click.
+- **Sessions** — live flows with per-flow byte counts and top-talkers; terminate a session or all of them.
+- **DNS** — a live stream of routing decisions plus full management of rules, routes, upstreams, cache, and fake IPs.
+- **Configuration & Logs** — edit runtime settings and tail the daemon log stream.
+
+The dashboard is embedded in the binary — there is nothing extra to install or
+serve. If `api.secret` is set, the dashboard shows a token prompt on first load
+and stores the token in your browser's local storage; the static assets load
+unauthenticated, but every API call carries the token.
+
+To reach the dashboard from another machine, bind the API to a non-loopback
+address and set a token first:
+
+```sh
+sudo punchd -s api.listen=0.0.0.0:28854 -s api.secret="change-me"
+```
+
+> The API and dashboard share one listener, so exposing the dashboard exposes
+> the control API. Always set `api.secret` before binding to a non-loopback
+> address.
+
 ## Common tasks
 
 ### Route specific domains or CIDRs
@@ -299,6 +327,7 @@ Package layout:
 | `internal/relay`   | Relay groups, providers, health checks, selection    |
 | `internal/session` | Session lifecycle and history                        |
 | `internal/tun`     | TUN engine and platform route/system DNS integration |
+| `internal/web`     | Embedded web dashboard (served at the API address)   |
 
 ## A note on safety
 

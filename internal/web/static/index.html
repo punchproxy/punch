@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en" data-theme="auto">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>Punch Dashboard</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23F6821F'/%3E%3Cpath d='M9 20l5-9 4 5 2-3 3 7z' fill='white'/%3E%3C/svg%3E" />
+    <link rel="stylesheet" href="css/app.css" />
+  </head>
+  <body>
+    <div id="auth" class="auth-overlay" hidden>
+      <form id="auth-form" class="auth-card">
+        <div class="auth-brand">
+          <span class="logo" aria-hidden="true"></span>
+          <span>Punch</span>
+        </div>
+        <h1>Authentication required</h1>
+        <p>This daemon is protected by an API token. Enter it to continue. It is stored only in your browser's local storage.</p>
+        <label for="auth-token">API token</label>
+        <input id="auth-token" type="password" autocomplete="off" spellcheck="false" placeholder="api.secret value" />
+        <p id="auth-error" class="auth-error" hidden></p>
+        <button type="submit" class="btn btn-primary btn-block">Unlock dashboard</button>
+      </form>
+    </div>
+
+    <div id="app" class="app" hidden>
+      <aside class="sidebar">
+        <div class="sidebar-brand">
+          <span class="logo" aria-hidden="true"></span>
+          <div class="sidebar-brand-text">
+            <strong>Punch</strong>
+            <small id="brand-version">daemon</small>
+          </div>
+        </div>
+        <nav id="nav" class="nav"></nav>
+        <div class="sidebar-foot">
+          <button id="theme-toggle" class="icon-btn" title="Toggle theme" aria-label="Toggle theme"></button>
+          <button id="lock-btn" class="icon-btn" title="Clear token" aria-label="Clear token" hidden></button>
+        </div>
+      </aside>
+
+      <main class="main">
+        <header class="topbar">
+          <div class="topbar-title">
+            <h2 id="view-title">Overview</h2>
+            <span id="view-subtitle" class="topbar-subtitle"></span>
+          </div>
+          <div class="topbar-actions">
+            <span id="conn-status" class="conn-status" title="Daemon connection">
+              <span class="dot"></span><span class="conn-label">connecting…</span>
+            </span>
+            <button id="shutdown-btn" class="btn btn-danger-ghost btn-sm" title="Stop the daemon">Shutdown</button>
+          </div>
+        </header>
+        <div id="view" class="view"></div>
+      </main>
+    </div>
+
+    <div id="toast-stack" class="toast-stack" aria-live="polite"></div>
+
+    <script type="module" src="js/app.js"></script>
+  </body>
+</html>

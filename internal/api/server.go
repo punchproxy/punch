@@ -18,6 +18,7 @@ import (
 	"github.com/punchproxy/punch/internal/relay"
 	"github.com/punchproxy/punch/internal/session"
 	"github.com/punchproxy/punch/internal/tun"
+	"github.com/punchproxy/punch/internal/web"
 )
 
 type Server struct {
@@ -65,11 +66,13 @@ func (s *Server) Start() error {
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.RealIP)
 	r.Use(corsMiddleware)
-	if s.cfg.Secret != "" {
-		r.Use(s.authMiddleware)
-	}
 
 	r.Route("/api", func(r chi.Router) {
+		// Auth guards the API only; the dashboard's static assets must load
+		// unauthenticated so the user can enter a token.
+		if s.cfg.Secret != "" {
+			r.Use(s.authMiddleware)
+		}
 		r.Get("/status", s.handleStatus)
 		r.Post("/shutdown", s.handleShutdown)
 		r.Get("/system", s.handleSystem)
@@ -125,6 +128,10 @@ func (s *Server) Start() error {
 		r.Delete("/sessions", s.handleTerminateSessions)
 		r.Delete("/sessions/{id}", s.handleTerminateSession)
 	})
+
+	// Serve the embedded dashboard at the router root. The /api group above
+	// is matched first, so dashboard assets never shadow API routes.
+	r.Handle("/*", web.Handler())
 
 	s.httpServer = &http.Server{
 		Addr:    s.cfg.Listen,
