@@ -42,7 +42,8 @@ func resolveCachedDNS(ctx context.Context, opts cachedDNSOptions) (cachedDNSResu
 				cached:      true,
 				stale:       hit.stale,
 			}
-			if hit.stale {
+			if hit.stale || opts.respectAnswerTTL && hit.answerMinTTL() == 0 {
+				result.stale = true
 				result.upstream = "Cache (stale)"
 				if opts.refreshStale != nil {
 					opts.refreshStale()
@@ -69,6 +70,9 @@ func resolveCachedDNS(ctx context.Context, opts cachedDNSOptions) (cachedDNSResu
 			return stale, nil
 		}
 		return cachedDNSResult{}, err
+	}
+	if resp == nil && opts.fallbackToStaleOnResolveError && hasStale {
+		return stale, nil
 	}
 
 	result := cachedDNSResult{

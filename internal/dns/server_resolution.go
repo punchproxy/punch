@@ -49,13 +49,14 @@ func (s *Server) resolveCachedWithResolver(ctx context.Context, r *dns.Msg, doma
 		}
 	}
 	return resolveCachedDNS(ctx, cachedDNSOptions{
-		cache:            s.cache,
-		name:             domain,
-		qtype:            qtype,
-		msg:              r,
-		upstreams:        s.cacheUpstreamsFor(r, resolverOverride),
-		respectAnswerTTL: respectAnswerTTL,
-		refreshStale:     refreshStale,
+		cache:                         s.cache,
+		name:                          domain,
+		qtype:                         qtype,
+		msg:                           r,
+		upstreams:                     s.cacheUpstreamsFor(r, resolverOverride),
+		respectAnswerTTL:              respectAnswerTTL,
+		refreshStale:                  refreshStale,
+		fallbackToStaleOnResolveError: respectAnswerTTL,
 		resolve: func(ctx context.Context, msg *dns.Msg) (*dns.Msg, string, error) {
 			resp, upstream := s.resolveUpstreamWithResolver(ctx, msg, resolverOverride)
 			return resp, upstream, nil

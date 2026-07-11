@@ -147,6 +147,39 @@ func TestResolveRelayDomainReturnsRealIPsAndUsesCache(t *testing.T) {
 	}
 }
 
+func TestResolveRelayDomainUsesStaleCacheWhenUpstreamFails(t *testing.T) {
+	upstreamAddr, closeUpstream, _ := startRelayDNSUpstream(t, map[uint16][]netip.Addr{
+		mdns.TypeA: {netip.MustParseAddr("203.0.113.40")},
+	})
+
+	cache := NewCache(10, 0, 60)
+	cache.Put("host.relay.example", mdns.TypeA, cacheTestAResponse("host.relay.example.", "203.0.113.40", 60), upstreamAddr)
+	setCacheEntryTimes(t, cache, "host.relay.example", mdns.TypeA, time.Now().Add(-2*time.Second), time.Now().Add(-1*time.Second))
+	closeUpstream()
+
+	server := &Server{
+		cache:         cache,
+		resolver:      NewResolverGroup([]*UpstreamResolver{NewUpstreamResolver(upstreamAddr, "")}),
+		domainMatcher: dnsrule.NewMatcher(),
+		directIPs:     NewIPSet(),
+		rejectIPs:     NewIPSet(),
+		ruleLists:     make(map[string][]*ruleListEntry),
+		refreshing:    make(map[string]struct{}),
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	got, _, err := server.ResolveRelayDomain(ctx, "main", "host.relay.example")
+	if err != nil {
+		t.Fatalf("ResolveRelayDomain() error = %v", err)
+	}
+	want := netip.MustParseAddr("203.0.113.40")
+	if len(got) != 1 || got[0] != want {
+		t.Fatalf("ResolveRelayDomain() = %v, want [%s]", got, want)
+	}
+}
+
 func TestResolveRelayDomainQueriesIPv4AndIPv6BeforeFailing(t *testing.T) {
 	upstreamAddr, closeUpstream, counts := startRelayDNSUpstream(t, nil)
 	defer closeUpstream()
