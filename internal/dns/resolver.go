@@ -322,25 +322,38 @@ func (u *UpstreamResolver) resolveBootstrapHost(ctx context.Context, host string
 	msg := new(dns.Msg)
 	msg.SetQuestion(dns.Fqdn(host), dns.TypeA)
 
-	result, err := resolveCachedDNS(ctx, cachedDNSOptions{
-		cache:                         u.cache,
-		name:                          host,
-		qtype:                         dns.TypeA,
-		msg:                           msg,
-		upstreams:                     []string{u.bootstrap},
-		fallbackToStaleOnResolveError: true,
-		resolve: func(ctx context.Context, msg *dns.Msg) (*dns.Msg, string, error) {
-			reply, err := u.queryBootstrapHost(ctx, msg)
-			return reply, u.bootstrap, err
-		},
-	})
+	if u.cache != nil {
+		if hit, ok := u.cache.lookupForUpstream(host, dns.TypeA, u.bootstrap); ok {
+			ips := bootstrapIPs(hit.message())
+			if len(ips) > 0 && !hit.stale {
+				return ips, nil
+			}
+			refreshed, err := u.queryAndCacheBootstrapHost(ctx, host, msg)
+			if err == nil && len(refreshed) > 0 {
+				return refreshed, nil
+			}
+			if len(ips) > 0 {
+				return ips, nil
+			}
+			if err != nil {
+				return nil, err
+			}
+			return refreshed, nil
+		}
+	}
+
+	return u.queryAndCacheBootstrapHost(ctx, host, msg)
+}
+
+func (u *UpstreamResolver) queryAndCacheBootstrapHost(ctx context.Context, host string, msg *dns.Msg) ([]string, error) {
+	reply, err := u.queryBootstrapHost(ctx, msg)
 	if err != nil {
 		return nil, err
 	}
-	if result.cached {
-		return bootstrapIPs(result.hit.message()), nil
+	if u.cache != nil {
+		u.cache.PutForUpstream(host, dns.TypeA, reply, u.bootstrap)
 	}
-	return bootstrapIPs(result.msg), nil
+	return bootstrapIPs(reply), nil
 }
 
 func (u *UpstreamResolver) queryBootstrapHost(ctx context.Context, msg *dns.Msg) (*dns.Msg, error) {

@@ -161,6 +161,32 @@ func TestUpstreamResolverBootstrapUsesCache(t *testing.T) {
 	}
 }
 
+func TestUpstreamResolverBootstrapIgnoresCachedAnswerWithoutIP(t *testing.T) {
+	bootstrapAddr, closeBootstrap, requests := startSlowDNSUpstream(t, 0)
+	defer closeBootstrap()
+
+	cache := NewCache(10, 0, 60)
+	msg := new(mdns.Msg)
+	msg.SetQuestion("doh.example.", mdns.TypeA)
+	msg.Answer = []mdns.RR{&mdns.CNAME{
+		Hdr:    mdns.RR_Header{Name: "doh.example.", Rrtype: mdns.TypeCNAME, Class: mdns.ClassINET, Ttl: 60},
+		Target: "alias.example.",
+	}}
+	cache.PutForUpstream("doh.example", mdns.TypeA, msg, bootstrapAddr)
+
+	resolver := NewUpstreamResolverWithCache("https://doh.example/dns-query", bootstrapAddr, cache)
+	ips, err := resolver.resolveBootstrapHost(context.Background(), "doh.example")
+	if err != nil {
+		t.Fatalf("resolveBootstrapHost() error = %v", err)
+	}
+	if len(ips) != 1 || ips[0] != "203.0.113.99" {
+		t.Fatalf("resolveBootstrapHost() = %v, want [203.0.113.99]", ips)
+	}
+	if got := requests.Load(); got != 1 {
+		t.Fatalf("bootstrap requests = %d, want 1", got)
+	}
+}
+
 func TestUpstreamResolverDoHReusesConnectionWithoutBootstrapCache(t *testing.T) {
 	doh := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		packed, err := base64.RawURLEncoding.DecodeString(r.URL.Query().Get("dns"))
