@@ -2,6 +2,7 @@ package dns
 
 import (
 	"context"
+	"log/slog"
 
 	"github.com/miekg/dns"
 )
@@ -67,11 +68,13 @@ func resolveCachedDNS(ctx context.Context, opts cachedDNSOptions) (cachedDNSResu
 	resp, upstream, err := opts.resolve(ctx, opts.msg)
 	if err != nil {
 		if opts.fallbackToStaleOnResolveError && hasStale {
+			slog.Warn("dns re-query failed, serving stale cached answer", "name", opts.name, "qtype", cacheQType(opts.qtype), "error", err)
 			return stale, nil
 		}
 		return cachedDNSResult{}, err
 	}
 	if resp == nil && opts.fallbackToStaleOnResolveError && hasStale {
+		slog.Warn("dns re-query failed, serving stale cached answer", "name", opts.name, "qtype", cacheQType(opts.qtype))
 		return stale, nil
 	}
 
