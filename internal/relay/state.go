@@ -37,10 +37,17 @@ func (s *Selector) reportAutoRelaySwitchLocked(prevName, prevKey string) {
 		return
 	}
 	reason := "latency optimization"
+	var fromLatency int64
 	if h := s.health[prevKey]; prevKey == "" || h == nil || h.Status == HealthDown {
 		reason = "fail-over"
+	} else {
+		fromLatency = h.URLTestLatency
 	}
-	slog.Info("relay switched", "from", prevName, "to", next, "reason", reason)
+	var toLatency int64
+	if h := s.health[s.activeHealthKeyLocked()]; h != nil {
+		toLatency = h.URLTestLatency
+	}
+	slog.Info("relay switched", "from", prevName, "from_latency_ms", fromLatency, "to", next, "to_latency_ms", toLatency, "reason", reason)
 }
 
 func (s *Selector) publishRelayChangeLocked(prev string) {

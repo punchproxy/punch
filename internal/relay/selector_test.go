@@ -203,12 +203,13 @@ func TestBenchmarkTargetReevaluatesGlobalAutoSelection(t *testing.T) {
 
 func TestReportAutoRelaySwitchReason(t *testing.T) {
 	cases := []struct {
-		name       string
-		prevStatus HealthStatus
-		wantReason string
+		name            string
+		prevStatus      HealthStatus
+		wantReason      string
+		wantFromLatency string
 	}{
-		{name: "previous relay down is fail-over", prevStatus: HealthDown, wantReason: "fail-over"},
-		{name: "previous relay healthy is latency optimization", prevStatus: HealthHealthy, wantReason: "latency optimization"},
+		{name: "previous relay down is fail-over", prevStatus: HealthDown, wantReason: "fail-over", wantFromLatency: "from_latency_ms=0"},
+		{name: "previous relay healthy is latency optimization", prevStatus: HealthHealthy, wantReason: "latency optimization", wantFromLatency: "from_latency_ms=200"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -225,7 +226,8 @@ func TestReportAutoRelaySwitchReason(t *testing.T) {
 				},
 			}
 			prevKey := s.healthKey("old", "old")
-			s.health[prevKey] = &RelayHealth{Name: "old / old", Group: "old", Status: tc.prevStatus}
+			s.health[prevKey] = &RelayHealth{Name: "old / old", Group: "old", Status: tc.prevStatus, URLTestLatency: 200}
+			s.health[s.healthKey("new", "new")] = &RelayHealth{Name: "new / new", Group: "new", Status: HealthHealthy, URLTestLatency: 80}
 			prevName := s.activeNameLocked()
 
 			s.active.Store(1)
@@ -235,7 +237,158 @@ func TestReportAutoRelaySwitchReason(t *testing.T) {
 			if !strings.Contains(logged, "relay switched") || !strings.Contains(logged, tc.wantReason) {
 				t.Fatalf("switch log = %q, want relay switched with reason %q", logged, tc.wantReason)
 			}
+			if !strings.Contains(logged, tc.wantFromLatency) || !strings.Contains(logged, "to_latency_ms=80") {
+				t.Fatalf("switch log = %q, want %s and to_latency_ms=80", logged, tc.wantFromLatency)
+			}
 		})
+	}
+}
+
+func TestAutoSelectionKeepsRelayWithinTolerance(t *testing.T) {
+	st, err := config.Open(filepath.Join(t.TempDir(), "punch.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+
+	current := &testDialer{name: "a"}
+	other := &countingDialer{testDialer: testDialer{name: "b"}}
+	selector := &Selector{
+		health:     make(map[string]*RelayHealth),
+		mode:       "manual",
+		outsideURL: "http://127.0.0.1:9",
+		tolerance:  50 * time.Millisecond,
+		store:      st,
+		bus:        eventbus.New(),
+		groups:     []*group{{name: "g", mode: "auto", dialers: []Dialer{current, other}}},
+	}
+	selector.health[selector.healthKey("g", "a")] = &RelayHealth{Status: HealthHealthy, URLTestLatency: 100}
+	selector.health[selector.healthKey("g", "b")] = &RelayHealth{Status: HealthHealthy, URLTestLatency: 80}
+
+	selector.reevaluateAutoSelections()
+
+	if got := selector.ActiveName(); got != "g / a" {
+		t.Fatalf("ActiveName() = %q, want g / a (20ms gain is within 50ms tolerance)", got)
+	}
+	if got := other.checks.Load(); got != 0 {
+		t.Fatalf("candidate checks = %d, want 0 (no switch, no confirmation check)", got)
+	}
+}
+
+func TestAutoSelectionSwitchesBeyondToleranceAfterConfirmation(t *testing.T) {
+	st, err := config.Open(filepath.Join(t.TempDir(), "punch.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	t.Cleanup(target.Close)
+
+	current := &testDialer{name: "a"}
+	other := &countingDialer{testDialer: testDialer{name: "b"}}
+	selector := &Selector{
+		health:     make(map[string]*RelayHealth),
+		mode:       "manual",
+		outsideURL: target.URL,
+		tolerance:  50 * time.Millisecond,
+		store:      st,
+		bus:        eventbus.New(),
+		groups:     []*group{{name: "g", mode: "auto", dialers: []Dialer{current, other}}},
+	}
+	selector.health[selector.healthKey("g", "a")] = &RelayHealth{Status: HealthHealthy, URLTestLatency: 200}
+	selector.health[selector.healthKey("g", "b")] = &RelayHealth{Status: HealthHealthy, URLTestLatency: 30}
+
+	selector.reevaluateAutoSelections()
+
+	if got := selector.ActiveName(); got != "g / b" {
+		t.Fatalf("ActiveName() = %q, want g / b", got)
+	}
+	if got := other.checks.Load(); got != 1 {
+		t.Fatalf("candidate checks = %d, want 1 confirmation check before the switch", got)
+	}
+}
+
+func TestLatencySwitchCancelledWhenConfirmationMissesTolerance(t *testing.T) {
+	st, err := config.Open(filepath.Join(t.TempDir(), "punch.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+
+	slow := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(200 * time.Millisecond)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	t.Cleanup(slow.Close)
+
+	var buf bytes.Buffer
+	prevLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(prevLogger) })
+
+	current := &testDialer{name: "a"}
+	candidate := &fixedTargetDialer{testDialer: testDialer{name: "b"}, target: slow.Listener.Addr().String()}
+	selector := &Selector{
+		health:     make(map[string]*RelayHealth),
+		mode:       "auto",
+		outsideURL: slow.URL,
+		tolerance:  50 * time.Millisecond,
+		store:      st,
+		bus:        eventbus.New(),
+		groups: []*group{
+			{name: "ga", dialers: []Dialer{current}},
+			{name: "gb", dialers: []Dialer{candidate}},
+		},
+	}
+	selector.health[selector.healthKey("ga", "a")] = &RelayHealth{Status: HealthHealthy, URLTestLatency: 100}
+	// Stale health claims the candidate is far faster; the confirmation check
+	// will measure ~200ms and disprove it.
+	selector.health[selector.healthKey("gb", "b")] = &RelayHealth{Status: HealthHealthy, URLTestLatency: 10}
+
+	selector.reevaluateAutoSelections()
+
+	if got := selector.ActiveName(); got != "ga / a" {
+		t.Fatalf("ActiveName() = %q, want ga / a (switch should be cancelled)", got)
+	}
+	if !strings.Contains(buf.String(), "relay switch cancelled after confirmation check") {
+		t.Fatalf("log = %q, want cancellation message", buf.String())
+	}
+	if fresh := selector.health[selector.healthKey("gb", "b")].URLTestLatency; fresh < 150 {
+		t.Fatalf("candidate URLTestLatency = %dms, want the fresh ~200ms measurement", fresh)
+	}
+}
+
+func TestFailOverSwitchSkipsConfirmationCheck(t *testing.T) {
+	st, err := config.Open(filepath.Join(t.TempDir(), "punch.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+
+	current := &testDialer{name: "a"}
+	other := &countingDialer{testDialer: testDialer{name: "b"}}
+	selector := &Selector{
+		health:     make(map[string]*RelayHealth),
+		mode:       "manual",
+		outsideURL: "http://127.0.0.1:9",
+		tolerance:  50 * time.Millisecond,
+		store:      st,
+		bus:        eventbus.New(),
+		groups:     []*group{{name: "g", mode: "auto", dialers: []Dialer{current, other}}},
+	}
+	selector.health[selector.healthKey("g", "a")] = &RelayHealth{Status: HealthDown}
+	selector.health[selector.healthKey("g", "b")] = &RelayHealth{Status: HealthHealthy, URLTestLatency: 80}
+
+	selector.reevaluateAutoSelections()
+
+	if got := selector.ActiveName(); got != "g / b" {
+		t.Fatalf("ActiveName() = %q, want g / b", got)
+	}
+	if got := other.checks.Load(); got != 0 {
+		t.Fatalf("candidate checks = %d, want 0 (fail-over switches immediately)", got)
 	}
 }
 
@@ -972,6 +1125,17 @@ func (d *slowFirstDialer) DialContext(ctx context.Context, network, address stri
 		}
 	}
 	return (&net.Dialer{}).DialContext(ctx, network, address)
+}
+
+// fixedTargetDialer always connects to its own target, letting a test route a
+// relay's traffic to a dedicated (e.g. slow) server regardless of the address.
+type fixedTargetDialer struct {
+	testDialer
+	target string
+}
+
+func (d *fixedTargetDialer) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
+	return (&net.Dialer{}).DialContext(ctx, network, d.target)
 }
 
 type meteredDialer struct {

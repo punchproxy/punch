@@ -72,10 +72,7 @@ func (s *Selector) CheckOutsideConnectivity() (benchmarkTarget, bool, bool) {
 	s.finishRelayCheck(target, result)
 	s.applyOutsideConnectivityCheckResult(target, result)
 
-	s.mu.Lock()
-	s.reevaluateAutoSelectionsLocked()
-	s.saveSelectionsLocked()
-	s.mu.Unlock()
+	s.reevaluateAutoSelections()
 
 	s.publishRelayChange(prevActive)
 	s.bus.Publish(eventbus.Event{Type: eventbus.EventRelayHealth, Data: s.HealthList()})

@@ -51,10 +51,10 @@ func (s *Selector) Benchmark() {
 			slog.Debug("relay health check result", "group", result.target.group.name, "relay", result.target.dialer.Name(), "tcp_connect_latency_ms", h.TCPConnectLatency, "url_test_latency_ms", h.URLTestLatency, "status", h.Status)
 		}
 	}
-	s.reevaluateAutoSelectionsLocked()
-	s.saveSelectionsLocked()
 	s.resetSelectedCheckFailuresLocked()
 	s.mu.Unlock()
+
+	s.reevaluateAutoSelections()
 
 	slog.Debug("relay benchmark completed", "active", s.ActiveName())
 	s.publishRelayChange(prevActive)
@@ -237,12 +237,9 @@ func (s *Selector) benchmarkTargetsWithResults(targets []benchmarkTarget) ([]ben
 
 	results := s.runRelayChecks(targets)
 
-	s.mu.Lock()
 	// Auto-group selection over the fresh health results (including picking the
 	// best relay after a whole-group benchmark) happens in reevaluation.
-	s.reevaluateAutoSelectionsLocked()
-	s.saveSelectionsLocked()
-	s.mu.Unlock()
+	s.reevaluateAutoSelections()
 
 	s.publishRelayChange(prevActive)
 	s.bus.Publish(eventbus.Event{Type: eventbus.EventRelayHealth, Data: s.HealthList()})
@@ -540,35 +537,48 @@ func durationMillis(d time.Duration) int64 {
 	return ms
 }
 
-func (s *Selector) reevaluateAutoSelectionsLocked() {
-	prevName := s.activeNameLocked()
-	prevKey := s.activeHealthKeyLocked()
-	defer s.reportAutoRelaySwitchLocked(prevName, prevKey)
+// autoSelections is a plan of what automatic selection would pick: the active
+// dialer index per group and the selector-level active group index.
+type autoSelections struct {
+	groupActive map[*group]int
+	activeGroup int
+}
 
+// computeAutoSelectionsLocked plans automatic selection from current health
+// data without mutating any state. A live selection is only displaced when a
+// candidate beats it by more than the configured switch tolerance; fail-overs
+// away from dead relays ignore the tolerance.
+func (s *Selector) computeAutoSelectionsLocked() autoSelections {
+	sel := autoSelections{groupActive: make(map[*group]int, len(s.groups)), activeGroup: s.activeGroupIndexLocked()}
 	for _, g := range s.groups {
+		cur := s.activeDialerIndexLocked(g)
+		sel.groupActive[g] = cur
 		if g.mode != "auto" || len(g.dialers) == 0 {
 			continue
 		}
 		bestIdx := -1
 		bestLatency := time.Duration(1<<63 - 1)
 		for di, d := range g.dialers {
-			h := s.health[s.healthKey(g.name, d.Name())]
-			if h == nil || h.Status == HealthDown || h.URLTestLatency <= 0 {
+			latency, ok := s.usableLatencyLocked(g.name, d.Name())
+			if !ok {
 				continue
 			}
-			latency := time.Duration(h.URLTestLatency) * time.Millisecond
 			if latency < bestLatency {
 				bestLatency = latency
 				bestIdx = di
 			}
 		}
-		if bestIdx >= 0 {
-			g.active.Store(int32(bestIdx))
+		if bestIdx < 0 || bestIdx == cur {
+			continue
 		}
+		if curLatency, ok := s.usableLatencyLocked(g.name, g.dialers[cur].Name()); ok && curLatency-bestLatency <= s.tolerance {
+			continue
+		}
+		sel.groupActive[g] = bestIdx
 	}
 
 	if s.mode != "auto" {
-		return
+		return sel
 	}
 	bestGroupIdx := -1
 	bestGroupLatency := time.Duration(1<<63 - 1)
@@ -581,12 +591,10 @@ func (s *Selector) reevaluateAutoSelectionsLocked() {
 		if len(g.dialers) == 0 {
 			continue
 		}
-		d := g.dialers[s.activeDialerIndexLocked(g)]
-		h := s.health[s.healthKey(g.name, d.Name())]
-		if h == nil || h.Status == HealthDown || h.URLTestLatency <= 0 {
+		latency, ok := s.usableLatencyLocked(g.name, g.dialers[sel.groupActive[g]].Name())
+		if !ok {
 			continue
 		}
-		latency := time.Duration(h.URLTestLatency) * time.Millisecond
 		if latency < bestGroupLatency {
 			bestGroupLatency = latency
 			bestGroupIdx = gi
@@ -595,8 +603,132 @@ func (s *Selector) reevaluateAutoSelectionsLocked() {
 	if bestGroupIdx < 0 {
 		bestGroupIdx = directGroupIdx
 	}
-	if bestGroupIdx < 0 || s.activeGroupIndexLocked() == bestGroupIdx {
+	if bestGroupIdx < 0 || bestGroupIdx == sel.activeGroup {
+		return sel
+	}
+	if cg := s.groups[sel.activeGroup]; cg.name != directGroupName && len(cg.dialers) > 0 {
+		if curLatency, ok := s.usableLatencyLocked(cg.name, cg.dialers[sel.groupActive[cg]].Name()); ok && curLatency-bestGroupLatency <= s.tolerance {
+			return sel
+		}
+	}
+	sel.activeGroup = bestGroupIdx
+	return sel
+}
+
+// usableLatencyLocked returns the relay's last URL test latency when the relay
+// is a viable selection target (checked, not down).
+func (s *Selector) usableLatencyLocked(groupName, relayName string) (time.Duration, bool) {
+	h := s.health[s.healthKey(groupName, relayName)]
+	if h == nil || h.Status == HealthDown || h.URLTestLatency <= 0 {
+		return 0, false
+	}
+	return time.Duration(h.URLTestLatency) * time.Millisecond, true
+}
+
+func (s *Selector) applyAutoSelectionsLocked(sel autoSelections) {
+	prevName := s.activeNameLocked()
+	prevKey := s.activeHealthKeyLocked()
+	for g, idx := range sel.groupActive {
+		g.active.Store(int32(idx))
+	}
+	if len(s.groups) > 0 {
+		s.active.Store(int32(sel.activeGroup))
+	}
+	s.reportAutoRelaySwitchLocked(prevName, prevKey)
+}
+
+// pendingLatencySwitchLocked reports the relay that sel would make active when
+// that change is a latency optimization away from a live relay — the case that
+// needs a confirmation check before switching. Fail-overs need no confirmation.
+func (s *Selector) pendingLatencySwitchLocked(sel autoSelections) (benchmarkTarget, bool) {
+	if len(s.groups) == 0 {
+		return benchmarkTarget{}, false
+	}
+	gi := sel.activeGroup
+	if gi < 0 || gi >= len(s.groups) || len(s.groups[gi].dialers) == 0 {
+		gi = 0
+		for i, g := range s.groups {
+			if len(g.dialers) > 0 {
+				gi = i
+				break
+			}
+		}
+	}
+	g := s.groups[gi]
+	if g.name == directGroupName || len(g.dialers) == 0 {
+		return benchmarkTarget{}, false
+	}
+	idx := sel.groupActive[g]
+	if idx < 0 || idx >= len(g.dialers) {
+		idx = 0
+	}
+	d := g.dialers[idx]
+	prevKey := s.activeHealthKeyLocked()
+	if s.healthKey(g.name, d.Name()) == prevKey {
+		return benchmarkTarget{}, false
+	}
+	if h := s.health[prevKey]; prevKey == "" || h == nil || h.Status == HealthDown {
+		return benchmarkTarget{}, false
+	}
+	return benchmarkTarget{group: g, index: idx, dialer: d}, true
+}
+
+// holdActiveSelectionLocked rewrites sel so the currently active relay stays
+// selected, while leaving decisions for other groups intact.
+func (s *Selector) holdActiveSelectionLocked(sel *autoSelections) {
+	sel.activeGroup = s.activeGroupIndexLocked()
+	g := s.groups[s.activeUsableGroupIndexLocked()]
+	sel.groupActive[g] = s.activeDialerIndexLocked(g)
+}
+
+// reevaluateAutoSelections recomputes automatic selections from current health
+// and persists the outcome. A latency-driven switch away from a live relay is
+// first confirmed with a fresh check of the destination relay; the switch only
+// happens when the fresh latency still beats the current relay by more than
+// the switch tolerance.
+func (s *Selector) reevaluateAutoSelections() {
+	s.mu.Lock()
+	sel := s.computeAutoSelectionsLocked()
+	candidate, confirm := s.pendingLatencySwitchLocked(sel)
+	if !confirm {
+		s.applyAutoSelectionsLocked(sel)
+		s.saveSelectionsLocked()
+		s.mu.Unlock()
 		return
 	}
-	s.active.Store(int32(bestGroupIdx))
+	currentName := s.activeNameLocked()
+	var currentLatency int64
+	if h := s.health[s.activeHealthKeyLocked()]; h != nil {
+		currentLatency = h.URLTestLatency
+	}
+	candidateName := s.displayName(candidate.group.name, candidate.dialer.Name())
+	s.mu.Unlock()
+
+	slog.Debug("checking relay before latency switch", "from", currentName, "from_latency_ms", currentLatency, "to", candidateName)
+	s.setRelayCheckStatus([]benchmarkTarget{candidate}, HealthChecking)
+	check := s.testRelay(candidate.dialer)
+	s.finishRelayCheck(candidate, check)
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	sel = s.computeAutoSelectionsLocked()
+	next, again := s.pendingLatencySwitchLocked(sel)
+	candidateKey := s.healthKey(candidate.group.name, candidate.dialer.Name())
+	switch {
+	case again && s.healthKey(next.group.name, next.dialer.Name()) == candidateKey:
+		// Confirmed: the fresh latency still clears the tolerance; apply switches.
+	case again:
+		// A different relay became the best candidate mid-check; hold position
+		// until a later pass confirms it.
+		s.holdActiveSelectionLocked(&sel)
+		slog.Debug("relay switch deferred; best candidate changed during confirmation check", "current", currentName, "checked", candidateName, "next", s.displayName(next.group.name, next.dialer.Name()))
+	default:
+		var candidateLatency int64
+		if h := s.health[candidateKey]; h != nil {
+			candidateLatency = h.URLTestLatency
+		}
+		slog.Info("relay switch cancelled after confirmation check", "current", currentName, "current_latency_ms", currentLatency, "candidate", candidateName, "candidate_latency_ms", candidateLatency, "tolerance_ms", s.tolerance.Milliseconds())
+	}
+	s.applyAutoSelectionsLocked(sel)
+	s.saveSelectionsLocked()
 }

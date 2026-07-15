@@ -983,7 +983,7 @@ func Default() *Config {
 			FullInterval:        86400,
 			Interval:            10,
 			FullTriggerFailures: 5,
-			Tolerance:           50,
+			Tolerance:           15,
 			Concurrency:         10,
 		},
 		API: API{
@@ -1045,7 +1045,7 @@ func applyDefaults(cfg *Config) {
 		cfg.Check.FullTriggerFailures = 5
 	}
 	if cfg.Check.Tolerance == 0 {
-		cfg.Check.Tolerance = 50
+		cfg.Check.Tolerance = 15
 	}
 	if cfg.Check.Concurrency == 0 {
 		cfg.Check.Concurrency = 10
