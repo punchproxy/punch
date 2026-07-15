@@ -240,8 +240,9 @@ func (s *Server) resolveRelayDomainFamily(ctx context.Context, source, host stri
 		result.err = fmt.Errorf("no DNS response")
 		return result
 	}
-	if ttl := answerMinTTL(reply); ttl > 0 {
-		result.expiresAt = time.Now().Add(time.Duration(ttl) * time.Second)
+	ttl := max(time.Duration(answerMinTTL(reply))*time.Second, s.cache.minTTL)
+	if ttl > 0 {
+		result.expiresAt = time.Now().Add(ttl)
 	}
 	for _, rr := range reply.Answer {
 		switch ans := rr.(type) {

@@ -180,6 +180,39 @@ func TestResolveRelayDomainUsesStaleCacheWhenUpstreamFails(t *testing.T) {
 	}
 }
 
+func TestResolveRelayDomainFloorsExpiryAtCacheMinTTL(t *testing.T) {
+	upstreamAddr, closeUpstream, _ := startRelayDNSUpstreamWithTTL(t, map[uint16][]netip.Addr{
+		mdns.TypeA: {netip.MustParseAddr("203.0.113.40")},
+	}, 0)
+	defer closeUpstream()
+
+	server := &Server{
+		cache:         NewCache(10, 60, 60),
+		resolver:      NewResolverGroup([]*UpstreamResolver{NewUpstreamResolver(upstreamAddr, "")}),
+		domainMatcher: dnsrule.NewMatcher(),
+		directIPs:     NewIPSet(),
+		rejectIPs:     NewIPSet(),
+		ruleLists:     make(map[string][]*ruleListEntry),
+		refreshing:    make(map[string]struct{}),
+	}
+
+	before := time.Now()
+	got, expiresAt, err := server.ResolveRelayDomain(context.Background(), "main", "host.relay.example")
+	if err != nil {
+		t.Fatalf("ResolveRelayDomain() error = %v", err)
+	}
+	want := netip.MustParseAddr("203.0.113.40")
+	if len(got) != 1 || got[0] != want {
+		t.Fatalf("ResolveRelayDomain() = %v, want [%s]", got, want)
+	}
+	if expiresAt.IsZero() {
+		t.Fatal("ResolveRelayDomain() expiry is zero, want floor at cache min TTL")
+	}
+	if min, max := before.Add(59*time.Second), time.Now().Add(61*time.Second); expiresAt.Before(min) || expiresAt.After(max) {
+		t.Fatalf("ResolveRelayDomain() expiry = %v, want within [%v, %v]", expiresAt, min, max)
+	}
+}
+
 func TestResolveRelayDomainQueriesIPv4AndIPv6BeforeFailing(t *testing.T) {
 	upstreamAddr, closeUpstream, counts := startRelayDNSUpstream(t, nil)
 	defer closeUpstream()
@@ -209,6 +242,11 @@ type relayDNSCounts struct {
 }
 
 func startRelayDNSUpstream(t *testing.T, answers map[uint16][]netip.Addr) (addr string, closeFn func(), counts *relayDNSCounts) {
+	t.Helper()
+	return startRelayDNSUpstreamWithTTL(t, answers, 60)
+}
+
+func startRelayDNSUpstreamWithTTL(t *testing.T, answers map[uint16][]netip.Addr, ttl uint32) (addr string, closeFn func(), counts *relayDNSCounts) {
 	t.Helper()
 
 	conn, err := net.ListenPacket("udp", "127.0.0.1:0")
@@ -250,7 +288,7 @@ func startRelayDNSUpstream(t *testing.T, answers map[uint16][]netip.Addr) (addr 
 						}
 						ip := addr.As4()
 						resp.Answer = append(resp.Answer, &mdns.A{
-							Hdr: mdns.RR_Header{Name: q.Name, Rrtype: mdns.TypeA, Class: mdns.ClassINET, Ttl: 60},
+							Hdr: mdns.RR_Header{Name: q.Name, Rrtype: mdns.TypeA, Class: mdns.ClassINET, Ttl: ttl},
 							A:   net.IP(ip[:]),
 						})
 					}
@@ -262,7 +300,7 @@ func startRelayDNSUpstream(t *testing.T, answers map[uint16][]netip.Addr) (addr 
 						}
 						ip := addr.As16()
 						resp.Answer = append(resp.Answer, &mdns.AAAA{
-							Hdr:  mdns.RR_Header{Name: q.Name, Rrtype: mdns.TypeAAAA, Class: mdns.ClassINET, Ttl: 60},
+							Hdr:  mdns.RR_Header{Name: q.Name, Rrtype: mdns.TypeAAAA, Class: mdns.ClassINET, Ttl: ttl},
 							AAAA: net.IP(ip[:]),
 						})
 					}
