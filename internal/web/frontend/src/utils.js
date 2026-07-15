@@ -65,7 +65,7 @@ export function filterSessions(sessions, filter, search) {
   const needle = search.trim().toLowerCase();
   return sessions
     .filter((session) => filter === "all" || (filter === "active" ? isSessionActive(session) : !isSessionActive(session)))
-    .filter((session) => !needle || `${session.destination || ""} ${session.relay || ""} ${session.rule || ""} ${session.process || ""}`.toLowerCase().includes(needle));
+    .filter((session) => !needle || `${session.destination || ""} ${session.relay || ""}`.toLowerCase().includes(needle));
 }
 
 export const sumBy = (rows, key) => rows.reduce((total, row) => total + (Number(row[key]) || 0), 0);
