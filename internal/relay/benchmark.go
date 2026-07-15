@@ -64,8 +64,6 @@ func (s *Selector) Benchmark() {
 func (s *Selector) BenchmarkTarget(name string) error {
 	s.mu.RLock()
 	var targets []benchmarkTarget
-	var targetGroup *group
-	var benchmarkWholeGroup bool
 	for _, g := range s.groups {
 		if len(g.dialers) == 0 {
 			continue
@@ -75,8 +73,6 @@ func (s *Selector) BenchmarkTarget(name string) error {
 				s.mu.RUnlock()
 				return nil
 			}
-			targetGroup = g
-			benchmarkWholeGroup = true
 			for di, d := range g.dialers {
 				targets = append(targets, benchmarkTarget{group: g, index: di, dialer: d})
 			}
@@ -84,7 +80,6 @@ func (s *Selector) BenchmarkTarget(name string) error {
 		}
 		for di, d := range g.dialers {
 			if s.displayName(g.name, d.Name()) == name || d.Name() == name {
-				targetGroup = g
 				targets = append(targets, benchmarkTarget{group: g, index: di, dialer: d})
 				break
 			}
@@ -97,7 +92,7 @@ func (s *Selector) BenchmarkTarget(name string) error {
 	if len(targets) == 0 {
 		return fmt.Errorf("relay %q not found", name)
 	}
-	return s.benchmarkTargets(targets, targetGroup, benchmarkWholeGroup)
+	return s.benchmarkTargets(targets)
 }
 
 func (s *Selector) triggerFullBenchmarkAfterSelectedCheck(target benchmarkTarget, failed bool, internetDown bool) {
@@ -160,7 +155,7 @@ func (s *Selector) BenchmarkRelay(name, groupName string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if err := s.benchmarkTargets(targets, nil, false); err != nil {
+	if err := s.benchmarkTargets(targets); err != nil {
 		return "", err
 	}
 	return resolved, nil
@@ -177,7 +172,7 @@ func (s *Selector) BenchmarkRelayAsync(name, groupName string) (string, error) {
 		return "", err
 	}
 	go func() {
-		if err := s.benchmarkTargets(targets, nil, false); err != nil {
+		if err := s.benchmarkTargets(targets); err != nil {
 			slog.Warn("relay benchmark failed", "relay", resolved, "error", err)
 		}
 	}()
@@ -232,34 +227,19 @@ func (s *Selector) selectedBenchmarkTarget() (benchmarkTarget, bool) {
 	return benchmarkTarget{group: g, index: idx, dialer: g.dialers[idx]}, true
 }
 
-func (s *Selector) benchmarkTargets(targets []benchmarkTarget, targetGroup *group, benchmarkWholeGroup bool) error {
-	_, err := s.benchmarkTargetsWithResults(targets, targetGroup, benchmarkWholeGroup)
+func (s *Selector) benchmarkTargets(targets []benchmarkTarget) error {
+	_, err := s.benchmarkTargetsWithResults(targets)
 	return err
 }
 
-func (s *Selector) benchmarkTargetsWithResults(targets []benchmarkTarget, targetGroup *group, benchmarkWholeGroup bool) ([]benchmarkTargetResult, error) {
+func (s *Selector) benchmarkTargetsWithResults(targets []benchmarkTarget) ([]benchmarkTargetResult, error) {
 	prevActive := s.ActiveName()
 
 	results := s.runRelayChecks(targets)
 
 	s.mu.Lock()
-	if benchmarkWholeGroup && targetGroup != nil {
-		bestIdx := s.activeDialerIndexLocked(targetGroup)
-		bestLatency := time.Duration(1<<63 - 1)
-		for _, result := range results {
-			if result.check.err != nil {
-				continue
-			}
-			if result.check.urlLatency < bestLatency {
-				bestLatency = result.check.urlLatency
-				bestIdx = result.target.index
-			}
-		}
-		if targetGroup.mode == "auto" && len(targetGroup.dialers) > 0 && bestLatency != time.Duration(1<<63-1) {
-			targetGroup.active.Store(int32(bestIdx))
-			s.saveSelectionsLocked()
-		}
-	}
+	// Auto-group selection over the fresh health results (including picking the
+	// best relay after a whole-group benchmark) happens in reevaluation.
 	s.reevaluateAutoSelectionsLocked()
 	s.saveSelectionsLocked()
 	s.mu.Unlock()
@@ -561,6 +541,10 @@ func durationMillis(d time.Duration) int64 {
 }
 
 func (s *Selector) reevaluateAutoSelectionsLocked() {
+	prevName := s.activeNameLocked()
+	prevKey := s.activeHealthKeyLocked()
+	defer s.reportAutoRelaySwitchLocked(prevName, prevKey)
+
 	for _, g := range s.groups {
 		if g.mode != "auto" || len(g.dialers) == 0 {
 			continue

@@ -90,6 +90,7 @@ func (s *Selector) GroupList() []GroupStatus {
 				status.CurrentStatus = h.Status
 				status.CurrentLatency = h.Latency
 				status.CurrentTCPConnectLatency = h.TCPConnectLatency
+				status.History = cloneHealthRecords(h.History)
 				status.LastCheckedAt = h.LastCheckedAt
 				if s.fullCheckInterval > 0 && !h.LastCheckedAt.IsZero() && g.name != directGroupName {
 					status.NextCheckAt = h.LastCheckedAt.Add(s.fullCheckInterval)

@@ -17,6 +17,32 @@ func (s *Selector) activeNameLocked() string {
 	return s.displayName(g.name, d.Name())
 }
 
+func (s *Selector) activeHealthKeyLocked() string {
+	if len(s.groups) == 0 {
+		return ""
+	}
+	g := s.groups[s.activeUsableGroupIndexLocked()]
+	if len(g.dialers) == 0 {
+		return ""
+	}
+	return s.healthKey(g.name, g.dialers[s.activeDialerIndexLocked(g)].Name())
+}
+
+// reportAutoRelaySwitchLocked logs a relay switch made by automatic
+// reevaluation. The reason is inferred from the previously selected relay:
+// if it was down the switch is a fail-over, otherwise a faster relay won.
+func (s *Selector) reportAutoRelaySwitchLocked(prevName, prevKey string) {
+	next := s.activeNameLocked()
+	if next == prevName {
+		return
+	}
+	reason := "latency optimization"
+	if h := s.health[prevKey]; prevKey == "" || h == nil || h.Status == HealthDown {
+		reason = "fail-over"
+	}
+	slog.Info("relay switched", "from", prevName, "to", next, "reason", reason)
+}
+
 func (s *Selector) publishRelayChangeLocked(prev string) {
 	next := s.activeNameLocked()
 	if prev == next || s.bus == nil {

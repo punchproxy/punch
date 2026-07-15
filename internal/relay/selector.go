@@ -20,7 +20,7 @@ const defaultCheckConcurrency = 10
 const defaultFullCheckInterval = 24 * time.Hour
 const defaultSelectedCheckInterval = 10 * time.Second
 const defaultFullTriggerFailures = 5
-const maxHealthRecords = 30
+const maxHealthRecords = 60
 
 var (
 	ErrRelaySelectionAutoGroup = errors.New("relay belongs to an auto relay group")
@@ -71,23 +71,24 @@ type HealthRecord struct {
 }
 
 type GroupStatus struct {
-	Name                     string       `json:"name"`
-	Type                     string       `json:"type"`
-	RelayCount               int          `json:"relay_count"`
-	Selected                 bool         `json:"selected"`
-	Select                   string       `json:"select"`
-	CurrentRelay             string       `json:"current_relay,omitempty"`
-	CurrentStatus            HealthStatus `json:"current_status,omitempty"`
-	CurrentLatency           int64        `json:"current_latency_ms,omitempty"`
-	CurrentTCPConnectLatency int64        `json:"current_tcp_connect_latency_ms,omitempty"`
-	RemoteAddress            string       `json:"remote_address,omitempty"`
-	CheckInterval            int64        `json:"check_interval,omitempty"`
-	LastCheckedAt            time.Time    `json:"last_checked_at,omitempty"`
-	NextCheckAt              time.Time    `json:"next_check_at,omitempty"`
-	LastRefreshedAt          time.Time    `json:"last_refreshed_at,omitempty"`
-	NextRefreshAt            time.Time    `json:"next_refresh_at,omitempty"`
-	RefreshInterval          int64        `json:"refresh_interval,omitempty"`
-	Error                    string       `json:"error,omitempty"`
+	Name                     string         `json:"name"`
+	Type                     string         `json:"type"`
+	RelayCount               int            `json:"relay_count"`
+	Selected                 bool           `json:"selected"`
+	Select                   string         `json:"select"`
+	CurrentRelay             string         `json:"current_relay,omitempty"`
+	CurrentStatus            HealthStatus   `json:"current_status,omitempty"`
+	CurrentLatency           int64          `json:"current_latency_ms,omitempty"`
+	CurrentTCPConnectLatency int64          `json:"current_tcp_connect_latency_ms,omitempty"`
+	History                  []HealthRecord `json:"history,omitempty"`
+	RemoteAddress            string         `json:"remote_address,omitempty"`
+	CheckInterval            int64          `json:"check_interval,omitempty"`
+	LastCheckedAt            time.Time      `json:"last_checked_at,omitempty"`
+	NextCheckAt              time.Time      `json:"next_check_at,omitempty"`
+	LastRefreshedAt          time.Time      `json:"last_refreshed_at,omitempty"`
+	NextRefreshAt            time.Time      `json:"next_refresh_at,omitempty"`
+	RefreshInterval          int64          `json:"refresh_interval,omitempty"`
+	Error                    string         `json:"error,omitempty"`
 }
 
 type group struct {

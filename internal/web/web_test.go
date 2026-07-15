@@ -28,7 +28,7 @@ func TestHandlerServesAssets(t *testing.T) {
 	srv := httptest.NewServer(Handler())
 	defer srv.Close()
 
-	for _, path := range []string{"/js/app.js", "/css/app.css", "/js/views/overview.js"} {
+	for _, path := range []string{"/assets/app.js", "/assets/app.css"} {
 		resp, err := http.Get(srv.URL + path)
 		if err != nil {
 			t.Fatalf("get %s: %v", path, err)

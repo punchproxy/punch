@@ -132,6 +132,17 @@ serve. If `api.secret` is set, the dashboard shows a token prompt on first load
 and stores the token in your browser's local storage; the static assets load
 unauthenticated, but every API call carries the token.
 
+The dashboard source is a React application in `internal/web/frontend`, built
+with Vite into the embedded `internal/web/static` directory. To work on it:
+
+```sh
+cd internal/web/frontend
+npm install
+npm run dev      # proxies /api to a local daemon on 127.0.0.1:28854
+npm test
+npm run build    # refreshes the assets embedded by go build
+```
+
 To reach the dashboard from another machine, bind the API to a non-loopback
 address and set a token first:
 

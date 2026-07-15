@@ -1,8 +1,10 @@
 package relay
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -10,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -195,6 +198,44 @@ func TestBenchmarkTargetReevaluatesGlobalAutoSelection(t *testing.T) {
 	health := selector.health[selector.healthKey("preferred", "preferred")]
 	if health.Status != HealthHealthy || health.TCPConnectLatency == 0 || health.URLTestLatency == 0 {
 		t.Fatalf("preferred health = %#v", health)
+	}
+}
+
+func TestReportAutoRelaySwitchReason(t *testing.T) {
+	cases := []struct {
+		name       string
+		prevStatus HealthStatus
+		wantReason string
+	}{
+		{name: "previous relay down is fail-over", prevStatus: HealthDown, wantReason: "fail-over"},
+		{name: "previous relay healthy is latency optimization", prevStatus: HealthHealthy, wantReason: "latency optimization"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			prevLogger := slog.Default()
+			slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+			t.Cleanup(func() { slog.SetDefault(prevLogger) })
+
+			s := &Selector{
+				health: make(map[string]*RelayHealth),
+				groups: []*group{
+					{name: "old", dialers: []Dialer{&testDialer{name: "old"}}},
+					{name: "new", dialers: []Dialer{&testDialer{name: "new"}}},
+				},
+			}
+			prevKey := s.healthKey("old", "old")
+			s.health[prevKey] = &RelayHealth{Name: "old / old", Group: "old", Status: tc.prevStatus}
+			prevName := s.activeNameLocked()
+
+			s.active.Store(1)
+			s.reportAutoRelaySwitchLocked(prevName, prevKey)
+
+			logged := buf.String()
+			if !strings.Contains(logged, "relay switched") || !strings.Contains(logged, tc.wantReason) {
+				t.Fatalf("switch log = %q, want relay switched with reason %q", logged, tc.wantReason)
+			}
+		})
 	}
 }
 

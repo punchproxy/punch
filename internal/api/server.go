@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -32,6 +33,13 @@ type Server struct {
 	startedAt  time.Time
 	version    string
 	shutdown   func()
+
+	throughputMu           sync.Mutex
+	throughputHistory      []throughputSample
+	throughputLastAt       time.Time
+	throughputLastUpload   int64
+	throughputLastDownload int64
+	statusSamplerCancel    context.CancelFunc
 }
 
 func NewServer(cfg config.API, st *config.Store, dns *pdns.Server, selector *relay.Selector, sessions *session.Manager) *Server {
@@ -62,6 +70,8 @@ func (s *Server) SetShutdownFunc(fn func()) {
 }
 
 func (s *Server) Start() error {
+	s.startStatusSampler()
+
 	r := chi.NewRouter()
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.RealIP)
@@ -189,6 +199,10 @@ func (s *Server) handleLogStream(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) Stop() error {
+	if s.statusSamplerCancel != nil {
+		s.statusSamplerCancel()
+		s.statusSamplerCancel = nil
+	}
 	if s.httpServer == nil {
 		return nil
 	}

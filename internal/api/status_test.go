@@ -52,4 +52,32 @@ func TestHandleStatus(t *testing.T) {
 	if got.Relay.DownloadBytes != 2048 || got.Relay.UploadBytes != 1024 {
 		t.Fatalf("traffic = down %d up %d, want down 2048 up 1024", got.Relay.DownloadBytes, got.Relay.UploadBytes)
 	}
+	if len(got.Relay.ThroughputHistory) != 1 {
+		t.Fatalf("throughput history length = %d, want 1", len(got.Relay.ThroughputHistory))
+	}
+	if got.Relay.ThroughputHistory[0].Time.IsZero() {
+		t.Fatal("throughput history timestamp is empty")
+	}
+}
+
+func TestThroughputHistoryKeepsLast120Seconds(t *testing.T) {
+	s := &Server{}
+	start := time.Date(2026, time.July, 11, 12, 0, 0, 0, time.UTC)
+
+	s.throughputMu.Lock()
+	s.recordThroughputLocked(start, 100, 200)
+	s.recordThroughputLocked(start.Add(2*time.Second), 300, 800)
+	s.recordThroughputLocked(start.Add(122*time.Second), 500, 1200)
+	history := append([]throughputSample(nil), s.throughputHistory...)
+	s.throughputMu.Unlock()
+
+	if len(history) != 2 {
+		t.Fatalf("history length = %d, want 2", len(history))
+	}
+	if !history[0].Time.Equal(start.Add(2 * time.Second)) {
+		t.Fatalf("oldest sample = %s, want %s", history[0].Time, start.Add(2*time.Second))
+	}
+	if history[0].UploadBPS != 100 || history[0].DownloadBPS != 300 {
+		t.Fatalf("rates = up %d down %d, want up 100 down 300", history[0].UploadBPS, history[0].DownloadBPS)
+	}
 }
