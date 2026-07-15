@@ -300,7 +300,7 @@ export function ConnectivityBars({ data = {}, formatValue }) {
       // Down slots render as full-height red bars so outages stand out.
       const barHeight = (item) => {
         if (!item) return 2;
-        if (connectivityDown(item, metric.key)) return 28;
+        if (item.status === "down") return 28;
         return y(Number(item[metric.key]) || 0);
       };
       svg.append("g").selectAll("rect").data(slots).join("rect")
@@ -318,14 +318,12 @@ export function ConnectivityBars({ data = {}, formatValue }) {
   return <ChartShell refs={refs} className="connectivity-bars" label="TCP connect and round-trip latency history"/>;
 }
 
-function connectivityDown(item, metric) {
-  return (Number(item[metric]) || 0) <= 0 || item.status === "down";
-}
-
 function connectivityColor(item, metric) {
   if (!item) return css("--hover");
-  if (connectivityDown(item, metric)) return css("--red");
-  if (item.status === "degraded" || (Number(item[metric]) || 0) > 500) return css("--amber");
+  if (item.status === "down") return css("--red");
+  const value = Number(item[metric]) || 0;
+  if (value <= 0) return css("--hover"); // metric not measured (e.g. TCP probe skipped for UDP relays)
+  if (item.status === "degraded" || value > 500) return css("--amber");
   return css("--green");
 }
 

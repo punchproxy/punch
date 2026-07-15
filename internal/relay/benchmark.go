@@ -458,9 +458,12 @@ func checkURLAddress(target *url.URL) (string, error) {
 }
 
 func tcpConnectLatencyWithDialer(ctx context.Context, dialContext DialContextFunc, address string) (time.Duration, error) {
+	address, err := resolveProbeAddr(ctx, address)
+	if err != nil {
+		return 0, err
+	}
 	start := time.Now()
 	var conn net.Conn
-	var err error
 	if dialContext != nil {
 		conn, err = dialContext(ctx, "tcp", address)
 	} else {

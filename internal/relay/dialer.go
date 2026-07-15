@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/netip"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -40,6 +41,9 @@ func (d *RelayDialer) Addr() string     { return d.adapter.Addr() }
 func (d *RelayDialer) SupportUDP() bool { return d.adapter.SupportUDP() }
 
 func (d *RelayDialer) TCPConnectLatency(ctx context.Context) (time.Duration, error) {
+	if isUDPTransport(d.Type()) {
+		return 0, nil
+	}
 	return tcpConnectLatency(ctx, d.adapter.Addr())
 }
 
@@ -138,6 +142,9 @@ func (d *LazyRelayDialer) SupportUDP() bool {
 }
 
 func (d *LazyRelayDialer) TCPConnectLatency(ctx context.Context) (time.Duration, error) {
+	if isUDPTransport(d.relayType) {
+		return 0, nil
+	}
 	addr, err := d.resolvedRelayAddr(ctx)
 	if err != nil {
 		return 0, err
@@ -237,9 +244,25 @@ func (d *LazyRelayDialer) getDialer(ctx context.Context, allowResolve bool) (Dia
 	return d.resolved, nil
 }
 
+// isUDPTransport reports whether the relay protocol tunnels over UDP; such
+// servers may not listen on TCP at all, so the TCP connect probe is skipped
+// and health relies on the URL test alone. Accepts both mihomo adapter type
+// names ("Hysteria2") and config mapping types ("hysteria2").
+func isUDPTransport(relayType string) bool {
+	switch strings.ToLower(relayType) {
+	case "hysteria", "hysteria2", "tuic", "wireguard":
+		return true
+	}
+	return false
+}
+
 func tcpConnectLatency(ctx context.Context, address string) (time.Duration, error) {
 	if address == "" {
 		return 0, nil
+	}
+	address, err := resolveProbeAddr(ctx, address)
+	if err != nil {
+		return 0, err
 	}
 	start := time.Now()
 	conn, err := (&net.Dialer{}).DialContext(ctx, "tcp", address)
@@ -248,6 +271,34 @@ func tcpConnectLatency(ctx context.Context, address string) (time.Duration, erro
 	}
 	_ = conn.Close()
 	return time.Since(start), nil
+}
+
+// resolveProbeAddr resolves a host:port to IP:port before the probe stopwatch
+// starts, so DNS resolution time never counts toward TCP connect latency.
+// IPv4 is preferred to match the relay dialers' default ip-version.
+func resolveProbeAddr(ctx context.Context, address string) (string, error) {
+	host, port, err := net.SplitHostPort(address)
+	if err != nil {
+		return "", err
+	}
+	if net.ParseIP(host) != nil {
+		return address, nil
+	}
+	addrs, err := net.DefaultResolver.LookupNetIP(ctx, "ip", host)
+	if err != nil {
+		return "", err
+	}
+	if len(addrs) == 0 {
+		return "", fmt.Errorf("resolve %q: no addresses returned", host)
+	}
+	pick := addrs[0]
+	for _, addr := range addrs {
+		if addr.Is4() || addr.Is4In6() {
+			pick = addr
+			break
+		}
+	}
+	return net.JoinHostPort(pick.Unmap().String(), port), nil
 }
 
 func NewDialerFromMapping(mapping map[string]any) (Dialer, error) {
