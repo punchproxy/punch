@@ -57,6 +57,11 @@ func (s *Selector) CheckSelectedConnectivity() {
 // is currently active. It always writes the result to outsideHealth, even if
 // the active relay changes mid-flight. It also folds the result into the
 // active relay's per-relay health so that the active row stays fresh.
+//
+// A failed check never switches relays by itself: the selection holds until
+// the consecutive-failure threshold triggers a full benchmark (see
+// triggerFullBenchmarkAfterSelectedCheck), which re-tests every relay and
+// fails over to the best one.
 func (s *Selector) CheckOutsideConnectivity() (benchmarkTarget, bool, bool) {
 	target, ok := s.selectedBenchmarkTarget()
 	if !ok {
@@ -72,7 +77,9 @@ func (s *Selector) CheckOutsideConnectivity() (benchmarkTarget, bool, bool) {
 	s.finishRelayCheck(target, result)
 	s.applyOutsideConnectivityCheckResult(target, result)
 
-	s.reevaluateAutoSelections()
+	if result.err == nil {
+		s.reevaluateAutoSelections()
+	}
 
 	s.publishRelayChange(prevActive)
 	s.bus.Publish(eventbus.Event{Type: eventbus.EventRelayHealth, Data: s.HealthList()})

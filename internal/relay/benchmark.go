@@ -95,6 +95,9 @@ func (s *Selector) BenchmarkTarget(name string) error {
 	return s.benchmarkTargets(targets)
 }
 
+// triggerFullBenchmarkAfterSelectedCheck is the fail-over path: once the
+// selected relay accumulates enough consecutive check failures, a full relay
+// benchmark re-tests every relay and reevaluation switches to the best one.
 func (s *Selector) triggerFullBenchmarkAfterSelectedCheck(target benchmarkTarget, failed bool, internetDown bool) {
 	if failed && internetDown {
 		slog.Debug("selected relay check failed while internet check is down; skipping failure count", "group", target.group.name, "relay", target.dialer.Name())
@@ -104,7 +107,7 @@ func (s *Selector) triggerFullBenchmarkAfterSelectedCheck(target benchmarkTarget
 	if !trigger {
 		return
 	}
-	slog.Warn("selected relay failed repeatedly; running full relay benchmark", "group", target.group.name, "relay", target.dialer.Name(), "failures", failures)
+	slog.Warn("selected relay failed repeatedly; running full relay benchmark to fail over", "group", target.group.name, "relay", target.dialer.Name(), "failures", failures)
 	s.Benchmark()
 }
 

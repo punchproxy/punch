@@ -806,12 +806,21 @@ func TestSelectedCheckFailuresTriggerFullBenchmark(t *testing.T) {
 	}
 	g := &group{name: "main", mode: "auto", dialers: []Dialer{bad, good}}
 	selector.groups = []*group{g}
-	for _, d := range g.dialers {
-		selector.health[selector.healthKey(g.name, d.Name())] = &RelayHealth{
-			Name:   selector.displayName(g.name, d.Name()),
-			Group:  g.name,
-			Status: HealthPending,
-		}
+	selector.health[selector.healthKey(g.name, bad.Name())] = &RelayHealth{
+		Name:           selector.displayName(g.name, bad.Name()),
+		Group:          g.name,
+		Status:         HealthHealthy,
+		Latency:        20,
+		URLTestLatency: 20,
+	}
+	// The alternate relay has a known-good cached latency: a single selected
+	// check failure must still hold position rather than fail over to it.
+	selector.health[selector.healthKey(g.name, good.Name())] = &RelayHealth{
+		Name:           selector.displayName(g.name, good.Name()),
+		Group:          g.name,
+		Status:         HealthHealthy,
+		Latency:        30,
+		URLTestLatency: 30,
 	}
 
 	selector.CheckSelectedConnectivity()
