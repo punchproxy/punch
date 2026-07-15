@@ -103,8 +103,15 @@ function ChartShell({ refs, className, label }) {
   </div>;
 }
 
-export function Sparkline({ values = [], color = css("--orange"), width = 120, height = 32, fill = true, formatValue = (value) => `${value} ms`, label = "Latency history" }) {
-  const clean = values.map(Number).filter(Number.isFinite);
+export function Sparkline({ values = [], times = [], color = css("--orange"), width = 120, height = 32, fill = true, max = 0, formatValue = (value) => `${value} ms`, label = "Latency history" }) {
+  // Pair values with their optional timestamps before filtering so they stay aligned.
+  // With a fixed max scale, non-positive values mark failed checks and pin to the top.
+  const points = values.map((value, index) => {
+    const num = Number(value);
+    const failed = max > 0 && !(num > 0);
+    return { value: failed ? max : num, time: times[index], failed };
+  }).filter((point) => Number.isFinite(point.value));
+  const clean = points.map((point) => point.value);
   const refs = useChart((svg, availableWidth, tooltip, container) => {
     const w = Math.min(width, availableWidth), h = height;
     svg.selectAll("*").remove();
@@ -112,8 +119,13 @@ export function Sparkline({ values = [], color = css("--orange"), width = 120, h
     svg.append("title").text(label);
     if (clean.length < 2) return;
     const x = d3.scaleLinear().domain([0, clean.length - 1]).range([2, w - 2]);
-    const extent = d3.extent(clean), padding = Math.max(1, (extent[1] - extent[0]) * .12);
-    const y = d3.scaleLinear().domain([Math.max(0, extent[0] - padding), extent[1] + padding]).range([h - 3, 3]);
+    let y;
+    if (max > 0) {
+      y = d3.scaleLinear().domain([0, max]).range([h - 3, 3]).clamp(true);
+    } else {
+      const extent = d3.extent(clean), padding = Math.max(1, (extent[1] - extent[0]) * .12);
+      y = d3.scaleLinear().domain([Math.max(0, extent[0] - padding), extent[1] + padding]).range([h - 3, 3]);
+    }
     const line = d3.line().x((_, index) => x(index)).y(y).curve(d3.curveMonotoneX);
     if (fill) {
       svg.append("path").datum(clean).attr("class", "spark-area").attr("d", d3.area().x((_, index) => x(index)).y0(h).y1(y).curve(d3.curveMonotoneX)).attr("fill", color).attr("opacity", .12);
@@ -125,7 +137,10 @@ export function Sparkline({ values = [], color = css("--orange"), width = 120, h
       const box = overlay.node().getBoundingClientRect();
       const index = Math.max(0, Math.min(clean.length - 1, Math.round(x.invert((clientX - box.left) * (w / box.width)))));
       marker.attr("cx", x(index)).attr("cy", y(clean[index])).attr("visibility", "visible");
-      showTooltipAtPointer(tooltip, clientX, clientY, label, [formatValue(clean[index])]);
+      const lines = [points[index].failed ? "failed" : formatValue(clean[index])];
+      const time = points[index].time ? new Date(points[index].time) : null;
+      if (time && !Number.isNaN(time.getTime())) lines.push(d3.timeFormat("%H:%M:%S")(time));
+      showTooltipAtPointer(tooltip, clientX, clientY, label, lines);
     };
     overlay.on("pointermove", (event) => showAt(event.clientX, event.clientY))
       .on("pointerleave", () => { marker.attr("visibility", "hidden"); hideTooltip(tooltip); });
@@ -134,7 +149,7 @@ export function Sparkline({ values = [], color = css("--orange"), width = 120, h
       const box = overlay.node().getBoundingClientRect();
       if (pointer.x >= box.left && pointer.x <= box.right && pointer.y >= box.top && pointer.y <= box.bottom) showAt(pointer.x, pointer.y);
     }
-  }, [clean.join(","), color, width, height, fill, formatValue, label]);
+  }, [points.map((point) => `${point.value}:${point.failed ? "!" : ""}:${point.time || ""}`).join(","), color, width, height, fill, max, formatValue, label]);
   return <ChartShell refs={refs} className="sparkline" label={label}/>;
 }
 
@@ -264,21 +279,6 @@ export function BarList({ items, formatValue, label = "Ranked values" }) {
     bindTooltip(bars, tooltip, container, (item) => [item.label, [formatValue(item.value), item.detail].filter(Boolean)]);
   }, [key, formatValue, label, height]);
   return <ChartShell refs={refs} className="bar-list" label={label}/>;
-}
-
-export function BulletBar({ value, max, color, formatValue, label }) {
-  const refs = useChart((svg, width, tooltip, container) => {
-    const height = 16, safeMax = Math.max(1, Number(max) || 0), safeValue = Math.max(0, Number(value) || 0);
-    const x = d3.scaleLinear().domain([0, safeMax]).range([0, width]);
-    svg.selectAll("*").remove();
-    svg.attr("viewBox", `0 0 ${width} ${height}`).attr("width", width).attr("height", height);
-    svg.append("title").text(`${label}: ${formatValue(value)}`);
-    svg.append("rect").attr("x", 0).attr("y", 4).attr("width", width).attr("height", 8).attr("rx", 4).attr("fill", css("--hover"));
-    svg.append("rect").attr("x", 0).attr("y", 4).attr("width", x(safeValue)).attr("height", 8).attr("rx", 4).attr("fill", color);
-    const overlay = svg.append("rect").attr("width", width).attr("height", height).attr("fill", "transparent");
-    bindTooltip(overlay, tooltip, container, () => [label, [formatValue(value)]], false);
-  }, [value, max, color, formatValue, label]);
-  return <ChartShell refs={refs} className="bullet-bar" label={`${label}: ${formatValue(value)}`}/>;
 }
 
 export function ConnectivityBars({ data = {}, formatValue }) {

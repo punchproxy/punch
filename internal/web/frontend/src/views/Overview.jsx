@@ -45,12 +45,13 @@ function Decision({ label, stat, color, total }) {
 
 function GroupRow({ group }) {
   const color = statusColors[statusColor(group.current_status)];
-  const history = (group.history || []).map((record) => record.latency_ms || 0);
+  const records = group.history || [];
+  const history = records.map((record) => record.latency_ms || 0);
   return <div className="group-row">
     <div className="spread"><span className="flex"><strong>{group.name}</strong>{group.selected && <Pill color="orange">active</Pill>}</span><span className="mono muted">{fmtLatency(group.current_latency_ms)}</span></div>
     <div className="spread group-row-sub">
       <span className="mono">{shortName(group.current_relay, group.name) || "—"}{group.current_status ? ` · ${group.current_status}` : ""}</span>
-      {history.some((value) => value > 0) ? <Sparkline values={history} color={color} width={110} height={22} fill={false} formatValue={fmtLatency} label={`${group.name} latency history`}/> : <span className="faint">—</span>}
+      {history.some((value) => value > 0) ? <Sparkline values={history} times={records.map((record) => record.time)} max={1000} color={color} width={110} height={22} fill={false} formatValue={fmtLatency} label={`${group.name} latency history`}/> : <span className="faint">—</span>}
     </div>
   </div>;
 }

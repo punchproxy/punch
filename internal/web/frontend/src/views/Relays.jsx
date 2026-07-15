@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useState } from "react";
 import { api } from "../api.js";
-import { BulletBar, Sparkline } from "../charts.jsx";
+import { Sparkline } from "../charts.jsx";
 import { Card, Empty, ErrorState, Pill, Tag, usePolling, useToast } from "../components.jsx";
 import { fmtLatency, shortName, statusColor, timeAgo } from "../utils.js";
 
@@ -25,7 +25,6 @@ export default function Relays() {
   };
 
   const shown = useMemo(() => relays.filter((relay) => !search.trim() || `${relay.name || ""} ${relay.group || ""} ${relay.addr || ""}`.toLowerCase().includes(search.trim().toLowerCase())).sort((a, b) => compareRelays(a, b, sort)), [relays, search, sort]);
-  const maxLatency = Math.max(100, ...relays.map((relay) => relay.url_test_latency_ms || relay.latency_ms || 0));
   if (error && !groups.length && !relays.length) return <ErrorState error={error}/>;
   return <>
     <div className="toolbar">
@@ -38,8 +37,8 @@ export default function Relays() {
     <div className="section-title">Groups</div>
     <div className="grid cols-3">{groups.length ? groups.map((group) => <GroupCard key={group.name} group={group} busy={busy} act={act}/>) : <Empty>No relay groups configured.</Empty>}</div>
     <div className="section-title">Relays <span>({shown.length})</span></div>
-    <Card><div className="table-wrap"><table className="data responsive-table relays-table"><thead><tr><th>Relay</th><th>Group</th><th>Type</th><th>Status</th><th>Latency</th><th>Trend</th><th>Checked</th><th>Actions</th></tr></thead><tbody>
-      {shown.map((relay) => <RelayRow key={`${relay.group}-${relay.name}`} relay={relay} maxLatency={maxLatency} busy={busy} act={act}/>)}
+    <Card><div className="table-wrap"><table className="data responsive-table relays-table"><thead><tr><th>Relay</th><th>Group</th><th>Type</th><th>Status</th><th>TCP connect</th><th>Roundtrip</th><th>Checked</th><th>Actions</th></tr></thead><tbody>
+      {shown.map((relay) => <RelayRow key={`${relay.group}-${relay.name}`} relay={relay} busy={busy} act={act}/>)}
       {!shown.length && <tr className="empty-row"><td colSpan="8"><Empty>No relays.</Empty></td></tr>}
     </tbody></table></div></Card>
   </>;
@@ -62,14 +61,21 @@ function GroupCard({ group, busy, act }) {
   </div></Card>;
 }
 
-function RelayRow({ relay, maxLatency, busy, act }) {
+function LatencyCell({ history, metric, current, label }) {
+  return <div className="latency-cell">
+    {history?.length > 1 ? <Sparkline values={history.map((item) => item[metric] || 0)} times={history.map((item) => item.time)} max={1000} color="var(--text-faint)" width={90} height={24} fill={false} formatValue={fmtLatency} label={label}/> : <span className="faint">—</span>}
+    <span className="mono muted nowrap">{fmtLatency(current)}</span>
+  </div>;
+}
+
+function RelayRow({ relay, busy, act }) {
   const latency = relay.url_test_latency_ms || relay.latency_ms || 0, color = statusColor(relay.status), name = shortName(relay.name, relay.group);
   const selectKey = `sel-${relay.name}`, checkKey = `check-${relay.name}`;
   return <tr className={relay.selected ? "selected-row" : ""}>
     <td data-label="Relay"><div className="flex"><span className="mono">{name}</span>{relay.selected && <Pill color="orange">active</Pill>}</div><small className="mono faint block">{relay.addr}</small></td>
     <td data-label="Group" className="muted">{relay.group}</td><td data-label="Type"><Tag>{relay.type || "?"}</Tag></td><td data-label="Status"><Pill color={color}>{relay.status || "unknown"}</Pill></td>
-    <td data-label="Latency"><div className="latency-cell"><BulletBar value={latency} max={maxLatency} color={{green:"var(--green)",amber:"var(--amber)",red:"var(--red)",blue:"var(--blue)",gray:"var(--text-faint)"}[color]} formatValue={fmtLatency} label={`${name} latency`}/><span className="mono muted">{fmtLatency(latency)}</span></div></td>
-    <td data-label="Trend" className="trend-cell">{relay.history?.length > 1 ? <Sparkline values={relay.history.map((item) => item.latency_ms || 0)} color="var(--text-faint)" width={90} height={24} fill={false}/> : <span className="faint">—</span>}</td>
+    <td data-label="TCP connect"><LatencyCell history={relay.history} metric="tcp_connect_latency_ms" current={relay.tcp_connect_latency_ms} label={`${name} TCP connect latency history`}/></td>
+    <td data-label="Roundtrip"><LatencyCell history={relay.history} metric="latency_ms" current={latency} label={`${name} roundtrip latency history`}/></td>
     <td data-label="Checked" className="faint nowrap">{timeAgo(relay.last_checked_at)}</td>
     <td data-label="Actions"><div className="row-actions">{!relay.selected && <button className="btn btn-sm" disabled={busy.has(selectKey)} onClick={() => act(selectKey, () => api.post(`/relays/${encodeURIComponent(name)}/select?group=${encodeURIComponent(relay.group)}`), `Selected ${name}`)}>Select</button>}<button className="btn btn-sm btn-ghost" disabled={busy.has(checkKey)} onClick={() => act(checkKey, () => api.post(`/relays/${encodeURIComponent(name)}/check?group=${encodeURIComponent(relay.group)}`), `Checking ${name}`)}>Check</button></div></td>
   </tr>;

@@ -180,9 +180,9 @@ tr.selected-row td:first-child { box-shadow: inset 3px 0 var(--orange); }
 .row-actions { display: flex; justify-content: flex-end; gap: 5px; }
 .source-cell, .result-cell { max-width: 340px; overflow: hidden; text-overflow: ellipsis; }
 .config-key { width: 40%; }
-.latency-cell { min-width: 170px; display: flex; align-items: center; gap: 9px; }
-.latency-cell .bullet-bar { flex: 1; min-width: 60px; }
-.trend-cell { width: 110px; }
+.latency-cell { min-width: 130px; display: flex; align-items: center; gap: 9px; }
+.latency-cell .sparkline { flex: none; width: 90px; }
+.latency-cell .mono { min-width: 44px; text-align: right; }
 
 .d3-chart { position: relative; min-width: 0; width: 100%; }
 .d3-chart > svg { display: block; width: 100%; overflow: visible; }
@@ -257,8 +257,7 @@ tr.selected-row td:first-child { box-shadow: inset 3px 0 var(--orange); }
   .responsive-table td::before { content: attr(data-label); color: var(--text-faint); font: 700 10.5px var(--font); letter-spacing: .045em; text-align: left; text-transform: uppercase; }
   .responsive-table .empty-row { padding: 0; }.responsive-table .empty-row td { display: block; }.responsive-table .empty-row td::before { display: none; }
   .responsive-table .row-actions, .responsive-table .flex { justify-content: flex-end; }
-  .responsive-table .latency-cell { min-width: 0; justify-content: flex-end; }.responsive-table .latency-cell .bullet-bar { max-width: 120px; }
-  .responsive-table .trend-cell .sparkline { width: 100px; margin-left: auto; }
+  .responsive-table .latency-cell { min-width: 0; justify-content: flex-end; }
   .source-cell, .result-cell, .config-key { width: auto; max-width: none; }
   .stats-row, .talkers { margin-bottom: 16px; }
   .toast-stack { right: 12px; bottom: calc(76px + env(safe-area-inset-bottom)); }
