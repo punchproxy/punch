@@ -290,8 +290,8 @@ export function ConnectivityBars({ data = {}, formatValue }) {
       { key: "latency_ms", label: "RTT", current: data.latency_ms },
     ];
     const labelWidth = 48, plotStart = labelWidth + 7, plotWidth = Math.max(80, width - plotStart - 2), rowHeight = 42;
-    const maxLatency = Math.max(500, ...history.flatMap((item) => metrics.map((metric) => Number(item[metric.key]) || 0)));
-    const y = d3.scaleLinear().domain([0, maxLatency]).range([2, 28]);
+    // Fixed scale: full bar height represents 1s, longer latencies clamp to full height.
+    const y = d3.scaleLinear().domain([0, 1000]).range([2, 28]).clamp(true);
     const slots = Array.from({ length: slotCount }, (_, index) => history[index - (slotCount - history.length)] || null);
     const x = d3.scaleBand().domain(d3.range(slotCount)).range([plotStart, plotStart + plotWidth]).padding(.18);
     svg.selectAll("*").remove();
@@ -301,10 +301,16 @@ export function ConnectivityBars({ data = {}, formatValue }) {
       const top = 7 + metricIndex * rowHeight;
       svg.append("text").attr("class", "connectivity-label").attr("x", 0).attr("y", top + 13).text(metric.label);
       svg.append("text").attr("class", "connectivity-value").attr("x", 0).attr("y", top + 27).text(formatValue(metric.current));
+      // Down slots render as full-height red bars so outages stand out.
+      const barHeight = (item) => {
+        if (!item) return 2;
+        if (connectivityDown(item, metric.key)) return 28;
+        return y(Number(item[metric.key]) || 0);
+      };
       svg.append("g").selectAll("rect").data(slots).join("rect")
         .attr("x", (_, index) => x(index)).attr("width", x.bandwidth())
-        .attr("y", (item) => top + 30 - y(Number(item?.[metric.key]) || 0))
-        .attr("height", (item) => item ? y(Number(item[metric.key]) || 0) : 2)
+        .attr("y", (item) => top + 30 - barHeight(item))
+        .attr("height", barHeight)
         .attr("rx", 1).attr("fill", (item) => connectivityColor(item, metric.key));
       // Full-height invisible hit targets: the visible bars are only a few pixels tall.
       const hits = svg.append("g").selectAll("rect").data(slots).join("rect")
@@ -316,11 +322,14 @@ export function ConnectivityBars({ data = {}, formatValue }) {
   return <ChartShell refs={refs} className="connectivity-bars" label="TCP connect and round-trip latency history"/>;
 }
 
+function connectivityDown(item, metric) {
+  return (Number(item[metric]) || 0) <= 0 || item.status === "down";
+}
+
 function connectivityColor(item, metric) {
   if (!item) return css("--hover");
-  const latency = Number(item[metric]) || 0;
-  if (latency <= 0 || item.status === "down") return css("--red");
-  if (item.status === "degraded" || latency > 500) return css("--amber");
+  if (connectivityDown(item, metric)) return css("--red");
+  if (item.status === "degraded" || (Number(item[metric]) || 0) > 500) return css("--amber");
   return css("--green");
 }
 
