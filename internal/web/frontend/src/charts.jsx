@@ -116,7 +116,6 @@ export function Sparkline({ values = [], times = [], color = css("--orange"), wi
     const w = Math.min(width, availableWidth), h = height;
     svg.selectAll("*").remove();
     svg.attr("viewBox", `0 0 ${w} ${h}`).attr("width", w).attr("height", h);
-    svg.append("title").text(label);
     if (clean.length < 2) return;
     const x = d3.scaleLinear().domain([0, clean.length - 1]).range([2, w - 2]);
     let y;
@@ -159,7 +158,6 @@ export function Donut({ segments, label, sub, size = 132, thickness = 18 }) {
     const chartSize = Math.min(size, availableWidth), radius = chartSize / 2, total = d3.sum(segments, (segment) => Math.max(0, Number(segment.value) || 0));
     svg.selectAll("*").remove();
     svg.attr("viewBox", `0 0 ${chartSize} ${chartSize}`).attr("width", chartSize).attr("height", chartSize);
-    svg.append("title").text(`${label} ${sub}`);
     const root = svg.append("g").attr("transform", `translate(${radius},${radius})`);
     root.append("circle").attr("r", radius - thickness / 2).attr("fill", "none").attr("stroke", css("--hover")).attr("stroke-width", thickness);
     if (total > 0) {
@@ -185,7 +183,6 @@ export function Gauge({ value, max = 100, label, sub, color = css("--orange"), s
     const arc = d3.arc().innerRadius(geometry.radius - 12).outerRadius(geometry.radius).startAngle(-Math.PI / 2);
     svg.selectAll("*").remove();
     svg.attr("viewBox", `0 0 ${geometry.width} ${geometry.height + 24}`).attr("width", geometry.width).attr("height", geometry.height + 24);
-    svg.append("title").text(`${label} ${sub}`);
     const root = svg.append("g").attr("transform", `translate(${geometry.centerX},${geometry.centerY})`);
     root.append("path").attr("d", arc({ endAngle: Math.PI / 2 })).attr("fill", css("--hover"));
     const valuePath = root.append("path").attr("d", arc({ endAngle: -Math.PI / 2 + Math.PI * geometry.fraction })).attr("fill", color);
@@ -205,7 +202,6 @@ export function AreaChart({ series, formatY, height = 210, windowSeconds = 120 }
     const all = series.flatMap((item) => item.values).map((point) => ({ ...point, date: new Date(point.time), value: Math.max(0, Number(point.value) || 0) })).filter((point) => !Number.isNaN(point.date.getTime()));
     svg.selectAll("*").remove();
     svg.attr("viewBox", `0 0 ${width} ${chartHeight}`).attr("width", width).attr("height", chartHeight);
-    svg.append("title").text("Upload and download throughput over the last 120 seconds");
     if (!all.length) return;
     const latest = d3.max(all, (point) => point.date), earliest = new Date(latest.getTime() - windowSeconds * 1000);
     const x = d3.scaleTime().domain([earliest, latest]).range([0, innerWidth]);
@@ -269,7 +265,6 @@ export function BarList({ items, formatValue, label = "Ranked values" }) {
     const x = d3.scaleLinear().domain([0, Math.max(1, d3.max(items, (item) => Number(item.value) || 0))]).range([0, barWidth]);
     svg.selectAll("*").remove();
     svg.attr("viewBox", `0 0 ${width} ${height}`).attr("width", width).attr("height", height);
-    svg.append("title").text(label);
     const rows = svg.selectAll("g.bar-item").data(items).join("g").attr("class", "bar-item").attr("transform", (_, index) => `translate(0,${index * 32})`);
     const labelChars = Math.max(8, Math.floor(labelWidth / 7));
     rows.append("text").attr("class", "bar-label").attr("x", 0).attr("y", 20).text((item) => truncate(item.label, labelChars));
@@ -298,7 +293,6 @@ export function ConnectivityBars({ data = {}, formatValue }) {
     const x = d3.scaleBand().domain(d3.range(slotCount)).range([plotStart, plotStart + plotWidth]).padding(.18);
     svg.selectAll("*").remove();
     svg.attr("viewBox", `0 0 ${width} ${height}`).attr("width", width).attr("height", height);
-    svg.append("title").text("Connectivity latency history: TCP connect and round trip");
     metrics.forEach((metric, metricIndex) => {
       const top = 7 + metricIndex * rowHeight;
       svg.append("text").attr("class", "connectivity-label").attr("x", 0).attr("y", top + 13).text(metric.label);
