@@ -227,7 +227,7 @@ punchctl config get dns.custom_port
 punchctl config set api.secret "change-me"
 punchctl config set check.full_interval 86400
 punchctl config set check.full_trigger_failures 5
-punchctl config set check.outside_url http://www.gstatic.com/generate_204
+punchctl config set check.outside_url https://www.gstatic.com/generate_204
 punchctl config set check.domestic_url http://connect.rom.miui.com/generate_204
 punchctl config set check.interval 10
 ```
@@ -248,7 +248,7 @@ Defaults worth knowing:
 | TUN interface           | auto-selected `utunN` on macOS, `punch0` elsewhere |
 | DoH upstreams           | `doh.pub`, `dns.alidns.com`                       |
 | Fake IP pool            | `198.18.0.0/15`, `fdfe:dcba:9876::/64`            |
-| Outside check URL       | `http://www.gstatic.com/generate_204`             |
+| Outside check URL       | `https://www.gstatic.com/generate_204`            |
 | Domestic check URL      | `http://connect.rom.miui.com/generate_204`        |
 | Internet/selected check | every 10 seconds                                  |
 | Full relay check        | every 86400 seconds                               |

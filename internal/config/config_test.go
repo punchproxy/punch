@@ -34,7 +34,7 @@ func TestLoadSeedsDefaultConfigTables(t *testing.T) {
 	if cfg.Check.FullTriggerFailures != 5 {
 		t.Fatalf("check full trigger failures = %d, want 5", cfg.Check.FullTriggerFailures)
 	}
-	if cfg.Check.OutsideURL != "http://www.gstatic.com/generate_204" {
+	if cfg.Check.OutsideURL != "https://www.gstatic.com/generate_204" {
 		t.Fatalf("check outside url = %q, want default outside url", cfg.Check.OutsideURL)
 	}
 	if cfg.Check.DomesticURL != "http://connect.rom.miui.com/generate_204" {

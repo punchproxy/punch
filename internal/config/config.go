@@ -978,7 +978,7 @@ func Default() *Config {
 			Select: "auto",
 		},
 		Check: Check{
-			OutsideURL:          "http://www.gstatic.com/generate_204",
+			OutsideURL:          "https://www.gstatic.com/generate_204",
 			DomesticURL:         "http://connect.rom.miui.com/generate_204",
 			FullInterval:        86400,
 			Interval:            10,
@@ -1030,7 +1030,7 @@ func applyDefaults(cfg *Config) {
 		cfg.Relay.Select = "auto"
 	}
 	if cfg.Check.OutsideURL == "" {
-		cfg.Check.OutsideURL = "http://www.gstatic.com/generate_204"
+		cfg.Check.OutsideURL = "https://www.gstatic.com/generate_204"
 	}
 	if cfg.Check.DomesticURL == "" {
 		cfg.Check.DomesticURL = "http://connect.rom.miui.com/generate_204"
