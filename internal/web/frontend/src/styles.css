@@ -129,6 +129,13 @@ input:focus, select:focus, textarea:focus, button:focus-visible, a:focus-visible
 .cols-3 { grid-template-columns: repeat(3, minmax(0,1fr)); }
 .cols-4 { grid-template-columns: repeat(4, minmax(0,1fr)); }
 .overview-primary { display: grid; grid-template-columns: minmax(0,2fr) minmax(300px,1fr); gap: 16px; }
+/* Let the throughput chart absorb the extra height when the grid stretches this card. */
+.throughput-card { display: flex; flex-direction: column; }
+.throughput-card .card-body { flex: 1; display: flex; flex-direction: column; }
+/* Absolute svg keeps the container's height flex-driven, not content-driven,
+   so the chart can shrink back when the layout stops stretching the card. */
+.throughput-card .area-chart { flex: 1; min-height: 240px; }
+.throughput-card .area-chart > svg { position: absolute; inset: 0; height: 100%; }
 .card { min-width: 0; background: var(--card-bg); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); overflow: hidden; }
 .card.selected-card { border-color: var(--orange); }
 .card-head { min-height: 49px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 13px 18px; border-bottom: 1px solid var(--border); }

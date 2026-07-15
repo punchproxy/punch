@@ -27,7 +27,7 @@ export default function Overview() {
       <StatTile label="DNS queries" value={fmtNum(dns.total_queries)} detail={`${hitRatio}% cache hits`}/>
     </div>
     <div className="overview-primary mt">
-      <Card><CardHeader title="Throughput"/><div className="card-body"><AreaChart series={throughputSeries} formatY={fmtBytes} height={240}/><div className="legend"><span><i style={{background: colors.down}}/>Download<span className="mono muted">{fmtRate(relay.download_bps)}</span></span><span><i style={{background: colors.up}}/>Upload<span className="mono muted">{fmtRate(relay.upload_bps)}</span></span></div></div></Card>
+      <Card className="throughput-card"><CardHeader title="Throughput"/><div className="card-body"><AreaChart series={throughputSeries} formatY={fmtBytes} height={240}/><div className="legend"><span><i style={{background: colors.down}}/>Download<span className="mono muted">{fmtRate(relay.download_bps)}</span></span><span><i style={{background: colors.up}}/>Upload<span className="mono muted">{fmtRate(relay.upload_bps)}</span></span></div></div></Card>
       <Card><CardHeader title="DNS decisions"/><div className="card-body dns-decision-wrap"><Donut segments={[{label:"Relay",value:dns.relay?.requests||0,color:colors.relay},{label:"Direct",value:dns.direct?.requests||0,color:colors.direct},{label:"Reject",value:dns.reject?.requests||0,color:colors.reject}]} label={fmtNum(total)} sub="routed"/><div className="decision-legend"><Decision label="Relay" stat={dns.relay} color={colors.relay} total={total}/><Decision label="Direct" stat={dns.direct} color={colors.direct} total={total}/><Decision label="Reject" stat={dns.reject} color={colors.reject} total={total}/></div></div></Card>
     </div>
     <div className="grid cols-3 mt">

@@ -184,10 +184,12 @@ export function Gauge({ value, max = 100, label, sub, color = css("--orange"), s
 export function AreaChart({ series, formatY, height = 210, windowSeconds = 120 }) {
   const seriesKey = series.map((item) => `${item.label}:${item.values.map((point) => `${point.time}:${point.value}`).join(",")}`).join("|");
   const refs = useChart((svg, width, tooltip, container) => {
-    const margin = { top: 18, right: 10, bottom: 29, left: 54 }, innerWidth = Math.max(1, width - margin.left - margin.right), innerHeight = height - margin.top - margin.bottom;
+    // The container may be flex-stretched taller than the base height; fill it.
+    const chartHeight = Math.max(height, container.clientHeight || 0);
+    const margin = { top: 18, right: 10, bottom: 29, left: 54 }, innerWidth = Math.max(1, width - margin.left - margin.right), innerHeight = chartHeight - margin.top - margin.bottom;
     const all = series.flatMap((item) => item.values).map((point) => ({ ...point, date: new Date(point.time), value: Math.max(0, Number(point.value) || 0) })).filter((point) => !Number.isNaN(point.date.getTime()));
     svg.selectAll("*").remove();
-    svg.attr("viewBox", `0 0 ${width} ${height}`).attr("width", width).attr("height", height);
+    svg.attr("viewBox", `0 0 ${width} ${chartHeight}`).attr("width", width).attr("height", chartHeight);
     svg.append("title").text("Upload and download throughput over the last 120 seconds");
     if (!all.length) return;
     const latest = d3.max(all, (point) => point.date), earliest = new Date(latest.getTime() - windowSeconds * 1000);
