@@ -279,7 +279,7 @@ export function BarList({ items, formatValue, label = "Ranked values" }) {
 export function ConnectivityBars({ data = {}, formatValue }) {
   const slotCount = 60;
   const history = (data.history || []).slice(-slotCount);
-  const key = history.map((item) => `${item.time}:${item.status}:${item.tcp_connect_latency_ms}:${item.latency_ms}`).join("|");
+  const key = history.map((item) => `${item.time}:${item.status}:${item.relay || ""}:${item.tcp_connect_latency_ms}:${item.latency_ms}`).join("|");
   const height = 96;
   const refs = useChart((svg, width, tooltip, container) => {
     const metrics = [
@@ -312,7 +312,7 @@ export function ConnectivityBars({ data = {}, formatValue }) {
       const hits = svg.append("g").selectAll("rect").data(slots).join("rect")
         .attr("x", (_, index) => x(index)).attr("width", x.bandwidth())
         .attr("y", top).attr("height", 32).attr("fill", "transparent");
-      bindTooltip(hits.filter((item) => item), tooltip, container, (item) => [metric.label === "TCP" ? "TCP connect" : "Round trip", [formatValue(item[metric.key]), item.status || "unknown", d3.timeFormat("%H:%M:%S")(new Date(item.time))]], false);
+      bindTooltip(hits.filter((item) => item), tooltip, container, (item) => [metric.label === "TCP" ? "TCP connect" : "Round trip", [formatValue(item[metric.key]), item.status || "unknown", item.relay, d3.timeFormat("%H:%M:%S")(new Date(item.time))].filter(Boolean)], false);
     });
   }, [key, data.latency_ms, data.tcp_connect_latency_ms, data.status, formatValue]);
   return <ChartShell refs={refs} className="connectivity-bars" label="TCP connect and round-trip latency history"/>;

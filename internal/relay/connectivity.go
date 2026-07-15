@@ -96,7 +96,7 @@ func (s *Selector) markOutsideUnavailableLocked(reason string) {
 	s.outsideHealth.LastCheckedAt = time.Now()
 	s.outsideHealth.Error = reason
 	s.outsideHealthKey = ""
-	appendConnectivityHealthRecord(&s.outsideHealth)
+	appendConnectivityHealthRecord(&s.outsideHealth, "")
 }
 
 func (s *Selector) CheckDomesticConnectivity() (bool, bool) {
@@ -111,7 +111,7 @@ func (s *Selector) CheckDomesticConnectivity() (bool, bool) {
 		s.mu.Unlock()
 		return false, false
 	}
-	applyConnectivityCheckResult(&s.domesticHealth, url, result)
+	applyConnectivityCheckResult(&s.domesticHealth, url, result, "")
 	check := s.domesticHealth
 	s.mu.Unlock()
 
@@ -131,7 +131,7 @@ func (s *Selector) applyOutsideConnectivityCheckResult(target benchmarkTarget, r
 	key := s.healthKey(target.group.name, target.dialer.Name())
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	applyConnectivityCheckResult(&s.outsideHealth, s.outsideURL, result)
+	applyConnectivityCheckResult(&s.outsideHealth, s.outsideURL, result, s.displayName(target.group.name, target.dialer.Name()))
 	s.outsideHealthKey = key
 }
 
@@ -164,7 +164,7 @@ func (s *Selector) domesticURLSnapshot() string {
 	return s.domesticURL
 }
 
-func applyConnectivityCheckResult(check *ConnectivityCheck, url string, result relayCheckResult) {
+func applyConnectivityCheckResult(check *ConnectivityCheck, url string, result relayCheckResult, relay string) {
 	check.URL = url
 	check.LastCheckedAt = time.Now()
 	check.TCPConnectLatency = durationMillis(result.tcpLatency)
@@ -172,7 +172,7 @@ func applyConnectivityCheckResult(check *ConnectivityCheck, url string, result r
 	if result.err != nil {
 		check.Status = HealthDown
 		check.Error = result.err.Error()
-		appendConnectivityHealthRecord(check)
+		appendConnectivityHealthRecord(check, relay)
 		return
 	}
 	check.Error = ""
@@ -181,15 +181,16 @@ func applyConnectivityCheckResult(check *ConnectivityCheck, url string, result r
 	} else {
 		check.Status = HealthHealthy
 	}
-	appendConnectivityHealthRecord(check)
+	appendConnectivityHealthRecord(check, relay)
 }
 
-func appendConnectivityHealthRecord(check *ConnectivityCheck) {
+func appendConnectivityHealthRecord(check *ConnectivityCheck, relay string) {
 	check.History = append(check.History, HealthRecord{
 		Time:              check.LastCheckedAt,
 		Status:            check.Status,
 		Latency:           check.Latency,
 		TCPConnectLatency: check.TCPConnectLatency,
+		Relay:             relay,
 	})
 	if len(check.History) > maxHealthRecords {
 		check.History = check.History[len(check.History)-maxHealthRecords:]

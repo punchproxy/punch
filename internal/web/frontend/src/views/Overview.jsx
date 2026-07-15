@@ -58,5 +58,5 @@ function GroupRow({ group }) {
 
 function Connection({ title, data = {} }) {
   const color = statusColor(data.status);
-  return <div className="connection"><div className="spread"><strong>{title}</strong><Pill color={color}>{data.status || "unknown"}</Pill></div><ConnectivityBars data={data} formatValue={fmtLatency}/>{data.error && <div className="inline-error" title={data.error}>{data.error}</div>}</div>;
+  return <div className="connection"><div className="spread"><strong>{title}</strong><Pill color={color}>{data.status || "unknown"}</Pill></div><div className="connection-url mono muted" title={data.url}>{data.url || "—"}</div><ConnectivityBars data={data} formatValue={fmtLatency}/>{data.error && <div className="inline-error" title={data.error}>{data.error}</div>}</div>;
 }

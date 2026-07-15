@@ -68,6 +68,10 @@ type HealthRecord struct {
 	Status            HealthStatus `json:"status"`
 	Latency           int64        `json:"latency_ms,omitempty"`
 	TCPConnectLatency int64        `json:"tcp_connect_latency_ms,omitempty"`
+	// Relay names the relay that carried the check, for histories that span
+	// relay switches (the outside connectivity history). Empty for per-relay
+	// histories, where the relay is implicit.
+	Relay string `json:"relay,omitempty"`
 }
 
 type GroupStatus struct {
