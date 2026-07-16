@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { gaugeGeometry } from "./math.js";
-import { cacheStateColor, filterSessions, fmtTime, sumBy } from "./utils.js";
+import { cacheStateColor, clientIP, filterSessions, fmtTime, sumBy } from "./utils.js";
 
 test("semicircular gauges never request a major arc", () => {
   assert.equal(gaugeGeometry(300, 500).largeArcFlag, 0);
@@ -20,6 +20,21 @@ test("visible session totals use the filtered rows", () => {
   ];
   const visible = filterSessions(sessions, "active", "one");
   assert.equal(sumBy(visible, "upload_bytes"), 10);
+});
+
+test("client IP strips the port from v4 and v6 sources", () => {
+  assert.equal(clientIP("192.168.1.5:52344"), "192.168.1.5");
+  assert.equal(clientIP("[fe80::1]:52344"), "fe80::1");
+  assert.equal(clientIP("192.168.1.5"), "192.168.1.5");
+  assert.equal(clientIP(""), "");
+});
+
+test("session search matches the client source address", () => {
+  const sessions = [
+    { destination: "one.test", source: "192.168.1.5:1000" },
+    { destination: "two.test", source: "10.0.0.9:2000" },
+  ];
+  assert.equal(filterSessions(sessions, "all", "192.168").length, 1);
 });
 
 test("invalid and zero timestamps render a placeholder", () => {

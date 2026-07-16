@@ -61,11 +61,21 @@ export function statusColor(status) {
 export const cacheStateColor = (state) => state === "live" ? "green" : state === "stale" ? "amber" : "gray";
 export const isSessionActive = (session) => !session.closed_at || session.closed_at.startsWith("0001");
 
+// Strips the port from a source address: "1.2.3.4:5678" → "1.2.3.4", "[::1]:5678" → "::1".
+export function clientIP(source) {
+  if (!source) return "";
+  const v6 = source.match(/^\[(.+)\]:\d+$/);
+  if (v6) return v6[1];
+  const idx = source.lastIndexOf(":");
+  if (idx > 0 && source.indexOf(":") === idx) return source.slice(0, idx);
+  return source;
+}
+
 export function filterSessions(sessions, filter, search) {
   const needle = search.trim().toLowerCase();
   return sessions
     .filter((session) => filter === "all" || (filter === "active" ? isSessionActive(session) : !isSessionActive(session)))
-    .filter((session) => !needle || `${session.destination || ""} ${session.relay || ""}`.toLowerCase().includes(needle));
+    .filter((session) => !needle || `${session.destination || ""} ${session.source || ""} ${session.relay || ""}`.toLowerCase().includes(needle));
 }
 
 export const sumBy = (rows, key) => rows.reduce((total, row) => total + (Number(row[key]) || 0), 0);
