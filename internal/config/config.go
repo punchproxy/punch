@@ -981,7 +981,7 @@ func Default() *Config {
 			OutsideURL:          "https://www.gstatic.com/generate_204",
 			DomesticURL:         "http://connect.rom.miui.com/generate_204",
 			FullInterval:        86400,
-			Interval:            10,
+			Interval:            30,
 			FullTriggerFailures: 5,
 			Tolerance:           15,
 			Concurrency:         10,
@@ -1039,7 +1039,7 @@ func applyDefaults(cfg *Config) {
 		cfg.Check.FullInterval = 86400
 	}
 	if cfg.Check.Interval == 0 {
-		cfg.Check.Interval = 10
+		cfg.Check.Interval = 30
 	}
 	if cfg.Check.FullTriggerFailures == 0 {
 		cfg.Check.FullTriggerFailures = 5

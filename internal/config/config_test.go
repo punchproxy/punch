@@ -25,8 +25,8 @@ func TestLoadSeedsDefaultConfigTables(t *testing.T) {
 	if got := DNSListenAddr(cfg.DNS); got != "0.0.0.0:53" {
 		t.Fatalf("dns listen = %q, want default first-run listen", got)
 	}
-	if cfg.Check.Interval != 10 {
-		t.Fatalf("check interval = %d, want 10", cfg.Check.Interval)
+	if cfg.Check.Interval != 30 {
+		t.Fatalf("check interval = %d, want 30", cfg.Check.Interval)
 	}
 	if cfg.Check.FullInterval != 86400 {
 		t.Fatalf("check full interval = %d, want 86400", cfg.Check.FullInterval)

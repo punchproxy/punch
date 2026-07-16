@@ -229,7 +229,7 @@ punchctl config set check.full_interval 86400
 punchctl config set check.full_trigger_failures 5
 punchctl config set check.outside_url https://www.gstatic.com/generate_204
 punchctl config set check.domestic_url http://connect.rom.miui.com/generate_204
-punchctl config set check.interval 10
+punchctl config set check.interval 30
 ```
 
 If you need to override a value at startup (for example to bring the daemon up on a different port), use `-s` on `punchd`. The new value is persisted, so it survives restarts:
