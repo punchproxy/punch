@@ -79,6 +79,12 @@ func (s *Selector) CheckOutsideConnectivity() (benchmarkTarget, bool, bool) {
 
 	if result.err == nil {
 		s.reevaluateAutoSelections()
+		// A green probe on a fresh connection can coexist with live streams
+		// being reset; surface that contrast so unstable relays are visible.
+		if recent, total := s.StreamAbortStats(prevActive); recent > 0 {
+			slog.Warn("relay passed connectivity check but recently aborted live streams",
+				"relay", prevActive, "aborts_last_minute", recent, "aborts_total", total)
+		}
 	}
 
 	s.publishRelayChange(prevActive)

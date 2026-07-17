@@ -200,13 +200,14 @@ func (h *handler) handleTCPConn(conn net.Conn, source M.Socksaddr, destination M
 		dir string
 		err error
 	}
+	remote := relayTaggedConn{Conn: remoteConn}
 	errCh := make(chan copyResult, 2)
 	go func() {
-		_, err := io.Copy(remoteConn, session.NewTrackedConn(conn, sess, true))
+		_, err := io.Copy(remote, session.NewTrackedConn(conn, sess, true))
 		errCh <- copyResult{dir: "upload", err: err}
 	}()
 	go func() {
-		_, err := io.Copy(session.NewTrackedConn(conn, sess, false), remoteConn)
+		_, err := io.Copy(session.NewTrackedConn(conn, sess, false), remote)
 		errCh <- copyResult{dir: "download", err: err}
 	}()
 
@@ -214,15 +215,31 @@ func (h *handler) handleTCPConn(conn net.Conn, source M.Socksaddr, destination M
 	sess.Close()
 	<-errCh
 
-	status := session.StatusClosed
-	if relayFailed(first.err) {
-		status = session.StatusError
-		sess.SetCloseReason(fmt.Sprintf("%s copy: %v", first.dir, first.err))
-		h.sessions.CloseSession(sess.ID, status)
-		return first.err
+	abnormal, relaySide := classifyCopyError(first.err)
+	if !abnormal {
+		h.sessions.CloseSession(sess.ID, session.StatusClosed)
+		return nil
 	}
-	h.sessions.CloseSession(sess.ID, status)
-	return nil
+	side := "client"
+	if relaySide {
+		side = "relay"
+	}
+	sess.SetCloseReason(fmt.Sprintf("%s copy (%s side): %v", first.dir, side, first.err))
+	if relaySide {
+		h.selector.ReportStreamAbort(sess.Relay)
+		slog.Warn("relay aborted stream mid-transfer",
+			"session", sess.ID,
+			"relay", sess.Relay,
+			"target", target,
+			"direction", first.dir,
+			"upload_bytes", sess.UploadBytes(),
+			"download_bytes", sess.DownloadBytes(),
+			"duration", time.Since(sess.StartTime).Round(time.Millisecond),
+			"error", first.err,
+		)
+	}
+	h.sessions.CloseSession(sess.ID, session.StatusError)
+	return first.err
 }
 
 func (h *handler) targetForDestination(destination M.Socksaddr) (target string, domain string, dstIP netip.Addr, rule string, err error) {
@@ -559,6 +576,15 @@ func (s *udpSender) readBack() {
 			} else if relayFailed(err) {
 				s.sessionStatus = session.StatusError
 				s.closeReason = fmt.Sprintf("relay read: %v", err)
+				if s.sess != nil {
+					s.handler.selector.ReportStreamAbort(s.sess.Relay)
+					slog.Warn("relay aborted UDP flow",
+						"session", s.sess.ID,
+						"relay", s.sess.Relay,
+						"destination", s.destination.String(),
+						"error", err,
+					)
+				}
 			}
 			s.Close()
 			return

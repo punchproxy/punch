@@ -59,8 +59,12 @@ type RelayHealth struct {
 	Spec              map[string]any `json:"spec,omitempty"`
 	History           []HealthRecord `json:"history,omitempty"`
 	Error             string         `json:"error,omitempty"`
-	Upload            atomic.Int64   `json:"-"`
-	Download          atomic.Int64   `json:"-"`
+	// Stream aborts count relay-side mid-transfer failures on live traffic,
+	// which connectivity probes on fresh connections do not observe.
+	RecentStreamAborts int          `json:"recent_stream_aborts,omitempty"`
+	StreamAborts       int64        `json:"stream_aborts,omitempty"`
+	Upload             atomic.Int64 `json:"-"`
+	Download           atomic.Int64 `json:"-"`
 }
 
 type HealthRecord struct {
@@ -159,6 +163,9 @@ type Selector struct {
 	groupCfgs               map[string]config.RelayGroup
 	directDialContext       DialContextFunc
 	resolveRelayDomain      RelayResolveFunc
+
+	abortMu sync.Mutex
+	aborts  map[string]*abortStats
 }
 
 func NewSelector(
@@ -196,6 +203,7 @@ func NewSelector(
 		groupCfgs:             make(map[string]config.RelayGroup),
 		directDialContext:     directDialContext,
 		resolveRelayDomain:    resolveRelayDomain,
+		aborts:                make(map[string]*abortStats),
 	}
 
 	if err := s.ApplyConfig(relayCfg, checkCfg); err != nil {

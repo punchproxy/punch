@@ -24,6 +24,7 @@ func (s *Selector) HealthList() []RelayHealth {
 				continue
 			}
 			selected := groupSelected && di == activeDialerIdx
+			recentAborts, totalAborts := s.StreamAbortStats(h.Name)
 			result = append(result, RelayHealth{
 				Name:              h.Name,
 				Group:             h.Group,
@@ -41,9 +42,11 @@ func (s *Selector) HealthList() []RelayHealth {
 				Selected:          selected,
 				GroupMode:         displaySelectMode(h.GroupMode),
 				GroupSourceURL:    h.GroupSourceURL,
-				Spec:              cloneRelaySpec(h.Spec),
-				History:           cloneHealthRecords(h.History),
-				Error:             h.Error,
+				Spec:               cloneRelaySpec(h.Spec),
+				History:            cloneHealthRecords(h.History),
+				Error:              h.Error,
+				RecentStreamAborts: recentAborts,
+				StreamAborts:       totalAborts,
 			})
 		}
 	}

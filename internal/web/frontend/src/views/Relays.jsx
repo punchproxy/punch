@@ -73,7 +73,7 @@ function RelayRow({ relay, busy, act }) {
   const selectKey = `sel-${relay.name}`, checkKey = `check-${relay.name}`;
   return <tr className={relay.selected ? "selected-row" : ""}>
     <td data-label="Relay"><div className="flex"><span className="mono">{name}</span>{relay.selected && <Pill color="orange">active</Pill>}</div><small className="mono faint block">{relay.addr}</small></td>
-    <td data-label="Group" className="muted">{relay.group}</td><td data-label="Type"><Tag>{relay.type || "?"}</Tag></td><td data-label="Status"><Pill color={color}>{relay.status || "unknown"}</Pill></td>
+    <td data-label="Group" className="muted">{relay.group}</td><td data-label="Type"><Tag>{relay.type || "?"}</Tag></td><td data-label="Status"><div className="flex"><Pill color={color}>{relay.status || "unknown"}</Pill>{relay.recent_stream_aborts > 0 && <span title={`${relay.recent_stream_aborts} relay-side stream abort(s) in the last minute (${relay.stream_aborts} total this run). The relay accepts new connections but is killing live streams.`}><Pill color="amber">{relay.recent_stream_aborts} aborts/1m</Pill></span>}</div></td>
     <td data-label="TCP connect"><LatencyCell history={relay.history} metric="tcp_connect_latency_ms" current={relay.tcp_connect_latency_ms} label={`${name} TCP connect latency history`}/></td>
     <td data-label="Roundtrip"><LatencyCell history={relay.history} metric="latency_ms" current={latency} label={`${name} roundtrip latency history`}/></td>
     <td data-label="Checked" className="faint nowrap">{timeAgo(relay.last_checked_at)}</td>
