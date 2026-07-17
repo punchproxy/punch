@@ -2,6 +2,7 @@ package session
 
 import (
 	"fmt"
+	"log/slog"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -16,6 +17,7 @@ type Manager struct {
 	activeFakeIPs map[string]map[string]struct{}
 	closed        []*Session
 	closedMaxSize int
+	history       HistoryStore
 	bus           *eventbus.Bus
 	nextID        atomic.Uint64
 	totalUpload   atomic.Int64
@@ -108,18 +110,27 @@ func (m *Manager) CloseSession(id string, status Status) {
 	m.totalUpload.Add(s.Upload.Load())
 	m.totalDownload.Add(s.Download.Load())
 
-	closedCapacity := m.closedMaxSize - len(m.active)
-	if closedCapacity > 0 {
-		m.closed = append(m.closed, s)
-		if len(m.closed) > closedCapacity {
-			m.closed = m.closed[len(m.closed)-closedCapacity:]
+	history, limit := m.history, m.closedMaxSize
+	if history == nil {
+		closedCapacity := m.closedMaxSize - len(m.active)
+		if closedCapacity > 0 {
+			m.closed = append(m.closed, s)
+			if len(m.closed) > closedCapacity {
+				m.closed = m.closed[len(m.closed)-closedCapacity:]
+			}
+		} else {
+			m.closed = nil
 		}
-	} else {
-		m.closed = nil
 	}
 	m.mu.Unlock()
 
 	s.Close()
+
+	if history != nil {
+		if err := history.AppendClosedSession(s.closedRecord(), limit); err != nil {
+			slog.Warn("persist closed session", "id", s.ID, "error", err)
+		}
+	}
 
 	m.bus.Publish(eventbus.Event{
 		Type: eventbus.EventSessionClose,
@@ -154,16 +165,42 @@ func (m *Manager) KillAllSessions() int {
 
 func (m *Manager) Session(id string) (*Session, bool) {
 	m.mu.RLock()
-	defer m.mu.RUnlock()
 	if s, ok := m.active[id]; ok {
+		m.mu.RUnlock()
 		return s, true
 	}
 	for i := len(m.closed) - 1; i >= 0; i-- {
 		if m.closed[i].ID == id {
-			return m.closed[i], true
+			s := m.closed[i]
+			m.mu.RUnlock()
+			return s, true
+		}
+	}
+	history := m.history
+	m.mu.RUnlock()
+
+	if history != nil {
+		rec, ok, err := history.GetClosedSession(id)
+		if err != nil {
+			slog.Warn("load closed session", "id", id, "error", err)
+			return nil, false
+		}
+		if ok {
+			return rec.restore(), true
 		}
 	}
 	return nil, false
+}
+
+// SetHistoryStore spills closed sessions to h instead of keeping them in
+// memory. Call it during wiring, before traffic flows.
+func (m *Manager) SetHistoryStore(h HistoryStore) {
+	m.mu.Lock()
+	m.history = h
+	if h != nil {
+		m.closed = nil
+	}
+	m.mu.Unlock()
 }
 
 func (m *Manager) SetHistoryLimit(limit int) {
@@ -172,11 +209,15 @@ func (m *Manager) SetHistoryLimit(limit int) {
 	}
 	m.mu.Lock()
 	m.closedMaxSize = limit
-	closedCapacity := m.closedMaxSize - len(m.active)
-	if closedCapacity <= 0 {
-		m.closed = nil
-	} else if len(m.closed) > closedCapacity {
-		m.closed = m.closed[len(m.closed)-closedCapacity:]
+	// With a history store the new limit takes effect on the next append;
+	// otherwise trim the in-memory buffer now.
+	if m.history == nil {
+		closedCapacity := m.closedMaxSize - len(m.active)
+		if closedCapacity <= 0 {
+			m.closed = nil
+		} else if len(m.closed) > closedCapacity {
+			m.closed = m.closed[len(m.closed)-closedCapacity:]
+		}
 	}
 	m.mu.Unlock()
 }
@@ -194,7 +235,18 @@ func (m *Manager) RecentSessions() []*Session {
 		result = append(result, s)
 	}
 	result = append(result, m.closed...)
+	history, limit := m.history, m.closedMaxSize
 	m.mu.RUnlock()
+
+	if history != nil {
+		records, err := history.ListClosedSessions(limit)
+		if err != nil {
+			slog.Warn("load closed sessions", "error", err)
+		}
+		for _, rec := range records {
+			result = append(result, rec.restore())
+		}
+	}
 
 	sort.Slice(result, func(i, j int) bool {
 		return result[i].StartTime.After(result[j].StartTime)
@@ -206,7 +258,16 @@ func (m *Manager) ClearNonActive() int {
 	m.mu.Lock()
 	cleared := len(m.closed)
 	m.closed = nil
+	history := m.history
 	m.mu.Unlock()
+
+	if history != nil {
+		n, err := history.ClearClosedSessions()
+		if err != nil {
+			slog.Warn("clear closed sessions", "error", err)
+		}
+		cleared += n
+	}
 	return cleared
 }
 
@@ -240,9 +301,20 @@ func (m *Manager) ActiveSessionIDsByFakeIP() map[string][]string {
 
 func (m *Manager) ClosedSessions() []*Session {
 	m.mu.RLock()
-	defer m.mu.RUnlock()
 	result := make([]*Session, len(m.closed))
 	copy(result, m.closed)
+	history, limit := m.history, m.closedMaxSize
+	m.mu.RUnlock()
+
+	if history != nil {
+		records, err := history.ListClosedSessions(limit)
+		if err != nil {
+			slog.Warn("load closed sessions", "error", err)
+		}
+		for _, rec := range records {
+			result = append(result, rec.restore())
+		}
+	}
 	return result
 }
 

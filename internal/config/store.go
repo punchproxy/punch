@@ -80,6 +80,7 @@ func (s *Store) migrate() error {
 		&relayGroupProxyModel{},
 		&relaySelectionModel{},
 		&fakeIPModel{},
+		&sessionHistoryModel{},
 	); err != nil {
 		return fmt.Errorf("migrate: %w", err)
 	}

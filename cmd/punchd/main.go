@@ -97,8 +97,16 @@ func main() {
 	// Initialize event bus
 	bus := eventbus.New()
 
-	// Initialize session manager
+	// Initialize session manager. Closed sessions spill to the store instead
+	// of accumulating in memory; history is per-run, so drop whatever the
+	// previous run left behind.
 	sessions := session.NewManager(bus, cfg.Sessions.HistoryLimit)
+	if cleared, err := st.ClearClosedSessions(); err != nil {
+		slog.Warn("clear session history from previous run", "error", err)
+	} else if cleared > 0 {
+		slog.Info("cleared session history from previous run", "sessions", cleared)
+	}
+	sessions.SetHistoryStore(st)
 
 	var selector *relay.Selector
 	var dnsResolver *pdns.ServerResolver
