@@ -14,7 +14,7 @@ import (
 	"github.com/punchproxy/punch/internal/session"
 )
 
-func TestConfigHandlersGetAndSetSessionHistoryLimit(t *testing.T) {
+func TestConfigHandlersGetAndSetScalarValue(t *testing.T) {
 	st, err := config.Open(filepath.Join(t.TempDir(), "punch.db"))
 	if err != nil {
 		t.Fatalf("open store: %v", err)
@@ -31,7 +31,7 @@ func TestConfigHandlersGetAndSetSessionHistoryLimit(t *testing.T) {
 	mgr := session.NewManager(eventbus.New(), 1000)
 	s := &Server{store: st, sessions: mgr}
 
-	rec := runRelayHandler(t, s.handleConfig, http.MethodGet, "/api/config?key=sessions.history_limit", nil, nil)
+	rec := runRelayHandler(t, s.handleConfig, http.MethodGet, "/api/config?key=dns.cache_size", nil, nil)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("get status = %d body = %s", rec.Code, rec.Body.String())
 	}
@@ -39,25 +39,22 @@ func TestConfigHandlersGetAndSetSessionHistoryLimit(t *testing.T) {
 	if err := json.NewDecoder(rec.Body).Decode(&entry); err != nil {
 		t.Fatalf("decode get: %v", err)
 	}
-	if entry.Value != "1000" {
-		t.Fatalf("history limit = %q, want 1000", entry.Value)
+	if entry.Value != "100000" {
+		t.Fatalf("dns.cache_size = %q, want default 100000", entry.Value)
 	}
 
-	rec = runRelayHandler(t, s.handleSetConfigValue, http.MethodPut, "/api/config/sessions.history_limit", map[string]string{
-		"key": "sessions.history_limit",
+	rec = runRelayHandler(t, s.handleSetConfigValue, http.MethodPut, "/api/config/dns.cache_size", map[string]string{
+		"key": "dns.cache_size",
 	}, configValueRequest{Value: "2000"})
 	if rec.Code != http.StatusOK {
 		t.Fatalf("set status = %d body = %s", rec.Code, rec.Body.String())
-	}
-	if mgr.HistoryLimit() != 2000 {
-		t.Fatalf("manager history limit = %d, want 2000", mgr.HistoryLimit())
 	}
 	got, err := config.Load(st)
 	if err != nil {
 		t.Fatalf("load config: %v", err)
 	}
-	if got.Sessions.HistoryLimit != 2000 {
-		t.Fatalf("stored history limit = %d, want 2000", got.Sessions.HistoryLimit)
+	if got.DNS.CacheSize != 2000 {
+		t.Fatalf("stored dns.cache_size = %d, want 2000", got.DNS.CacheSize)
 	}
 }
 

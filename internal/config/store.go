@@ -160,7 +160,7 @@ type configBaseModel struct {
 	CheckFullTriggerFailures int    `gorm:"column:check_full_trigger_failures;not null;default:5"`
 	APIListen                string `gorm:"column:api_listen;not null"`
 	APISecret                string `gorm:"column:api_secret;not null"`
-	SessionsHistoryLimit     int    `gorm:"column:sessions_history_limit;not null;default:1000"`
+	SessionsHistoryLimit     int    `gorm:"column:sessions_history_limit;not null;default:1000"` // Legacy column kept for existing databases.
 }
 
 func (configBaseModel) TableName() string { return "config_base" }

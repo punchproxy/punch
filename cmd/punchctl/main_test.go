@@ -1660,16 +1660,16 @@ func TestConfigCommandListGetSet(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/api/config" && r.URL.Query().Get("key") == "":
-			_ = json.NewEncoder(w).Encode([]configEntry{{Key: "sessions.history_limit", Value: "1000"}})
+			_ = json.NewEncoder(w).Encode([]configEntry{{Key: "dns.cache_size", Value: "1000"}})
 		case r.Method == http.MethodGet && r.URL.Path == "/api/config":
 			_ = json.NewEncoder(w).Encode(configEntry{Key: r.URL.Query().Get("key"), Value: "1000"})
-		case r.Method == http.MethodPut && r.URL.Path == "/api/config/sessions.history_limit":
+		case r.Method == http.MethodPut && r.URL.Path == "/api/config/dns.cache_size":
 			setPath = r.URL.Path
 			setMethod = r.Method
 			if err := json.NewDecoder(r.Body).Decode(&setBody); err != nil {
 				t.Fatalf("decode set body: %v", err)
 			}
-			_ = json.NewEncoder(w).Encode(configEntry{Key: "sessions.history_limit", Value: setBody.Value})
+			_ = json.NewEncoder(w).Encode(configEntry{Key: "dns.cache_size", Value: setBody.Value})
 		default:
 			t.Fatalf("unexpected request %s %s", r.Method, r.URL.RequestURI())
 		}
@@ -1682,13 +1682,13 @@ func TestConfigCommandListGetSet(t *testing.T) {
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("config list error = %v", err)
 	}
-	if !strings.Contains(out.String(), "sessions.history_limit") {
+	if !strings.Contains(out.String(), "dns.cache_size") {
 		t.Fatalf("config list output = %q", out.String())
 	}
 
 	out.Reset()
 	cmd = newRootCommand(commandConfig{out: &out, errOut: &bytes.Buffer{}, client: server.Client()})
-	cmd.SetArgs([]string{"--addr", server.URL, "config", "get", "sessions.history_limit"})
+	cmd.SetArgs([]string{"--addr", server.URL, "config", "get", "dns.cache_size"})
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("config get error = %v", err)
 	}
@@ -1698,14 +1698,14 @@ func TestConfigCommandListGetSet(t *testing.T) {
 
 	out.Reset()
 	cmd = newRootCommand(commandConfig{out: &out, errOut: &bytes.Buffer{}, client: server.Client()})
-	cmd.SetArgs([]string{"--addr", server.URL, "config", "set", "sessions.history_limit", "2000"})
+	cmd.SetArgs([]string{"--addr", server.URL, "config", "set", "dns.cache_size", "2000"})
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("config set error = %v", err)
 	}
-	if setMethod != http.MethodPut || setPath != "/api/config/sessions.history_limit" || setBody.Value != "2000" {
+	if setMethod != http.MethodPut || setPath != "/api/config/dns.cache_size" || setBody.Value != "2000" {
 		t.Fatalf("set request = %s %s %#v", setMethod, setPath, setBody)
 	}
-	if !strings.Contains(out.String(), "sessions.history_limit=2000") {
+	if !strings.Contains(out.String(), "dns.cache_size=2000") {
 		t.Fatalf("config set output = %q", out.String())
 	}
 }

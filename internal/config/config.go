@@ -28,7 +28,6 @@ type Config struct {
 	Relay                Relay    `json:"relay"`
 	Check                Check    `json:"check"`
 	API                  API      `json:"api"`
-	Sessions             Sessions `json:"sessions"`
 }
 
 type DNS struct {
@@ -123,10 +122,6 @@ type API struct {
 	Secret string `json:"secret,omitempty"`
 }
 
-type Sessions struct {
-	HistoryLimit int `json:"history_limit"`
-}
-
 // RelaySelections is the persisted manual selection state for relay groups.
 type RelaySelections struct {
 	ActiveGroup string
@@ -179,7 +174,6 @@ var scalarKeys = []string{
 	"check.concurrency",
 	"api.listen",
 	"api.secret",
-	"sessions.history_limit",
 }
 
 // Load returns the configuration stored in s. If no configuration has been
@@ -338,8 +332,6 @@ func getValue(cfg *Config, key string) (string, error) {
 		return cfg.API.Listen, nil
 	case "api.secret":
 		return cfg.API.Secret, nil
-	case "sessions.history_limit":
-		return strconv.Itoa(cfg.Sessions.HistoryLimit), nil
 	default:
 		return "", ErrNotFound
 	}
@@ -423,12 +415,6 @@ func setValue(cfg *Config, key, value string) error {
 		cfg.API.Listen = value
 	case "api.secret":
 		cfg.API.Secret = value
-	case "sessions.history_limit":
-		parsed, err := parsePositiveInt(key, value)
-		if err != nil {
-			return err
-		}
-		cfg.Sessions.HistoryLimit = parsed
 	default:
 		return ErrNotFound
 	}
@@ -587,9 +573,6 @@ func loadTables(s *Store) (*Config, error) {
 			Listen: base.APIListen,
 			Secret: base.APISecret,
 		},
-		Sessions: Sessions{
-			HistoryLimit: base.SessionsHistoryLimit,
-		},
 	}
 
 	routes, err := loadTUNRoutes(s)
@@ -742,7 +725,6 @@ func saveTables(s *Store, cfg *Config) error {
 			CheckFullTriggerFailures: cfg.Check.FullTriggerFailures,
 			APIListen:                cfg.API.Listen,
 			APISecret:                cfg.API.Secret,
-			SessionsHistoryLimit:     cfg.Sessions.HistoryLimit,
 		}
 		if err := tx.Save(&base).Error; err != nil {
 			return fmt.Errorf("save config base: %w", err)
@@ -989,9 +971,6 @@ func Default() *Config {
 		API: API{
 			Listen: "127.0.0.1:28854",
 		},
-		Sessions: Sessions{
-			HistoryLimit: 1000,
-		},
 	}
 	return cfg
 }
@@ -1052,9 +1031,6 @@ func applyDefaults(cfg *Config) {
 	}
 	if cfg.API.Listen == "" {
 		cfg.API.Listen = "127.0.0.1:28854"
-	}
-	if cfg.Sessions.HistoryLimit == 0 {
-		cfg.Sessions.HistoryLimit = 1000
 	}
 	for i := range cfg.Relay.Groups {
 		if cfg.Relay.Groups[i].Type == "remote" && cfg.Relay.Groups[i].RefreshDuration == 0 {

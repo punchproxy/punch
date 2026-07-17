@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"strconv"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -55,14 +54,6 @@ func (s *Server) handleSetConfigValue(w http.ResponseWriter, r *http.Request) {
 	if err := config.Set(key, req.Value); err != nil {
 		writeJSON(w, configErrorStatus(err), map[string]string{"error": err.Error()})
 		return
-	}
-	if key == "sessions.history_limit" && s.sessions != nil {
-		parsed, err := strconv.Atoi(req.Value)
-		if err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-			return
-		}
-		s.sessions.SetHistoryLimit(parsed)
 	}
 	if key == "system.log_level" {
 		logging.SetLevel(req.Value)

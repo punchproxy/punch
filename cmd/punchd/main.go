@@ -100,7 +100,7 @@ func main() {
 	// Initialize session manager. Closed sessions spill to the store instead
 	// of accumulating in memory; history is per-run, so drop whatever the
 	// previous run left behind.
-	sessions := session.NewManager(bus, cfg.Sessions.HistoryLimit)
+	sessions := session.NewManager(bus, session.DefaultHistoryLimit)
 	if cleared, err := st.ClearClosedSessions(); err != nil {
 		slog.Warn("clear session history from previous run", "error", err)
 	} else if cleared > 0 {

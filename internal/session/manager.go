@@ -29,9 +29,14 @@ type Manager struct {
 	rateDownload int64
 }
 
+// DefaultHistoryLimit caps how many closed sessions are retained. History
+// spills to SQLite (per run), so the cap bounds the dashboard payload and
+// per-run disk growth rather than daemon memory.
+const DefaultHistoryLimit = 10000
+
 func NewManager(bus *eventbus.Bus, closedBufferSize int) *Manager {
 	if closedBufferSize <= 0 {
-		closedBufferSize = 1000
+		closedBufferSize = DefaultHistoryLimit
 	}
 	return &Manager{
 		active:        make(map[string]*Session),
@@ -201,31 +206,6 @@ func (m *Manager) SetHistoryStore(h HistoryStore) {
 		m.closed = nil
 	}
 	m.mu.Unlock()
-}
-
-func (m *Manager) SetHistoryLimit(limit int) {
-	if limit <= 0 {
-		limit = 1000
-	}
-	m.mu.Lock()
-	m.closedMaxSize = limit
-	// With a history store the new limit takes effect on the next append;
-	// otherwise trim the in-memory buffer now.
-	if m.history == nil {
-		closedCapacity := m.closedMaxSize - len(m.active)
-		if closedCapacity <= 0 {
-			m.closed = nil
-		} else if len(m.closed) > closedCapacity {
-			m.closed = m.closed[len(m.closed)-closedCapacity:]
-		}
-	}
-	m.mu.Unlock()
-}
-
-func (m *Manager) HistoryLimit() int {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	return m.closedMaxSize
 }
 
 func (m *Manager) RecentSessions() []*Session {
