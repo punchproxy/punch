@@ -12,6 +12,38 @@ func (s *Selector) RefreshGroup(name string) error {
 	return s.reloadGroup(name, true)
 }
 
+// abortRefresh unwinds a failed reload: the group becomes eligible for auto
+// refresh again, but only after an exponential backoff so a broken
+// subscription URL is not hammered on every refresh-loop tick.
+func (s *Selector) abortRefresh(name string) {
+	now := time.Now()
+	s.mu.Lock()
+	for _, g := range s.groups {
+		if g.name == name {
+			g.refreshing = false
+			g.scheduleRefreshRetryLocked(now)
+			break
+		}
+	}
+	s.mu.Unlock()
+}
+
+// refreshRetryDelay reports how long until the group's next auto refresh
+// attempt, for logging after a failure.
+func (s *Selector) refreshRetryDelay(name string) time.Duration {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, g := range s.groups {
+		if g.name == name {
+			if delay := time.Until(g.nextRefreshAt); delay > 0 {
+				return delay.Round(time.Second)
+			}
+			return 0
+		}
+	}
+	return 0
+}
+
 // ReloadGroup rebuilds a relay group from the currently cached asset (no
 // remote fetch). Intended for use after an async asset download completes.
 func (s *Selector) ReloadGroup(name string) error {
@@ -38,14 +70,7 @@ func (s *Selector) reloadGroup(name string, fetch bool) error {
 	s.mu.Unlock()
 	if fetch {
 		if err := s.assets.Refresh(cfg.URL, true); err != nil {
-			s.mu.Lock()
-			for _, g := range s.groups {
-				if g.name == name {
-					g.refreshing = false
-					break
-				}
-			}
-			s.mu.Unlock()
+			s.abortRefresh(name)
 			return err
 		}
 	}
@@ -53,6 +78,7 @@ func (s *Selector) reloadGroup(name string, fetch bool) error {
 	urlCache := make(map[string]relayPayload)
 	newGroup, err := s.buildGroup(cfg, s.assets, urlCache)
 	if err != nil {
+		s.abortRefresh(name)
 		return err
 	}
 

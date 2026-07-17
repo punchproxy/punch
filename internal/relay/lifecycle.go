@@ -56,7 +56,7 @@ func (s *Selector) refreshLoop() {
 			for _, name := range s.dueRefreshGroups() {
 				go func(groupName string) {
 					if err := s.RefreshGroup(groupName); err != nil {
-						slog.Warn("relay group auto refresh failed", "name", groupName, "error", err)
+						slog.Warn("relay group auto refresh failed", "name", groupName, "error", err, "retry_in", s.refreshRetryDelay(groupName))
 					}
 				}(name)
 			}

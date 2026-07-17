@@ -106,7 +106,30 @@ type group struct {
 	lastRefreshedAt time.Time
 	nextRefreshAt   time.Time
 	refreshing      bool
+	refreshBackoff  time.Duration
 	active          atomic.Int32
+}
+
+// refreshRetryBase is the first retry delay after a failed auto refresh;
+// subsequent failures double it up to the group's refresh interval.
+const refreshRetryBase = time.Minute
+
+// scheduleRefreshRetryLocked pushes the next auto refresh out with exponential
+// backoff so a failing subscription URL is not fetched on every refresh-loop
+// tick. Callers must hold the selector lock.
+func (g *group) scheduleRefreshRetryLocked(now time.Time) {
+	if g.refreshEvery <= 0 {
+		return
+	}
+	backoff := g.refreshBackoff * 2
+	if backoff <= 0 {
+		backoff = refreshRetryBase
+	}
+	if backoff > g.refreshEvery {
+		backoff = g.refreshEvery
+	}
+	g.refreshBackoff = backoff
+	g.nextRefreshAt = now.Add(backoff)
 }
 
 type Selector struct {
