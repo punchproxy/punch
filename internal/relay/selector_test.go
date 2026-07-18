@@ -196,7 +196,7 @@ func TestBenchmarkTargetReevaluatesGlobalAutoSelection(t *testing.T) {
 		t.Fatalf("ActiveName() = %q, want preferred / preferred", got)
 	}
 	health := selector.health[selector.healthKey("preferred", "preferred")]
-	if health.Status != HealthHealthy || health.TCPConnectLatency == 0 || health.URLTestLatency == 0 {
+	if health.Status != HealthHealthy || health.URLTestLatency == 0 {
 		t.Fatalf("preferred health = %#v", health)
 	}
 }
@@ -709,11 +709,10 @@ func TestSelectedConnectivityBypassesBenchmarkSemaphore(t *testing.T) {
 	selector.health[selector.healthKey(g.name, active.Name())] = &RelayHealth{
 		Name:              selector.displayName(g.name, active.Name()),
 		Group:             g.name,
-		Status:            HealthHealthy,
-		Latency:           99,
-		TCPConnectLatency: 88,
-		URLTestLatency:    99,
-		LastCheckedAt:     staleCheckedAt,
+		Status:         HealthHealthy,
+		Latency:        99,
+		URLTestLatency: 99,
+		LastCheckedAt:  staleCheckedAt,
 	}
 
 	done := make(chan struct{})
@@ -735,7 +734,7 @@ func TestSelectedConnectivityBypassesBenchmarkSemaphore(t *testing.T) {
 	if !status.Outside.LastCheckedAt.After(staleCheckedAt) {
 		t.Fatalf("outside connectivity check time = %s, want after stale relay time %s", status.Outside.LastCheckedAt, staleCheckedAt)
 	}
-	if status.Outside.URL != target.URL || status.Outside.Status != HealthHealthy || status.Outside.Latency <= 0 || status.Outside.TCPConnectLatency <= 0 {
+	if status.Outside.URL != target.URL || status.Outside.Status != HealthHealthy || status.Outside.Latency <= 0 {
 		t.Fatalf("outside connectivity status = %#v", status.Outside)
 	}
 	if got := active.checks.Load(); got != 1 {
@@ -749,16 +748,14 @@ func TestConnectivityStatusReturnsOutsideHealthRegardlessOfActiveRelay(t *testin
 		health:     make(map[string]*RelayHealth),
 		outsideURL: "http://example.test/generate_204",
 		outsideHealth: ConnectivityCheck{
-			URL:               "http://example.test/generate_204",
-			Status:            HealthHealthy,
-			Latency:           42,
-			TCPConnectLatency: 9,
-			LastCheckedAt:     checkedAt,
+			URL:           "http://example.test/generate_204",
+			Status:        HealthHealthy,
+			Latency:       42,
+			LastCheckedAt: checkedAt,
 			History: []HealthRecord{{
-				Time:              checkedAt,
-				Status:            HealthHealthy,
-				Latency:           42,
-				TCPConnectLatency: 9,
+				Time:    checkedAt,
+				Status:  HealthHealthy,
+				Latency: 42,
 			}},
 		},
 		// outsideHealthKey points to a relay that is no longer active —
@@ -770,7 +767,7 @@ func TestConnectivityStatusReturnsOutsideHealthRegardlessOfActiveRelay(t *testin
 	selector.groups = []*group{g}
 
 	status := selector.ConnectivityStatus()
-	if status.Outside.Status != HealthHealthy || status.Outside.Latency != 42 || status.Outside.TCPConnectLatency != 9 || !status.Outside.LastCheckedAt.Equal(checkedAt) {
+	if status.Outside.Status != HealthHealthy || status.Outside.Latency != 42 || !status.Outside.LastCheckedAt.Equal(checkedAt) {
 		t.Fatalf("outside connectivity = %#v", status.Outside)
 	}
 	if len(status.Outside.History) != 1 {
@@ -794,7 +791,7 @@ func TestSelectedCheckFailuresTriggerFullBenchmark(t *testing.T) {
 	}))
 	t.Cleanup(target.Close)
 
-	bad := &failingTCPDialer{testDialer: testDialer{name: "bad"}}
+	bad := &failingDialer{testDialer: testDialer{name: "bad"}}
 	good := &countingDialer{testDialer: testDialer{name: "good"}}
 	selector := &Selector{
 		health:              make(map[string]*RelayHealth),
@@ -859,7 +856,7 @@ func TestSelectedCheckFailuresIgnoredWhenInternetDown(t *testing.T) {
 	}))
 	t.Cleanup(target.Close)
 
-	bad := &failingTCPDialer{testDialer: testDialer{name: "bad"}}
+	bad := &failingDialer{testDialer: testDialer{name: "bad"}}
 	good := &countingDialer{testDialer: testDialer{name: "good"}}
 	selector := &Selector{
 		health:              make(map[string]*RelayHealth),
@@ -944,7 +941,7 @@ func TestSelectedCheckLoopChecksDomesticConnectivity(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("selected check loop did not stop")
 	}
-	if status.Domestic.URL != target.URL || status.Domestic.Status != HealthHealthy || status.Domestic.Latency <= 0 || status.Domestic.TCPConnectLatency <= 0 {
+	if status.Domestic.URL != target.URL || status.Domestic.Status != HealthHealthy || status.Domestic.Latency <= 0 {
 		t.Fatalf("domestic connectivity status = %#v", status.Domestic)
 	}
 	if status.CheckIntervalMS != 10 {
@@ -974,7 +971,7 @@ func TestBenchmarkPublishesCompletedRelayBeforeWholeBatchFinishes(t *testing.T) 
 	}))
 	t.Cleanup(target.Close)
 
-	blocker := &blockingTCPDialer{
+	blocker := &blockingDialer{
 		testDialer: testDialer{name: "second"},
 		started:    make(chan struct{}),
 		release:    make(chan struct{}),
@@ -1050,7 +1047,6 @@ func TestRelayHealthHistoryKeepsLatestTwentyCompletedChecks(t *testing.T) {
 		h.LastCheckedAt = time.Unix(int64(i), 0)
 		h.Status = HealthHealthy
 		h.Latency = int64(i)
-		h.TCPConnectLatency = int64(i + 100)
 		appendRelayHealthRecord(h)
 	}
 
@@ -1058,12 +1054,12 @@ func TestRelayHealthHistoryKeepsLatestTwentyCompletedChecks(t *testing.T) {
 		t.Fatalf("history length = %d, want %d", len(h.History), maxHealthRecords)
 	}
 	first := h.History[0]
-	if first.Time != time.Unix(2, 0) || first.Latency != 2 || first.TCPConnectLatency != 102 {
+	if first.Time != time.Unix(2, 0) || first.Latency != 2 {
 		t.Fatalf("oldest kept record = %#v, want check 2", first)
 	}
 	last := h.History[len(h.History)-1]
 	wantLast := int64(maxHealthRecords + 1)
-	if last.Time != time.Unix(wantLast, 0) || last.Latency != wantLast || last.TCPConnectLatency != wantLast+100 {
+	if last.Time != time.Unix(wantLast, 0) || last.Latency != wantLast {
 		t.Fatalf("newest kept record = %#v, want check %d", last, wantLast)
 	}
 }
@@ -1109,10 +1105,6 @@ func (d *testDialer) Addr() string     { return "127.0.0.1:1" }
 func (d *testDialer) SupportUDP() bool { return false }
 func (d *testDialer) Close() error     { return nil }
 
-func (d *testDialer) TCPConnectLatency(ctx context.Context) (time.Duration, error) {
-	return time.Millisecond, nil
-}
-
 func (d *testDialer) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
 	return (&net.Dialer{}).DialContext(ctx, network, address)
 }
@@ -1153,7 +1145,7 @@ type meteredDialer struct {
 	maxActive *atomic.Int64
 }
 
-func (d *meteredDialer) TCPConnectLatency(ctx context.Context) (time.Duration, error) {
+func (d *meteredDialer) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
 	current := d.active.Add(1)
 	for {
 		max := d.maxActive.Load()
@@ -1167,10 +1159,10 @@ func (d *meteredDialer) TCPConnectLatency(ctx context.Context) (time.Duration, e
 	case <-timer.C:
 	case <-ctx.Done():
 		d.active.Add(-1)
-		return 0, ctx.Err()
+		return nil, ctx.Err()
 	}
 	d.active.Add(-1)
-	return time.Millisecond, nil
+	return d.testDialer.DialContext(ctx, network, address)
 }
 
 type countingDialer struct {
@@ -1178,33 +1170,33 @@ type countingDialer struct {
 	checks atomic.Int64
 }
 
-func (d *countingDialer) TCPConnectLatency(ctx context.Context) (time.Duration, error) {
+func (d *countingDialer) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
 	d.checks.Add(1)
-	return time.Millisecond, nil
+	return d.testDialer.DialContext(ctx, network, address)
 }
 
-type failingTCPDialer struct {
+type failingDialer struct {
 	testDialer
 	checks atomic.Int64
 }
 
-func (d *failingTCPDialer) TCPConnectLatency(ctx context.Context) (time.Duration, error) {
+func (d *failingDialer) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
 	d.checks.Add(1)
-	return 0, errors.New("tcp unavailable")
+	return nil, errors.New("relay unavailable")
 }
 
-type blockingTCPDialer struct {
+type blockingDialer struct {
 	testDialer
 	started chan struct{}
 	release chan struct{}
 }
 
-func (d *blockingTCPDialer) TCPConnectLatency(ctx context.Context) (time.Duration, error) {
+func (d *blockingDialer) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
 	close(d.started)
 	select {
 	case <-d.release:
-		return time.Millisecond, nil
+		return d.testDialer.DialContext(ctx, network, address)
 	case <-ctx.Done():
-		return 0, ctx.Err()
+		return nil, ctx.Err()
 	}
 }

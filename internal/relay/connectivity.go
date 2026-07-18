@@ -10,21 +10,22 @@ import (
 
 // ConnectivityCheck is a point-in-time URL reachability check.
 type ConnectivityCheck struct {
-	URL               string         `json:"url"`
-	Status            HealthStatus   `json:"status,omitempty"`
-	Latency           int64          `json:"latency_ms,omitempty"`
-	TCPConnectLatency int64          `json:"tcp_connect_latency_ms,omitempty"`
-	LastCheckedAt     time.Time      `json:"last_checked_at,omitempty"`
-	History           []HealthRecord `json:"history,omitempty"`
-	Error             string         `json:"error,omitempty"`
+	URL           string         `json:"url"`
+	Status        HealthStatus   `json:"status,omitempty"`
+	Latency       int64          `json:"latency_ms,omitempty"`
+	LastCheckedAt time.Time      `json:"last_checked_at,omitempty"`
+	History       []HealthRecord `json:"history,omitempty"`
+	Error         string         `json:"error,omitempty"`
 }
 
 // ConnectivityStatus describes direct domestic reachability and selected
-// outside reachability through the active relay path.
+// outside reachability through the active relay path, plus per-request
+// connect latency observed on live traffic.
 type ConnectivityStatus struct {
 	CheckIntervalMS int64             `json:"check_interval_ms,omitempty"`
 	Domestic        ConnectivityCheck `json:"domestic"`
 	Outside         ConnectivityCheck `json:"outside"`
+	ConnectSamples  []ConnectSample   `json:"connect_samples,omitempty"`
 }
 
 // CheckSelectedConnectivity runs the domestic ("Internet") and outside
@@ -98,7 +99,6 @@ func (s *Selector) markOutsideUnavailableLocked(reason string) {
 	s.outsideHealth.URL = s.outsideURL
 	s.outsideHealth.Status = HealthDown
 	s.outsideHealth.Latency = 0
-	s.outsideHealth.TCPConnectLatency = 0
 	s.outsideHealth.LastCheckedAt = time.Now()
 	s.outsideHealth.Error = reason
 	s.outsideHealthKey = ""
@@ -124,7 +124,7 @@ func (s *Selector) CheckDomesticConnectivity() (bool, bool) {
 	if result.err != nil {
 		slog.Debug("domestic connectivity check failed", "url", url, "error", result.err)
 	} else {
-		slog.Debug("domestic connectivity check result", "url", url, "tcp_connect_latency_ms", check.TCPConnectLatency, "latency_ms", check.Latency, "status", check.Status)
+		slog.Debug("domestic connectivity check result", "url", url, "latency_ms", check.Latency, "status", check.Status)
 	}
 	return true, result.err != nil
 }
@@ -154,6 +154,7 @@ func (s *Selector) ConnectivityStatus() ConnectivityStatus {
 	status.Domestic.History = cloneHealthRecords(status.Domestic.History)
 	status.Outside.URL = s.outsideURL
 	status.Outside.History = cloneHealthRecords(status.Outside.History)
+	status.ConnectSamples = s.ConnectLatencySamples()
 	return status
 }
 
@@ -173,7 +174,6 @@ func (s *Selector) domesticURLSnapshot() string {
 func applyConnectivityCheckResult(check *ConnectivityCheck, url string, result relayCheckResult, relay string) {
 	check.URL = url
 	check.LastCheckedAt = time.Now()
-	check.TCPConnectLatency = durationMillis(result.tcpLatency)
 	check.Latency = durationMillis(result.urlLatency)
 	if result.err != nil {
 		check.Status = HealthDown
@@ -192,11 +192,10 @@ func applyConnectivityCheckResult(check *ConnectivityCheck, url string, result r
 
 func appendConnectivityHealthRecord(check *ConnectivityCheck, relay string) {
 	check.History = append(check.History, HealthRecord{
-		Time:              check.LastCheckedAt,
-		Status:            check.Status,
-		Latency:           check.Latency,
-		TCPConnectLatency: check.TCPConnectLatency,
-		Relay:             relay,
+		Time:    check.LastCheckedAt,
+		Status:  check.Status,
+		Latency: check.Latency,
+		Relay:   relay,
 	})
 	if len(check.History) > maxHealthRecords {
 		check.History = check.History[len(check.History)-maxHealthRecords:]

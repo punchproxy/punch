@@ -35,86 +35,81 @@ type relayGroupConfig struct {
 }
 
 type relayGroupStatus struct {
-	Name                     string           `json:"name" yaml:"name"`
-	Type                     string           `json:"type" yaml:"type"`
-	RelayCount               int              `json:"relay_count" yaml:"relay_count"`
-	Selected                 bool             `json:"selected" yaml:"selected"`
-	Select                   string           `json:"select" yaml:"select"`
-	CurrentRelay             string           `json:"current_relay,omitempty" yaml:"current_relay,omitempty"`
-	CurrentStatus            string           `json:"current_status,omitempty" yaml:"current_status,omitempty"`
-	CurrentLatency           int64            `json:"current_latency_ms,omitempty" yaml:"current_latency_ms,omitempty"`
-	CurrentTCPConnectLatency int64            `json:"current_tcp_connect_latency_ms,omitempty" yaml:"current_tcp_connect_latency_ms,omitempty"`
-	RemoteAddress            string           `json:"remote_address,omitempty" yaml:"remote_address,omitempty"`
-	CheckInterval            int64            `json:"check_interval,omitempty" yaml:"check_interval,omitempty"`
-	LastCheckedAt            time.Time        `json:"last_checked_at,omitempty" yaml:"last_checked_at,omitempty"`
-	NextCheckAt              time.Time        `json:"next_check_at,omitempty" yaml:"next_check_at,omitempty"`
-	LastRefreshedAt          time.Time        `json:"last_refreshed_at,omitempty" yaml:"last_refreshed_at,omitempty"`
-	NextRefreshAt            time.Time        `json:"next_refresh_at,omitempty" yaml:"next_refresh_at,omitempty"`
-	RefreshInterval          int64            `json:"refresh_interval,omitempty" yaml:"refresh_interval,omitempty"`
-	Error                    string           `json:"error,omitempty" yaml:"error,omitempty"`
-	Config                   relayGroupConfig `json:"config" yaml:"config"`
+	Name            string           `json:"name" yaml:"name"`
+	Type            string           `json:"type" yaml:"type"`
+	RelayCount      int              `json:"relay_count" yaml:"relay_count"`
+	Selected        bool             `json:"selected" yaml:"selected"`
+	Select          string           `json:"select" yaml:"select"`
+	CurrentRelay    string           `json:"current_relay,omitempty" yaml:"current_relay,omitempty"`
+	CurrentStatus   string           `json:"current_status,omitempty" yaml:"current_status,omitempty"`
+	CurrentLatency  int64            `json:"current_latency_ms,omitempty" yaml:"current_latency_ms,omitempty"`
+	RemoteAddress   string           `json:"remote_address,omitempty" yaml:"remote_address,omitempty"`
+	CheckInterval   int64            `json:"check_interval,omitempty" yaml:"check_interval,omitempty"`
+	LastCheckedAt   time.Time        `json:"last_checked_at,omitempty" yaml:"last_checked_at,omitempty"`
+	NextCheckAt     time.Time        `json:"next_check_at,omitempty" yaml:"next_check_at,omitempty"`
+	LastRefreshedAt time.Time        `json:"last_refreshed_at,omitempty" yaml:"last_refreshed_at,omitempty"`
+	NextRefreshAt   time.Time        `json:"next_refresh_at,omitempty" yaml:"next_refresh_at,omitempty"`
+	RefreshInterval int64            `json:"refresh_interval,omitempty" yaml:"refresh_interval,omitempty"`
+	Error           string           `json:"error,omitempty" yaml:"error,omitempty"`
+	Config          relayGroupConfig `json:"config" yaml:"config"`
 }
 
 type relayHealth struct {
-	Name              string         `json:"name" yaml:"name"`
-	Group             string         `json:"group" yaml:"group"`
-	Type              string         `json:"type" yaml:"type"`
-	Addr              string         `json:"addr" yaml:"addr"`
-	Status            string         `json:"status" yaml:"status"`
-	Latency           int64          `json:"latency_ms" yaml:"latency_ms"`
-	TCPConnectLatency int64          `json:"tcp_connect_latency_ms,omitempty" yaml:"tcp_connect_latency_ms,omitempty"`
-	CheckInterval     int64          `json:"check_interval,omitempty" yaml:"check_interval,omitempty"`
-	LastCheckedAt     time.Time      `json:"last_checked_at,omitempty" yaml:"last_checked_at,omitempty"`
-	LastRefreshedAt   time.Time      `json:"last_refreshed_at,omitempty" yaml:"last_refreshed_at,omitempty"`
-	NextRefreshAt     time.Time      `json:"next_refresh_at,omitempty" yaml:"next_refresh_at,omitempty"`
-	RefreshInterval   int64          `json:"refresh_interval,omitempty" yaml:"refresh_interval,omitempty"`
-	Selected          bool           `json:"selected" yaml:"selected"`
-	GroupMode         string         `json:"group_mode,omitempty" yaml:"group_mode,omitempty"`
-	GroupSourceURL    string         `json:"group_source_url,omitempty" yaml:"group_source_url,omitempty"`
-	Error             string         `json:"error,omitempty" yaml:"error,omitempty"`
-	Spec              map[string]any `json:"spec,omitempty" yaml:"spec,omitempty"`
-	History           []relayHistory `json:"history,omitempty" yaml:"history,omitempty"`
+	Name            string         `json:"name" yaml:"name"`
+	Group           string         `json:"group" yaml:"group"`
+	Type            string         `json:"type" yaml:"type"`
+	Addr            string         `json:"addr" yaml:"addr"`
+	Status          string         `json:"status" yaml:"status"`
+	Latency         int64          `json:"latency_ms" yaml:"latency_ms"`
+	CheckInterval   int64          `json:"check_interval,omitempty" yaml:"check_interval,omitempty"`
+	LastCheckedAt   time.Time      `json:"last_checked_at,omitempty" yaml:"last_checked_at,omitempty"`
+	LastRefreshedAt time.Time      `json:"last_refreshed_at,omitempty" yaml:"last_refreshed_at,omitempty"`
+	NextRefreshAt   time.Time      `json:"next_refresh_at,omitempty" yaml:"next_refresh_at,omitempty"`
+	RefreshInterval int64          `json:"refresh_interval,omitempty" yaml:"refresh_interval,omitempty"`
+	Selected        bool           `json:"selected" yaml:"selected"`
+	GroupMode       string         `json:"group_mode,omitempty" yaml:"group_mode,omitempty"`
+	GroupSourceURL  string         `json:"group_source_url,omitempty" yaml:"group_source_url,omitempty"`
+	Error           string         `json:"error,omitempty" yaml:"error,omitempty"`
+	Spec            map[string]any `json:"spec,omitempty" yaml:"spec,omitempty"`
+	History         []relayHistory `json:"history,omitempty" yaml:"history,omitempty"`
 }
 
 type relayHistory struct {
-	Time              time.Time `json:"time" yaml:"time"`
-	Status            string    `json:"status" yaml:"status"`
-	Latency           int64     `json:"latency_ms,omitempty" yaml:"latency_ms,omitempty"`
-	TCPConnectLatency int64     `json:"tcp_connect_latency_ms,omitempty" yaml:"tcp_connect_latency_ms,omitempty"`
+	Time    time.Time `json:"time" yaml:"time"`
+	Status  string    `json:"status" yaml:"status"`
+	Latency int64     `json:"latency_ms,omitempty" yaml:"latency_ms,omitempty"`
 }
 
 type relayGroupRow struct {
-	Name              string    `json:"name" yaml:"name"`
-	Type              string    `json:"type" yaml:"type"`
-	Relays            int       `json:"relays" yaml:"relays"`
-	Select            string    `json:"select" yaml:"select"`
-	Selected          string    `json:"selected" yaml:"selected"`
-	Relay             string    `json:"relay" yaml:"relay"`
-	Status            string    `json:"status" yaml:"status"`
-	Latency           latencyMS `json:"latency_ms" yaml:"latency_ms"`
-	TCPConnectLatency latencyMS `json:"tcp_connect_latency_ms" yaml:"tcp_connect_latency_ms"`
-	TTL               string    `json:"ttl" yaml:"ttl"`
-	Remote            string    `json:"remote,omitempty" yaml:"remote,omitempty"`
-	LastCheckedAt     string    `json:"last_checked_at,omitempty" yaml:"last_checked_at,omitempty"`
-	NextCheckAt       string    `json:"next_check_at,omitempty" yaml:"next_check_at,omitempty"`
-	LastRefreshedAt   string    `json:"last_refreshed_at,omitempty" yaml:"last_refreshed_at,omitempty"`
-	NextRefreshAt     string    `json:"next_refresh_at,omitempty" yaml:"next_refresh_at,omitempty"`
-	Error             string    `json:"error,omitempty" yaml:"error,omitempty"`
+	Name            string    `json:"name" yaml:"name"`
+	Type            string    `json:"type" yaml:"type"`
+	Relays          int       `json:"relays" yaml:"relays"`
+	Select          string    `json:"select" yaml:"select"`
+	Selected        string    `json:"selected" yaml:"selected"`
+	Relay           string    `json:"relay" yaml:"relay"`
+	Status          string    `json:"status" yaml:"status"`
+	Latency         latencyMS `json:"latency_ms" yaml:"latency_ms"`
+	TTL             string    `json:"ttl" yaml:"ttl"`
+	Remote          string    `json:"remote,omitempty" yaml:"remote,omitempty"`
+	LastCheckedAt   string    `json:"last_checked_at,omitempty" yaml:"last_checked_at,omitempty"`
+	NextCheckAt     string    `json:"next_check_at,omitempty" yaml:"next_check_at,omitempty"`
+	LastRefreshedAt string    `json:"last_refreshed_at,omitempty" yaml:"last_refreshed_at,omitempty"`
+	NextRefreshAt   string    `json:"next_refresh_at,omitempty" yaml:"next_refresh_at,omitempty"`
+	Error           string    `json:"error,omitempty" yaml:"error,omitempty"`
 }
 
 type relayRow struct {
-	Group             string    `json:"group" yaml:"group"`
-	Relay             string    `json:"relay" yaml:"relay"`
-	Type              string    `json:"type" yaml:"type"`
-	Status            string    `json:"status" yaml:"status"`
-	Latency           latencyMS `json:"latency_ms" yaml:"latency_ms"`
-	TCPConnectLatency latencyMS `json:"tcp_connect_latency_ms" yaml:"tcp_connect_latency_ms"`
-	Selected          string    `json:"selected" yaml:"selected"`
-	Addr              string    `json:"addr,omitempty" yaml:"addr,omitempty"`
-	Remote            string    `json:"remote,omitempty" yaml:"remote,omitempty"`
-	LastCheckedAt     string    `json:"last_checked_at,omitempty" yaml:"last_checked_at,omitempty"`
-	LastRefreshedAt   string    `json:"last_refreshed_at,omitempty" yaml:"last_refreshed_at,omitempty"`
-	Error             string    `json:"error,omitempty" yaml:"error,omitempty"`
+	Group           string    `json:"group" yaml:"group"`
+	Relay           string    `json:"relay" yaml:"relay"`
+	Type            string    `json:"type" yaml:"type"`
+	Status          string    `json:"status" yaml:"status"`
+	Latency         latencyMS `json:"latency_ms" yaml:"latency_ms"`
+	Selected        string    `json:"selected" yaml:"selected"`
+	Addr            string    `json:"addr,omitempty" yaml:"addr,omitempty"`
+	Remote          string    `json:"remote,omitempty" yaml:"remote,omitempty"`
+	LastCheckedAt   string    `json:"last_checked_at,omitempty" yaml:"last_checked_at,omitempty"`
+	LastRefreshedAt string    `json:"last_refreshed_at,omitempty" yaml:"last_refreshed_at,omitempty"`
+	Error           string    `json:"error,omitempty" yaml:"error,omitempty"`
 }
 
 type relayProviderFile struct {
@@ -1022,15 +1017,14 @@ func printCheckResults(w io.Writer, relays []relayHealth) error {
 	rows := make([]relayRow, 0, len(relays))
 	for _, r := range relays {
 		rows = append(rows, relayRow{
-			Group:             r.Group,
-			Relay:             relayShortName(r.Name, r.Group),
-			Status:            formatOptional(r.Status),
-			Latency:           latencyMS(r.Latency),
-			TCPConnectLatency: latencyMS(r.TCPConnectLatency),
+			Group:   r.Group,
+			Relay:   relayShortName(r.Name, r.Group),
+			Status:  formatOptional(r.Status),
+			Latency: latencyMS(r.Latency),
 		})
 	}
 	printer, err := klo.PrinterFromFlag("", &klo.Specs{
-		DefaultColumnSpec: "RELAY GROUP:{.Group},RELAY:{.Relay},STATUS:{.Status},TC LATENCY:{.TCPConnectLatency},LATENCY:{.Latency}",
+		DefaultColumnSpec: "RELAY GROUP:{.Group},RELAY:{.Relay},STATUS:{.Status},LATENCY:{.Latency}",
 	})
 	if err != nil {
 		return err
@@ -1091,8 +1085,8 @@ func writeRelayGroups(w io.Writer, groups []relayGroupStatus, flags listFlags) e
 		flags.output = ""
 	}
 	printer, err := klo.PrinterFromFlag(flags.output, &klo.Specs{
-		DefaultColumnSpec: "NAME:{.Name},TYPE:{.Type},RELAYS:{.Relays},SELECT:{.Select},SELECTED:{.Selected},RELAY:{.Relay},STATUS:{.Status},LATENCY:{.Latency},TC_LATENCY:{.TCPConnectLatency},TTL:{.TTL}",
-		WideColumnSpec:    "NAME:{.Name},TYPE:{.Type},RELAYS:{.Relays},SELECT:{.Select},SELECTED:{.Selected},RELAY:{.Relay},STATUS:{.Status},LATENCY:{.Latency},TC_LATENCY:{.TCPConnectLatency},REMOTE:{.Remote},LAST-REFRESHED:{.LastRefreshedAt},NEXT-REFRESH:{.NextRefreshAt},TTL:{.TTL},ERROR:{.Error}",
+		DefaultColumnSpec: "NAME:{.Name},TYPE:{.Type},RELAYS:{.Relays},SELECT:{.Select},SELECTED:{.Selected},RELAY:{.Relay},STATUS:{.Status},LATENCY:{.Latency},TTL:{.TTL}",
+		WideColumnSpec:    "NAME:{.Name},TYPE:{.Type},RELAYS:{.Relays},SELECT:{.Select},SELECTED:{.Selected},RELAY:{.Relay},STATUS:{.Status},LATENCY:{.Latency},REMOTE:{.Remote},LAST-REFRESHED:{.LastRefreshedAt},NEXT-REFRESH:{.NextRefreshAt},TTL:{.TTL},ERROR:{.Error}",
 		GoTemplateArg:     flags.template,
 	})
 	if err != nil {
@@ -1110,8 +1104,8 @@ func writeRelays(w io.Writer, relays []relayHealth, flags listFlags) error {
 		flags.output = ""
 	}
 	printer, err := klo.PrinterFromFlag(flags.output, &klo.Specs{
-		DefaultColumnSpec: "GROUP:{.Group},RELAY:{.Relay},TYPE:{.Type},STATUS:{.Status},LATENCY:{.Latency},TC_LATENCY:{.TCPConnectLatency},SELECTED:{.Selected}",
-		WideColumnSpec:    "GROUP:{.Group},RELAY:{.Relay},TYPE:{.Type},STATUS:{.Status},LATENCY:{.Latency},TC_LATENCY:{.TCPConnectLatency},SELECTED:{.Selected},ADDR:{.Addr},REMOTE:{.Remote},LAST-CHECKED:{.LastCheckedAt},LAST-REFRESHED:{.LastRefreshedAt},ERROR:{.Error}",
+		DefaultColumnSpec: "GROUP:{.Group},RELAY:{.Relay},TYPE:{.Type},STATUS:{.Status},LATENCY:{.Latency},SELECTED:{.Selected}",
+		WideColumnSpec:    "GROUP:{.Group},RELAY:{.Relay},TYPE:{.Type},STATUS:{.Status},LATENCY:{.Latency},SELECTED:{.Selected},ADDR:{.Addr},REMOTE:{.Remote},LAST-CHECKED:{.LastCheckedAt},LAST-REFRESHED:{.LastRefreshedAt},ERROR:{.Error}",
 		GoTemplateArg:     flags.template,
 	})
 	if err != nil {
@@ -1129,22 +1123,21 @@ func relayGroupRows(groups []relayGroupStatus) []relayGroupRow {
 	rows := make([]relayGroupRow, 0, len(groups))
 	for _, group := range groups {
 		rows = append(rows, relayGroupRow{
-			Name:              group.Name,
-			Type:              formatOptional(group.Type),
-			Relays:            group.RelayCount,
-			Select:            formatOptional(group.Select),
-			Selected:          formatBool(group.Selected),
-			Relay:             formatOptional(group.CurrentRelay),
-			Status:            formatOptional(group.CurrentStatus),
-			Latency:           latencyMS(group.CurrentLatency),
-			TCPConnectLatency: latencyMS(group.CurrentTCPConnectLatency),
-			TTL:               formatRemaining(now, group.NextRefreshAt),
-			Remote:            formatOptional(group.RemoteAddress),
-			LastCheckedAt:     formatTime(group.LastCheckedAt),
-			NextCheckAt:       formatTime(group.NextCheckAt),
-			LastRefreshedAt:   formatTime(group.LastRefreshedAt),
-			NextRefreshAt:     formatTime(group.NextRefreshAt),
-			Error:             formatOptional(group.Error),
+			Name:            group.Name,
+			Type:            formatOptional(group.Type),
+			Relays:          group.RelayCount,
+			Select:          formatOptional(group.Select),
+			Selected:        formatBool(group.Selected),
+			Relay:           formatOptional(group.CurrentRelay),
+			Status:          formatOptional(group.CurrentStatus),
+			Latency:         latencyMS(group.CurrentLatency),
+			TTL:             formatRemaining(now, group.NextRefreshAt),
+			Remote:          formatOptional(group.RemoteAddress),
+			LastCheckedAt:   formatTime(group.LastCheckedAt),
+			NextCheckAt:     formatTime(group.NextCheckAt),
+			LastRefreshedAt: formatTime(group.LastRefreshedAt),
+			NextRefreshAt:   formatTime(group.NextRefreshAt),
+			Error:           formatOptional(group.Error),
 		})
 	}
 	return rows
@@ -1154,18 +1147,17 @@ func relayRows(relays []relayHealth) []relayRow {
 	rows := make([]relayRow, 0, len(relays))
 	for _, relay := range relays {
 		rows = append(rows, relayRow{
-			Group:             relay.Group,
-			Relay:             relayShortName(relay.Name, relay.Group),
-			Type:              formatOptional(relay.Type),
-			Status:            formatOptional(relay.Status),
-			Latency:           latencyMS(relay.Latency),
-			TCPConnectLatency: latencyMS(relay.TCPConnectLatency),
-			Selected:          formatBool(relay.Selected),
-			Addr:              formatOptional(relay.Addr),
-			Remote:            formatOptional(relay.GroupSourceURL),
-			LastCheckedAt:     formatTime(relay.LastCheckedAt),
-			LastRefreshedAt:   formatTime(relay.LastRefreshedAt),
-			Error:             formatOptional(relay.Error),
+			Group:           relay.Group,
+			Relay:           relayShortName(relay.Name, relay.Group),
+			Type:            formatOptional(relay.Type),
+			Status:          formatOptional(relay.Status),
+			Latency:         latencyMS(relay.Latency),
+			Selected:        formatBool(relay.Selected),
+			Addr:            formatOptional(relay.Addr),
+			Remote:          formatOptional(relay.GroupSourceURL),
+			LastCheckedAt:   formatTime(relay.LastCheckedAt),
+			LastRefreshedAt: formatTime(relay.LastRefreshedAt),
+			Error:           formatOptional(relay.Error),
 		})
 	}
 	return rows
@@ -1188,7 +1180,7 @@ func writeRelayGroupDescribe(w io.Writer, group relayGroupStatus) error {
 func writeRelayDescribe(w io.Writer, relay relayHealth) error {
 	now := time.Now()
 	fmt.Fprintf(w, "Name:            %s\n", formatOptional(relay.Name))
-	fmt.Fprintf(w, "Status:          %s\n", formatHealthSummary(relay.Status, relay.Latency, relay.TCPConnectLatency))
+	fmt.Fprintf(w, "Status:          %s\n", formatHealthSummary(relay.Status, relay.Latency))
 	fmt.Fprintf(w, "Selected:        %s\n", formatSelectedWithMode(relay.Selected, relay.GroupMode))
 	fmt.Fprintf(w, "Last Checked:    %s\n", formatScheduledTime(now, relay.LastCheckedAt, relayNextCheckAt(relay), relay.CheckInterval))
 	fmt.Fprintf(w, "Last Refreshed:  %s\n", formatScheduledTime(now, relay.LastRefreshedAt, relay.NextRefreshAt, relay.RefreshInterval))
@@ -1198,11 +1190,10 @@ func writeRelayDescribe(w io.Writer, relay relayHealth) error {
 		fmt.Fprintln(w, "  -")
 	} else {
 		for _, record := range relay.History {
-			fmt.Fprintf(w, "  - %s  %s  latency %s  tc latency %s\n",
+			fmt.Fprintf(w, "  - %s  %s  latency %s\n",
 				formatTime(record.Time),
 				formatOptional(record.Status),
 				formatLatency(record.Latency),
-				formatLatency(record.TCPConnectLatency),
 			)
 		}
 	}
@@ -1245,15 +1236,15 @@ func formatCurrentRelay(group relayGroupStatus) string {
 	if status == "-" {
 		return relay
 	}
-	return fmt.Sprintf("%s (%s, latency %s, tc latency %s)", relay, status, formatLatency(group.CurrentLatency), formatLatency(group.CurrentTCPConnectLatency))
+	return fmt.Sprintf("%s (%s, latency %s)", relay, status, formatLatency(group.CurrentLatency))
 }
 
-func formatHealthSummary(status string, latency, tcpLatency int64) string {
+func formatHealthSummary(status string, latency int64) string {
 	status = formatOptional(status)
 	if status == "-" {
 		return status
 	}
-	return fmt.Sprintf("%s (latency %s, tc latency %s)", status, formatLatency(latency), formatLatency(tcpLatency))
+	return fmt.Sprintf("%s (latency %s)", status, formatLatency(latency))
 }
 
 func formatScheduledTime(now, last, next time.Time, intervalSeconds int64) string {

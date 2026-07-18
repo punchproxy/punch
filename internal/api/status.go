@@ -32,7 +32,6 @@ type statusRelayResponse struct {
 	ActiveRelay            string             `json:"active_relay"`
 	Status                 string             `json:"status,omitempty"`
 	LatencyMS              int64              `json:"latency_ms,omitempty"`
-	TCPConnectLatencyMS    int64              `json:"tcp_connect_latency_ms,omitempty"`
 	URLTestLatencyMS       int64              `json:"url_test_latency_ms,omitempty"`
 	LastCheckedAt          time.Time          `json:"last_checked_at,omitempty"`
 	ActiveSessions         int                `json:"active_sessions"`
@@ -86,7 +85,6 @@ func (s *Server) relayStatus(now time.Time) statusRelayResponse {
 			}
 			status.Status = string(h.Status)
 			status.LatencyMS = h.Latency
-			status.TCPConnectLatencyMS = h.TCPConnectLatency
 			status.URLTestLatencyMS = h.URLTestLatency
 			status.LastCheckedAt = h.LastCheckedAt
 			break

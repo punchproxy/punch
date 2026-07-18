@@ -182,6 +182,7 @@ func (h *handler) handleTCPConn(conn net.Conn, source M.Socksaddr, destination M
 	)
 
 	dialCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	dialStart := time.Now()
 	remoteConn, err := h.selector.DialContext(dialCtx, "tcp", target)
 	cancel()
 	if err != nil {
@@ -192,6 +193,7 @@ func (h *handler) handleTCPConn(conn net.Conn, source M.Socksaddr, destination M
 	defer remoteConn.Close()
 
 	sess.Relay = h.selector.ActiveName()
+	h.selector.RecordConnectLatency(sess.Relay, time.Since(dialStart))
 	sess.MarkConnected()
 	h.bindSessionCloser(sess, releaseFakeIP, conn, remoteConn)
 	releaseFakeIP = nil

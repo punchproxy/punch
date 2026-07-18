@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -48,7 +47,7 @@ func (s *Selector) Benchmark() {
 		if result.check.err != nil {
 			slog.Debug("relay health check failed", "group", result.target.group.name, "relay", result.target.dialer.Name(), "error", result.check.err)
 		} else {
-			slog.Debug("relay health check result", "group", result.target.group.name, "relay", result.target.dialer.Name(), "tcp_connect_latency_ms", h.TCPConnectLatency, "url_test_latency_ms", h.URLTestLatency, "status", h.Status)
+			slog.Debug("relay health check result", "group", result.target.group.name, "relay", result.target.dialer.Name(), "url_test_latency_ms", h.URLTestLatency, "status", h.Status)
 		}
 	}
 	s.resetSelectedCheckFailuresLocked()
@@ -357,7 +356,6 @@ type benchmarkGroup struct {
 }
 
 type relayCheckResult struct {
-	tcpLatency time.Duration
 	urlLatency time.Duration
 	err        error
 }
@@ -365,15 +363,11 @@ type relayCheckResult struct {
 func (s *Selector) testRelay(d Dialer) relayCheckResult {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	tcpLatency, err := d.TCPConnectLatency(ctx)
-	if err != nil {
-		return relayCheckResult{err: fmt.Errorf("tcp connect to relay: %w", err)}
-	}
 	urlLatency, err := s.testRelayURL(ctx, d)
 	if err != nil {
-		return relayCheckResult{tcpLatency: tcpLatency, err: err}
+		return relayCheckResult{err: err}
 	}
-	return relayCheckResult{tcpLatency: tcpLatency, urlLatency: urlLatency}
+	return relayCheckResult{urlLatency: urlLatency}
 }
 
 func (s *Selector) testRelayURL(ctx context.Context, d Dialer) (time.Duration, error) {
@@ -384,23 +378,11 @@ func testURLConnectivity(rawURL string, dialContext DialContextFunc) relayCheckR
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	target, err := parseCheckURL(rawURL)
-	if err != nil {
-		return relayCheckResult{err: err}
-	}
-	address, err := checkURLAddress(target)
-	if err != nil {
-		return relayCheckResult{err: err}
-	}
-	tcpLatency, err := tcpConnectLatencyWithDialer(ctx, dialContext, address)
-	if err != nil {
-		return relayCheckResult{err: fmt.Errorf("tcp connect to check url: %w", err)}
-	}
 	urlLatency, err := testURLLatency(ctx, rawURL, dialContext)
 	if err != nil {
-		return relayCheckResult{tcpLatency: tcpLatency, err: err}
+		return relayCheckResult{err: err}
 	}
-	return relayCheckResult{tcpLatency: tcpLatency, urlLatency: urlLatency}
+	return relayCheckResult{urlLatency: urlLatency}
 }
 
 func testURLLatency(ctx context.Context, rawURL string, dialContext DialContextFunc) (time.Duration, error) {
@@ -442,44 +424,6 @@ func parseCheckURL(rawURL string) (*url.URL, error) {
 	return target, nil
 }
 
-func checkURLAddress(target *url.URL) (string, error) {
-	port := target.Port()
-	if port == "" {
-		switch target.Scheme {
-		case "http":
-			port = "80"
-		case "https":
-			port = "443"
-		default:
-			return "", fmt.Errorf("unsupported test url scheme %q", target.Scheme)
-		}
-	}
-	return net.JoinHostPort(target.Hostname(), port), nil
-}
-
-func tcpConnectLatencyWithDialer(ctx context.Context, dialContext DialContextFunc, address string) (time.Duration, error) {
-	address, err := resolveProbeAddr(ctx, address)
-	if err != nil {
-		return 0, err
-	}
-	start := time.Now()
-	var conn net.Conn
-	if dialContext != nil {
-		conn, err = dialContext(ctx, "tcp", address)
-	} else {
-		conn, err = (&net.Dialer{}).DialContext(ctx, "tcp", address)
-	}
-	if err != nil {
-		return 0, err
-	}
-	_ = conn.Close()
-	latency := time.Since(start)
-	if latency <= 0 {
-		latency = time.Nanosecond
-	}
-	return latency, nil
-}
-
 func testURLLatencyOnce(ctx context.Context, client *http.Client, rawURL string) (time.Duration, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodHead, rawURL, nil)
 	if err != nil {
@@ -503,7 +447,6 @@ func testURLLatencyOnce(ctx context.Context, client *http.Client, rawURL string)
 
 func (s *Selector) applyRelayCheckResultLocked(h *RelayHealth, result relayCheckResult) {
 	h.LastCheckedAt = time.Now()
-	h.TCPConnectLatency = durationMillis(result.tcpLatency)
 	h.URLTestLatency = durationMillis(result.urlLatency)
 	if result.err != nil {
 		h.Status = HealthDown
@@ -522,10 +465,9 @@ func (s *Selector) applyRelayCheckResultLocked(h *RelayHealth, result relayCheck
 
 func appendRelayHealthRecord(h *RelayHealth) {
 	h.History = append(h.History, HealthRecord{
-		Time:              h.LastCheckedAt,
-		Status:            h.Status,
-		Latency:           h.Latency,
-		TCPConnectLatency: h.TCPConnectLatency,
+		Time:    h.LastCheckedAt,
+		Status:  h.Status,
+		Latency: h.Latency,
 	})
 	if len(h.History) > maxHealthRecords {
 		h.History = h.History[len(h.History)-maxHealthRecords:]

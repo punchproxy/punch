@@ -279,52 +279,88 @@ export function BarList({ items, formatValue, label = "Ranked values" }) {
 export function ConnectivityBars({ data = {}, formatValue }) {
   const slotCount = 60;
   const history = (data.history || []).slice(-slotCount);
-  const key = history.map((item) => `${item.time}:${item.status}:${item.relay || ""}:${item.tcp_connect_latency_ms}:${item.latency_ms}`).join("|");
-  const height = 96;
+  const key = history.map((item) => `${item.time}:${item.status}:${item.relay || ""}:${item.latency_ms}`).join("|");
+  const height = 54;
   const refs = useChart((svg, width, tooltip, container) => {
-    const metrics = [
-      { key: "tcp_connect_latency_ms", label: "TCP", current: data.tcp_connect_latency_ms },
-      { key: "latency_ms", label: "RTT", current: data.latency_ms },
-    ];
-    const labelWidth = 48, plotStart = labelWidth + 7, plotWidth = Math.max(80, width - plotStart - 2), rowHeight = 42;
+    const labelWidth = 48, plotStart = labelWidth + 7, plotWidth = Math.max(80, width - plotStart - 2), top = 7;
     // Fixed scale: full bar height represents 1s, longer latencies clamp to full height.
     const y = d3.scaleLinear().domain([0, 1000]).range([2, 28]).clamp(true);
     const slots = Array.from({ length: slotCount }, (_, index) => history[index - (slotCount - history.length)] || null);
     const x = d3.scaleBand().domain(d3.range(slotCount)).range([plotStart, plotStart + plotWidth]).padding(.18);
     svg.selectAll("*").remove();
     svg.attr("viewBox", `0 0 ${width} ${height}`).attr("width", width).attr("height", height);
-    metrics.forEach((metric, metricIndex) => {
-      const top = 7 + metricIndex * rowHeight;
-      svg.append("text").attr("class", "connectivity-label").attr("x", 0).attr("y", top + 13).text(metric.label);
-      svg.append("text").attr("class", "connectivity-value").attr("x", 0).attr("y", top + 27).text(formatValue(metric.current));
-      // Down slots render as full-height red bars so outages stand out.
-      const barHeight = (item) => {
-        if (!item) return 2;
-        if (item.status === "down") return 28;
-        return y(Number(item[metric.key]) || 0);
-      };
-      svg.append("g").selectAll("rect").data(slots).join("rect")
-        .attr("x", (_, index) => x(index)).attr("width", x.bandwidth())
-        .attr("y", (item) => top + 30 - barHeight(item))
-        .attr("height", barHeight)
-        .attr("rx", 1).attr("fill", (item) => connectivityColor(item, metric.key));
-      // Full-height invisible hit targets: the visible bars are only a few pixels tall.
-      const hits = svg.append("g").selectAll("rect").data(slots).join("rect")
-        .attr("x", (_, index) => x(index)).attr("width", x.bandwidth())
-        .attr("y", top).attr("height", 32).attr("fill", "transparent");
-      bindTooltip(hits.filter((item) => item), tooltip, container, (item) => [metric.label === "TCP" ? "TCP connect" : "Round trip", [formatValue(item[metric.key]), item.status || "unknown", item.relay, d3.timeFormat("%H:%M:%S")(new Date(item.time))].filter(Boolean)], false);
-    });
-  }, [key, data.latency_ms, data.tcp_connect_latency_ms, data.status, formatValue]);
-  return <ChartShell refs={refs} className="connectivity-bars" label="TCP connect and round-trip latency history"/>;
+    svg.append("text").attr("class", "connectivity-label").attr("x", 0).attr("y", top + 13).text("RTT");
+    svg.append("text").attr("class", "connectivity-value").attr("x", 0).attr("y", top + 27).text(formatValue(data.latency_ms));
+    // Down slots render as full-height red bars so outages stand out.
+    const barHeight = (item) => {
+      if (!item) return 2;
+      if (item.status === "down") return 28;
+      return y(Number(item.latency_ms) || 0);
+    };
+    svg.append("g").selectAll("rect").data(slots).join("rect")
+      .attr("x", (_, index) => x(index)).attr("width", x.bandwidth())
+      .attr("y", (item) => top + 30 - barHeight(item))
+      .attr("height", barHeight)
+      .attr("rx", 1).attr("fill", (item) => connectivityColor(item));
+    // Full-height invisible hit targets: the visible bars are only a few pixels tall.
+    const hits = svg.append("g").selectAll("rect").data(slots).join("rect")
+      .attr("x", (_, index) => x(index)).attr("width", x.bandwidth())
+      .attr("y", top).attr("height", 32).attr("fill", "transparent");
+    bindTooltip(hits.filter((item) => item), tooltip, container, (item) => ["Round trip", [formatValue(item.latency_ms), item.status || "unknown", item.relay, d3.timeFormat("%H:%M:%S")(new Date(item.time))].filter(Boolean)], false);
+  }, [key, data.latency_ms, data.status, formatValue]);
+  return <ChartShell refs={refs} className="connectivity-bars" label="Round-trip latency history"/>;
 }
 
-function connectivityColor(item, metric) {
+function connectivityColor(item) {
   if (!item) return css("--hover");
   if (item.status === "down") return css("--red");
-  const value = Number(item[metric]) || 0;
-  if (value <= 0) return css("--hover"); // metric not measured (e.g. TCP probe skipped for UDP relays)
+  const value = Number(item.latency_ms) || 0;
+  if (value <= 0) return css("--hover");
   if (item.status === "degraded" || value > 500) return css("--amber");
   return css("--green");
+}
+
+// LineChart plots discrete latency samples over real time: one dot per
+// request, connected by a line, with time on the x axis.
+export function LineChart({ points = [], formatY = (value) => `${value} ms`, height = 150, label = "Latency over time", unit = "ms" }) {
+  const key = points.map((point) => `${point.time}:${point.value}:${point.detail || ""}`).join("|");
+  const refs = useChart((svg, width, tooltip, container) => {
+    const margin = { top: 16, right: 10, bottom: 26, left: 46 }, innerWidth = Math.max(1, width - margin.left - margin.right), innerHeight = height - margin.top - margin.bottom;
+    const data = points.map((point) => ({ ...point, date: new Date(point.time), value: Math.max(0, Number(point.value) || 0) })).filter((point) => !Number.isNaN(point.date.getTime()));
+    svg.selectAll("*").remove();
+    svg.attr("viewBox", `0 0 ${width} ${height}`).attr("width", width).attr("height", height);
+    if (data.length < 2) return;
+    const x = d3.scaleTime().domain(d3.extent(data, (point) => point.date)).range([0, innerWidth]);
+    const y = d3.scaleLinear().domain([0, Math.max(1, d3.max(data, (point) => point.value) * 1.1)]).nice(4).range([innerHeight, 0]);
+    const root = svg.append("g").attr("transform", `translate(${margin.left},${margin.top})`);
+    root.append("text").attr("class", "axis-unit").attr("x", 0).attr("y", -6).text(unit);
+    root.append("g").attr("class", "chart-grid").call(d3.axisLeft(y).ticks(4).tickSize(-innerWidth).tickFormat(""));
+    root.append("g").attr("class", "chart-axis y-axis").call(d3.axisLeft(y).ticks(4).tickFormat(formatY));
+    root.append("g").attr("class", "chart-axis x-axis").attr("transform", `translate(0,${innerHeight})`).call(d3.axisBottom(x).ticks(width < 460 ? 3 : 5).tickFormat(d3.timeFormat("%H:%M:%S")));
+    const line = d3.line().x((point) => x(point.date)).y((point) => y(point.value)).curve(d3.curveMonotoneX);
+    root.append("path").datum(data).attr("d", line).attr("fill", "none").attr("stroke", css("--orange")).attr("stroke-width", 1.6);
+    root.append("g").selectAll("circle").data(data).join("circle")
+      .attr("cx", (point) => x(point.date)).attr("cy", (point) => y(point.value))
+      .attr("r", 2).attr("fill", css("--orange"));
+    const marker = root.append("circle").attr("r", 3.5).attr("fill", css("--orange")).attr("visibility", "hidden");
+    const overlay = root.append("rect").attr("class", "chart-overlay").attr("width", innerWidth).attr("height", innerHeight).attr("fill", "transparent");
+    const showAt = (clientX, clientY) => {
+      const box = overlay.node().getBoundingClientRect();
+      const date = x.invert(clientX - box.left);
+      const index = d3.bisector((point) => point.date).center(data, date);
+      const point = data[index];
+      marker.attr("cx", x(point.date)).attr("cy", y(point.value)).attr("visibility", "visible");
+      showTooltipAtPointer(tooltip, clientX, clientY, d3.timeFormat("%H:%M:%S")(point.date), [formatY(point.value), point.detail].filter(Boolean));
+    };
+    overlay.on("pointermove", (event) => showAt(event.clientX, event.clientY))
+      .on("pointerleave", () => { marker.attr("visibility", "hidden"); hideTooltip(tooltip); });
+    const pointer = container._chartPointer;
+    if (pointer) {
+      const box = overlay.node().getBoundingClientRect();
+      if (pointer.x >= box.left && pointer.x <= box.right && pointer.y >= box.top && pointer.y <= box.bottom) showAt(pointer.x, pointer.y);
+    }
+  }, [key, formatY, height, label, unit]);
+  return <ChartShell refs={refs} className="line-chart" label={label}/>;
 }
 
 function truncate(value, maxLength) {

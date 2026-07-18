@@ -26,22 +26,21 @@ func (s *Selector) HealthList() []RelayHealth {
 			selected := groupSelected && di == activeDialerIdx
 			recentAborts, totalAborts := s.StreamAbortStats(h.Name)
 			result = append(result, RelayHealth{
-				Name:              h.Name,
-				Group:             h.Group,
-				Type:              h.Type,
-				Addr:              h.Addr,
-				Status:            h.Status,
-				Latency:           h.Latency,
-				TCPConnectLatency: h.TCPConnectLatency,
-				URLTestLatency:    h.URLTestLatency,
-				CheckInterval:     int64(s.relayCheckIntervalLocked(selected).Seconds()),
-				LastCheckedAt:     h.LastCheckedAt,
-				LastRefreshedAt:   g.lastRefreshedAt,
-				NextRefreshAt:     g.nextRefreshAt,
-				RefreshInterval:   int64(g.refreshEvery.Seconds()),
-				Selected:          selected,
-				GroupMode:         displaySelectMode(h.GroupMode),
-				GroupSourceURL:    h.GroupSourceURL,
+				Name:               h.Name,
+				Group:              h.Group,
+				Type:               h.Type,
+				Addr:               h.Addr,
+				Status:             h.Status,
+				Latency:            h.Latency,
+				URLTestLatency:     h.URLTestLatency,
+				CheckInterval:      int64(s.relayCheckIntervalLocked(selected).Seconds()),
+				LastCheckedAt:      h.LastCheckedAt,
+				LastRefreshedAt:    g.lastRefreshedAt,
+				NextRefreshAt:      g.nextRefreshAt,
+				RefreshInterval:    int64(g.refreshEvery.Seconds()),
+				Selected:           selected,
+				GroupMode:          displaySelectMode(h.GroupMode),
+				GroupSourceURL:     h.GroupSourceURL,
 				Spec:               cloneRelaySpec(h.Spec),
 				History:            cloneHealthRecords(h.History),
 				Error:              h.Error,
@@ -92,7 +91,6 @@ func (s *Selector) GroupList() []GroupStatus {
 			if h := s.health[s.healthKey(g.name, d.Name())]; h != nil {
 				status.CurrentStatus = h.Status
 				status.CurrentLatency = h.Latency
-				status.CurrentTCPConnectLatency = h.TCPConnectLatency
 				status.History = cloneHealthRecords(h.History)
 				status.LastCheckedAt = h.LastCheckedAt
 				if s.fullCheckInterval > 0 && !h.LastCheckedAt.IsZero() && g.name != directGroupName {

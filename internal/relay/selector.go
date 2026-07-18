@@ -40,25 +40,24 @@ const (
 )
 
 type RelayHealth struct {
-	Name              string         `json:"name"`
-	Group             string         `json:"group"`
-	Type              string         `json:"type"`
-	Addr              string         `json:"addr"`
-	Status            HealthStatus   `json:"status"`
-	Latency           int64          `json:"latency_ms"`
-	TCPConnectLatency int64          `json:"tcp_connect_latency_ms,omitempty"`
-	URLTestLatency    int64          `json:"url_test_latency_ms,omitempty"`
-	CheckInterval     int64          `json:"check_interval,omitempty"`
-	LastCheckedAt     time.Time      `json:"last_checked_at,omitempty"`
-	LastRefreshedAt   time.Time      `json:"last_refreshed_at,omitempty"`
-	NextRefreshAt     time.Time      `json:"next_refresh_at,omitempty"`
-	RefreshInterval   int64          `json:"refresh_interval,omitempty"`
-	Selected          bool           `json:"selected"`
-	GroupMode         string         `json:"group_mode,omitempty"`
-	GroupSourceURL    string         `json:"group_source_url,omitempty"`
-	Spec              map[string]any `json:"spec,omitempty"`
-	History           []HealthRecord `json:"history,omitempty"`
-	Error             string         `json:"error,omitempty"`
+	Name            string         `json:"name"`
+	Group           string         `json:"group"`
+	Type            string         `json:"type"`
+	Addr            string         `json:"addr"`
+	Status          HealthStatus   `json:"status"`
+	Latency         int64          `json:"latency_ms"`
+	URLTestLatency  int64          `json:"url_test_latency_ms,omitempty"`
+	CheckInterval   int64          `json:"check_interval,omitempty"`
+	LastCheckedAt   time.Time      `json:"last_checked_at,omitempty"`
+	LastRefreshedAt time.Time      `json:"last_refreshed_at,omitempty"`
+	NextRefreshAt   time.Time      `json:"next_refresh_at,omitempty"`
+	RefreshInterval int64          `json:"refresh_interval,omitempty"`
+	Selected        bool           `json:"selected"`
+	GroupMode       string         `json:"group_mode,omitempty"`
+	GroupSourceURL  string         `json:"group_source_url,omitempty"`
+	Spec            map[string]any `json:"spec,omitempty"`
+	History         []HealthRecord `json:"history,omitempty"`
+	Error           string         `json:"error,omitempty"`
 	// Stream aborts count relay-side mid-transfer failures on live traffic,
 	// which connectivity probes on fresh connections do not observe.
 	RecentStreamAborts int          `json:"recent_stream_aborts,omitempty"`
@@ -68,10 +67,9 @@ type RelayHealth struct {
 }
 
 type HealthRecord struct {
-	Time              time.Time    `json:"time"`
-	Status            HealthStatus `json:"status"`
-	Latency           int64        `json:"latency_ms,omitempty"`
-	TCPConnectLatency int64        `json:"tcp_connect_latency_ms,omitempty"`
+	Time    time.Time    `json:"time"`
+	Status  HealthStatus `json:"status"`
+	Latency int64        `json:"latency_ms,omitempty"`
 	// Relay names the relay that carried the check, for histories that span
 	// relay switches (the outside connectivity history). Empty for per-relay
 	// histories, where the relay is implicit.
@@ -79,24 +77,23 @@ type HealthRecord struct {
 }
 
 type GroupStatus struct {
-	Name                     string         `json:"name"`
-	Type                     string         `json:"type"`
-	RelayCount               int            `json:"relay_count"`
-	Selected                 bool           `json:"selected"`
-	Select                   string         `json:"select"`
-	CurrentRelay             string         `json:"current_relay,omitempty"`
-	CurrentStatus            HealthStatus   `json:"current_status,omitempty"`
-	CurrentLatency           int64          `json:"current_latency_ms,omitempty"`
-	CurrentTCPConnectLatency int64          `json:"current_tcp_connect_latency_ms,omitempty"`
-	History                  []HealthRecord `json:"history,omitempty"`
-	RemoteAddress            string         `json:"remote_address,omitempty"`
-	CheckInterval            int64          `json:"check_interval,omitempty"`
-	LastCheckedAt            time.Time      `json:"last_checked_at,omitempty"`
-	NextCheckAt              time.Time      `json:"next_check_at,omitempty"`
-	LastRefreshedAt          time.Time      `json:"last_refreshed_at,omitempty"`
-	NextRefreshAt            time.Time      `json:"next_refresh_at,omitempty"`
-	RefreshInterval          int64          `json:"refresh_interval,omitempty"`
-	Error                    string         `json:"error,omitempty"`
+	Name            string         `json:"name"`
+	Type            string         `json:"type"`
+	RelayCount      int            `json:"relay_count"`
+	Selected        bool           `json:"selected"`
+	Select          string         `json:"select"`
+	CurrentRelay    string         `json:"current_relay,omitempty"`
+	CurrentStatus   HealthStatus   `json:"current_status,omitempty"`
+	CurrentLatency  int64          `json:"current_latency_ms,omitempty"`
+	History         []HealthRecord `json:"history,omitempty"`
+	RemoteAddress   string         `json:"remote_address,omitempty"`
+	CheckInterval   int64          `json:"check_interval,omitempty"`
+	LastCheckedAt   time.Time      `json:"last_checked_at,omitempty"`
+	NextCheckAt     time.Time      `json:"next_check_at,omitempty"`
+	LastRefreshedAt time.Time      `json:"last_refreshed_at,omitempty"`
+	NextRefreshAt   time.Time      `json:"next_refresh_at,omitempty"`
+	RefreshInterval int64          `json:"refresh_interval,omitempty"`
+	Error           string         `json:"error,omitempty"`
 }
 
 type group struct {
@@ -166,6 +163,8 @@ type Selector struct {
 
 	abortMu sync.Mutex
 	aborts  map[string]*abortStats
+
+	connects connectSamples
 }
 
 func NewSelector(

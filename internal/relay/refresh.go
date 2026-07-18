@@ -152,7 +152,6 @@ func (s *Selector) reloadGroup(name string, fetch bool) error {
 			if old := oldHealth[key]; old != nil && old.Type == h.Type && old.Addr == h.Addr {
 				h.Status = old.Status
 				h.Latency = old.Latency
-				h.TCPConnectLatency = old.TCPConnectLatency
 				h.URLTestLatency = old.URLTestLatency
 				h.LastCheckedAt = old.LastCheckedAt
 				h.Error = old.Error

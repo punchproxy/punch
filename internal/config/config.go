@@ -20,14 +20,14 @@ import (
 
 // Config is the top-level runtime configuration.
 type Config struct {
-	LogLevel             string   `json:"log_level"`
-	LogFile              string   `json:"log_file,omitempty"`
-	AssetRefreshInterval int      `json:"asset_refresh_interval"`
-	DNS                  DNS      `json:"dns"`
-	TUN                  TUN      `json:"tun"`
-	Relay                Relay    `json:"relay"`
-	Check                Check    `json:"check"`
-	API                  API      `json:"api"`
+	LogLevel             string `json:"log_level"`
+	LogFile              string `json:"log_file,omitempty"`
+	AssetRefreshInterval int    `json:"asset_refresh_interval"`
+	DNS                  DNS    `json:"dns"`
+	TUN                  TUN    `json:"tun"`
+	Relay                Relay  `json:"relay"`
+	Check                Check  `json:"check"`
+	API                  API    `json:"api"`
 }
 
 type DNS struct {

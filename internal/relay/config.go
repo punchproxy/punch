@@ -106,7 +106,6 @@ func (s *Selector) populateHealthLocked(previous map[string]*RelayHealth) {
 			if old := previous[key]; old != nil && old.Type == h.Type && old.Addr == h.Addr {
 				h.Status = old.Status
 				h.Latency = old.Latency
-				h.TCPConnectLatency = old.TCPConnectLatency
 				h.URLTestLatency = old.URLTestLatency
 				h.LastCheckedAt = old.LastCheckedAt
 				h.History = cloneHealthRecords(old.History)

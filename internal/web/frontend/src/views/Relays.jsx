@@ -37,9 +37,9 @@ export default function Relays() {
     <div className="section-title">Groups</div>
     <div className="grid cols-3">{groups.length ? groups.map((group) => <GroupCard key={group.name} group={group} busy={busy} act={act}/>) : <Empty>No relay groups configured.</Empty>}</div>
     <div className="section-title">Relays <span>({shown.length})</span></div>
-    <Card><div className="table-wrap"><table className="data responsive-table relays-table"><thead><tr><th>Relay</th><th>Group</th><th>Type</th><th>Status</th><th>TCP connect</th><th>Roundtrip</th><th>Checked</th><th>Actions</th></tr></thead><tbody>
+    <Card><div className="table-wrap"><table className="data responsive-table relays-table"><thead><tr><th>Relay</th><th>Group</th><th>Type</th><th>Status</th><th>Roundtrip</th><th>Checked</th><th>Actions</th></tr></thead><tbody>
       {shown.map((relay) => <RelayRow key={`${relay.group}-${relay.name}`} relay={relay} busy={busy} act={act}/>)}
-      {!shown.length && <tr className="empty-row"><td colSpan="8"><Empty>No relays.</Empty></td></tr>}
+      {!shown.length && <tr className="empty-row"><td colSpan="7"><Empty>No relays.</Empty></td></tr>}
     </tbody></table></div></Card>
   </>;
 }
@@ -74,7 +74,6 @@ function RelayRow({ relay, busy, act }) {
   return <tr className={relay.selected ? "selected-row" : ""}>
     <td data-label="Relay"><div className="flex"><span className="mono">{name}</span>{relay.selected && <Pill color="orange">active</Pill>}</div><small className="mono faint block">{relay.addr}</small></td>
     <td data-label="Group" className="muted">{relay.group}</td><td data-label="Type"><Tag>{relay.type || "?"}</Tag></td><td data-label="Status"><div className="flex"><Pill color={color}>{relay.status || "unknown"}</Pill>{relay.recent_stream_aborts > 0 && <span title={`${relay.recent_stream_aborts} relay-side stream abort(s) in the last minute (${relay.stream_aborts} total this run). The relay accepts new connections but is killing live streams.`}><Pill color="amber">{relay.recent_stream_aborts} aborts/1m</Pill></span>}</div></td>
-    <td data-label="TCP connect"><LatencyCell history={relay.history} metric="tcp_connect_latency_ms" current={relay.tcp_connect_latency_ms} label={`${name} TCP connect latency history`}/></td>
     <td data-label="Roundtrip"><LatencyCell history={relay.history} metric="latency_ms" current={latency} label={`${name} roundtrip latency history`}/></td>
     <td data-label="Checked" className="faint nowrap">{timeAgo(relay.last_checked_at)}</td>
     <td data-label="Actions"><div className="row-actions">{!relay.selected && <button className="btn btn-sm" disabled={busy.has(selectKey)} onClick={() => act(selectKey, () => api.post(`/relays/${encodeURIComponent(name)}/select?group=${encodeURIComponent(relay.group)}`), `Selected ${name}`)}>Select</button>}<button className="btn btn-sm btn-ghost" disabled={busy.has(checkKey)} onClick={() => act(checkKey, () => api.post(`/relays/${encodeURIComponent(name)}/check?group=${encodeURIComponent(relay.group)}`), `Checking ${name}`)}>Check</button></div></td>

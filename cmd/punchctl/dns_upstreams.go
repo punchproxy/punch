@@ -30,14 +30,14 @@ type upstreamStats struct {
 }
 
 type upstreamRow struct {
-	URL               string `json:"url" yaml:"url"`
-	Queries           int64  `json:"queries" yaml:"queries"`
+	URL               string    `json:"url" yaml:"url"`
+	Queries           int64     `json:"queries" yaml:"queries"`
 	AverageLatency    latencyMS `json:"average_latency_ms" yaml:"average_latency_ms"`
 	LastLatency       latencyMS `json:"last_latency_ms" yaml:"last_latency_ms"`
-	Bootstrap         string `json:"bootstrap,omitempty" yaml:"bootstrap,omitempty"`
-	LastQueriedAt     string `json:"last_queried_at,omitempty" yaml:"last_queried_at,omitempty"`
-	LastQueriedDomain string `json:"last_queried_domain,omitempty" yaml:"last_queried_domain,omitempty"`
-	Domains           string `json:"domains,omitempty" yaml:"domains,omitempty"`
+	Bootstrap         string    `json:"bootstrap,omitempty" yaml:"bootstrap,omitempty"`
+	LastQueriedAt     string    `json:"last_queried_at,omitempty" yaml:"last_queried_at,omitempty"`
+	LastQueriedDomain string    `json:"last_queried_domain,omitempty" yaml:"last_queried_domain,omitempty"`
+	Domains           string    `json:"domains,omitempty" yaml:"domains,omitempty"`
 }
 
 type createUpstreamRequest struct {

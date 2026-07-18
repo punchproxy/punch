@@ -133,25 +133,22 @@ func TestStatusCommand(t *testing.T) {
 			Connectivity: statusConnectivity{
 				CheckIntervalMS: 10000,
 				Domestic: statusConnectivityCheck{
-					URL:                 "http://connect.rom.miui.com/generate_204",
-					Status:              "healthy",
-					LatencyMS:           45,
-					TCPConnectLatencyMS: 12,
-					LastCheckedAt:       time.Date(2026, 4, 28, 12, 0, 30, 0, time.UTC),
+					URL:           "http://connect.rom.miui.com/generate_204",
+					Status:        "healthy",
+					LatencyMS:     45,
+					LastCheckedAt: time.Date(2026, 4, 28, 12, 0, 30, 0, time.UTC),
 				},
 				Outside: statusConnectivityCheck{
-					URL:                 "http://www.gstatic.com/generate_204",
-					Status:              "healthy",
-					LatencyMS:           88,
-					TCPConnectLatencyMS: 31,
-					LastCheckedAt:       time.Date(2026, 4, 28, 12, 1, 0, 0, time.UTC),
+					URL:           "http://www.gstatic.com/generate_204",
+					Status:        "healthy",
+					LatencyMS:     88,
+					LastCheckedAt: time.Date(2026, 4, 28, 12, 1, 0, 0, time.UTC),
 				},
 			},
 			Relay: statusRelay{
 				ActiveRelay:            "auto / hk-1",
 				Status:                 "healthy",
 				LatencyMS:              88,
-				TCPConnectLatencyMS:    31,
 				URLTestLatencyMS:       88,
 				LastCheckedAt:          time.Date(2026, 4, 28, 12, 1, 0, 0, time.UTC),
 				ActiveSessions:         4,
@@ -184,7 +181,7 @@ func TestStatusCommand(t *testing.T) {
 		t.Fatalf("Execute() error = %v", err)
 	}
 	text := out.String()
-	for _, want := range []string{"General:", "Client Version: dev", "Server Version: v1.2.3", "Relay:          10 requests, last google.com", "Cache:          42 entries, 7 hits", "Health (every 10s):", "  Internet:", "    TCP Connect:", "last 12 ms @", "    Round Trip:", "last 45 ms @", "  Relayed:", "last 31 ms @", "last 88 ms @", "\x1b[32m▁\x1b[0m", "\x1b[32m▂\x1b[0m", "\x1b[32m▃\x1b[0m", "Active:         auto / hk-1", "Latency:        88ms (tcp 31ms, url 88ms)", "Sessions:       4 active, 99 total processed", "Download:       3.0 MB total, 2.0 KB/s", "UDP Packets:    300 enqueued, 7 dropped (5 queue full, 1 closed, 1 pending)"} {
+	for _, want := range []string{"General:", "Client Version: dev", "Server Version: v1.2.3", "Relay:          10 requests, last google.com", "Cache:          42 entries, 7 hits", "Health (every 10s):", "  Internet:", "last 45 ms @", "  Relayed:", "last 88 ms @", "\x1b[32m▂\x1b[0m", "\x1b[32m▃\x1b[0m", "Active:         auto / hk-1", "Latency:        88ms (url 88ms)", "Sessions:       4 active, 99 total processed", "Download:       3.0 MB total, 2.0 KB/s", "UDP Packets:    300 enqueued, 7 dropped (5 queue full, 1 closed, 1 pending)"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("output missing %q:\n%s", want, text)
 		}
@@ -194,8 +191,8 @@ func TestStatusCommand(t *testing.T) {
 			t.Fatalf("output should hide %q:\n%s", hidden, text)
 		}
 	}
-	if got := countHealthChartBars(text); got != 120 {
-		t.Fatalf("health chart block count = %d, want 120:\n%s", got, text)
+	if got := countHealthChartBars(text); got != 60 {
+		t.Fatalf("health chart block count = %d, want 60:\n%s", got, text)
 	}
 }
 
@@ -256,17 +253,8 @@ func TestHealthChartEncodesLatencyHeight(t *testing.T) {
 		ansiGreen + "▇" + ansiReset +
 		ansiYellow + "█" + ansiReset +
 		ansiRed + "█" + ansiReset
-	if got := formatHealthChart(records, healthMetricRoundTrip); !strings.HasSuffix(got, want) {
+	if got := formatHealthChart(records); !strings.HasSuffix(got, want) {
 		t.Fatalf("chart suffix = %q, want %q", got, want)
-	}
-
-	tcpRecords := []statusHealthRecord{{
-		Status:              "healthy",
-		LatencyMS:           650,
-		TCPConnectLatencyMS: 10,
-	}}
-	if got, want := formatHealthChart(tcpRecords, healthMetricTCPConnect), ansiGreen+"▁"+ansiReset; !strings.HasSuffix(got, want) {
-		t.Fatalf("tcp chart suffix = %q, want %q", got, want)
 	}
 }
 
@@ -915,18 +903,17 @@ func TestRelayGroupsCommand(t *testing.T) {
 			t.Fatalf("path = %q, want /api/relaygroups", r.URL.Path)
 		}
 		_ = json.NewEncoder(w).Encode([]relayGroupStatus{{
-			Name:                     "main",
-			Type:                     "remote",
-			RelayCount:               3,
-			Selected:                 true,
-			Select:                   "auto",
-			CurrentRelay:             "hk-1",
-			CurrentStatus:            "healthy",
-			CurrentLatency:           42,
-			CurrentTCPConnectLatency: 11,
-			RemoteAddress:            "https://provider.example/sub.yaml",
-			LastRefreshedAt:          now,
-			NextRefreshAt:            now.Add(time.Hour),
+			Name:            "main",
+			Type:            "remote",
+			RelayCount:      3,
+			Selected:        true,
+			Select:          "auto",
+			CurrentRelay:    "hk-1",
+			CurrentStatus:   "healthy",
+			CurrentLatency:  42,
+			RemoteAddress:   "https://provider.example/sub.yaml",
+			LastRefreshedAt: now,
+			NextRefreshAt:   now.Add(time.Hour),
 		}})
 	}))
 	defer server.Close()
@@ -943,7 +930,7 @@ func TestRelayGroupsCommand(t *testing.T) {
 		t.Fatalf("Execute() error = %v", err)
 	}
 	text := out.String()
-	for _, want := range []string{"NAME", "RELAYS", "SELECTED", "TC_LATENCY", "TTL", "main", "remote", "hk-1", "42ms", "11ms"} {
+	for _, want := range []string{"NAME", "RELAYS", "SELECTED", "LATENCY", "TTL", "main", "remote", "hk-1", "42ms"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("output missing %q:\n%s", want, text)
 		}
@@ -953,25 +940,24 @@ func TestRelayGroupsCommand(t *testing.T) {
 	}
 }
 
-func TestRelaysCommandShowsTCPLatencyAndNoModeColumn(t *testing.T) {
+func TestRelaysCommandShowsLatencyAndNoModeColumn(t *testing.T) {
 	now := time.Now().Add(-time.Minute)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/relays" {
 			t.Fatalf("path = %q, want /api/relays", r.URL.Path)
 		}
 		_ = json.NewEncoder(w).Encode([]relayHealth{{
-			Name:              "main / hk-1",
-			Group:             "main",
-			Type:              "ss",
-			Addr:              "relay.example:443",
-			Status:            "healthy",
-			Latency:           42,
-			TCPConnectLatency: 7,
-			LastCheckedAt:     now,
-			LastRefreshedAt:   now,
-			Selected:          true,
-			GroupMode:         "manual",
-			GroupSourceURL:    "https://provider.example/sub.yaml",
+			Name:            "main / hk-1",
+			Group:           "main",
+			Type:            "ss",
+			Addr:            "relay.example:443",
+			Status:          "healthy",
+			Latency:         42,
+			LastCheckedAt:   now,
+			LastRefreshedAt: now,
+			Selected:        true,
+			GroupMode:       "manual",
+			GroupSourceURL:  "https://provider.example/sub.yaml",
 		}})
 	}))
 	defer server.Close()
@@ -988,7 +974,7 @@ func TestRelaysCommandShowsTCPLatencyAndNoModeColumn(t *testing.T) {
 		t.Fatalf("Execute() error = %v", err)
 	}
 	text := out.String()
-	for _, want := range []string{"GROUP", "RELAY", "LATENCY", "TC_LATENCY", "main", "hk-1", "42ms", "7ms"} {
+	for _, want := range []string{"GROUP", "RELAY", "LATENCY", "main", "hk-1", "42ms"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("output missing %q:\n%s", want, text)
 		}
@@ -1133,7 +1119,7 @@ func TestRelayGroupGetDescribe(t *testing.T) {
 		t.Fatalf("Execute() error = %v", err)
 	}
 	text := out.String()
-	for _, want := range []string{"Name:", "main", "Relays:            1 (keep HK)", "Selected:          no (auto)", "Current Relay:", "hk-1 (untested, latency -, tc latency -)", "Last Refreshed:"} {
+	for _, want := range []string{"Name:", "main", "Relays:            1 (keep HK)", "Selected:          no (auto)", "Current Relay:", "hk-1 (untested, latency -)", "Last Refreshed:"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("describe output missing %q:\n%s", want, text)
 		}
@@ -1259,10 +1245,9 @@ func TestRelayGetDescribeShowsSpec(t *testing.T) {
 			Selected:  false,
 			GroupMode: "auto",
 			History: []relayHistory{{
-				Time:              time.Date(2026, 4, 30, 1, 2, 3, 0, time.UTC),
-				Status:            "healthy",
-				Latency:           31,
-				TCPConnectLatency: 12,
+				Time:    time.Date(2026, 4, 30, 1, 2, 3, 0, time.UTC),
+				Status:  "healthy",
+				Latency: 31,
 			}},
 			Spec: map[string]any{"name": "hk-1", "type": "ss", "server": "relay.example"},
 		})
@@ -1281,7 +1266,7 @@ func TestRelayGetDescribeShowsSpec(t *testing.T) {
 		t.Fatalf("Execute() error = %v", err)
 	}
 	text := out.String()
-	for _, want := range []string{"Name:", "main / hk-1", "healthy (latency 31ms, tc latency -)", "Selected:        no (auto)", "History:", "healthy  latency 31ms  tc latency 12ms", "Spec:", "server"} {
+	for _, want := range []string{"Name:", "main / hk-1", "healthy (latency 31ms)", "Selected:        no (auto)", "History:", "healthy  latency 31ms", "Spec:", "server"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("relay describe output missing %q:\n%s", want, text)
 		}

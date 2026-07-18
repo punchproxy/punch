@@ -1,5 +1,5 @@
 import { useStatus } from "../App.jsx";
-import { AreaChart, ConnectivityBars, Donut, Sparkline } from "../charts.jsx";
+import { AreaChart, ConnectivityBars, Donut, LineChart, Sparkline } from "../charts.jsx";
 import { Card, CardHeader, Empty, Pill, StatTile } from "../components.jsx";
 import { fmtBytes, fmtLatency, fmtNum, fmtRate, fmtUptime, shortName, statusColor } from "../utils.js";
 
@@ -31,7 +31,7 @@ export default function Overview() {
       <Card><CardHeader title="DNS decisions"/><div className="card-body dns-decision-wrap"><Donut segments={[{label:"Relay",value:dns.relay?.requests||0,color:colors.relay},{label:"Direct",value:dns.direct?.requests||0,color:colors.direct},{label:"Reject",value:dns.reject?.requests||0,color:colors.reject}]} label={fmtNum(total)} sub="routed"/><div className="decision-legend"><Decision label="Relay" stat={dns.relay} color={colors.relay} total={total}/><Decision label="Direct" stat={dns.direct} color={colors.direct} total={total}/><Decision label="Reject" stat={dns.reject} color={colors.reject} total={total}/></div></div></Card>
     </div>
     <div className="grid cols-3 mt">
-      <Card><CardHeader title="Connectivity" sub={`every ${Math.round((connectivity.check_interval_ms || 0)/1000)}s`}/><div className="card-body"><Connection title="Internet (direct)" data={connectivity.domestic}/><hr/><Connection title="Relayed (outside)" data={connectivity.outside}/></div></Card>
+      <Card><CardHeader title="Connectivity" sub={`every ${Math.round((connectivity.check_interval_ms || 0)/1000)}s`}/><div className="card-body"><Connection title="Internet (direct)" data={connectivity.domestic}/><hr/><Connection title="Relayed (outside)" data={connectivity.outside}/><hr/><ConnectLatency samples={connectivity.connect_samples}/></div></Card>
       <Card><CardHeader title="Relay groups" sub={`${relayGroups.length} groups`}/><div className="card-body tight">{relayGroups.length ? relayGroups.map((group) => <GroupRow key={group.name} group={group}/>) : <Empty>No relay groups configured.</Empty>}</div></Card>
       <Card><CardHeader title="Daemon"/><div className="card-body"><dl className="kv"><dt>Version</dt><dd>{general.version || "—"}</dd><dt>Platform</dt><dd>{general.architecture || "—"}</dd><dt>Uptime</dt><dd>{fmtUptime(general.uptime_seconds)}</dd><dt>Memory</dt><dd>{fmtBytes(general.memory_bytes)}</dd><dt>Goroutines</dt><dd>{fmtNum(general.goroutines)}</dd><dt>Cache entries</dt><dd>{fmtNum(dns.cache_entries)}</dd><dt>UDP drops</dt><dd>{fmtNum(relay.udp?.packets_dropped)}</dd></dl></div></Card>
     </div>
@@ -53,6 +53,16 @@ function GroupRow({ group }) {
       <span className="mono">{shortName(group.current_relay, group.name) || "—"}{group.current_status ? ` · ${group.current_status}` : ""}</span>
       {history.some((value) => value > 0) ? <Sparkline values={history} times={records.map((record) => record.time)} max={1000} color={color} width={110} height={22} fill={false} formatValue={fmtLatency} label={`${group.name} latency history`}/> : <span className="faint">—</span>}
     </div>
+  </div>;
+}
+
+function ConnectLatency({ samples = [] }) {
+  const points = samples.map((sample) => ({ time: sample.at, value: sample.ms, detail: shortName(sample.relay) || "direct" }));
+  const last = samples.at(-1);
+  return <div className="connection">
+    <div className="spread"><strong>Connect latency</strong><span className="mono muted">{last ? fmtLatency(last.ms) : "—"}</span></div>
+    <div className="connection-url muted">per-request relay dial time, live traffic</div>
+    {points.length > 1 ? <LineChart points={points} formatY={fmtLatency} height={150} label="Per-request connect latency" unit="Connect ms"/> : <span className="faint">Not enough traffic recorded yet.</span>}
   </div>;
 }
 
