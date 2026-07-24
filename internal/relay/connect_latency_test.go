@@ -14,12 +14,13 @@ func TestConnectLatencySamplesChronologicalRing(t *testing.T) {
 	}
 
 	s.RecordConnectLatency("US / relay-1", 20*time.Millisecond)
-	s.RecordConnectLatency("US / relay-1", 0) // ignored
+	s.RecordConnectLatency("US / relay-1", 0)                // ignored
+	s.RecordConnectLatency("US / relay-1", time.Millisecond) // ignored
 	s.RecordConnectLatency("DIRECT", 5*time.Millisecond)
 
 	got := s.ConnectLatencySamples()
 	if len(got) != 2 {
-		t.Fatalf("samples = %d, want 2 (zero-duration sample must be dropped)", len(got))
+		t.Fatalf("samples = %d, want 2 (zero- and one-millisecond samples must be dropped)", len(got))
 	}
 	if got[0].Relay != "US / relay-1" || got[0].MS != 20 || got[1].Relay != "DIRECT" || got[1].MS != 5 {
 		t.Fatalf("samples = %+v", got)
@@ -43,5 +44,22 @@ func TestConnectLatencySamplesChronologicalRing(t *testing.T) {
 		if got[i].At.Before(got[i-1].At) {
 			t.Fatalf("sample %d out of order", i)
 		}
+	}
+}
+
+func TestConnectLatencySamplesOnlyIncludeLastTenMinutes(t *testing.T) {
+	now := time.Now()
+	s := &Selector{}
+	s.connects.add(ConnectSample{At: now.Add(-connectSampleWindow - time.Second), Relay: "old", MS: 20})
+	s.connects.add(ConnectSample{At: now.Add(-connectSampleWindow), Relay: "boundary", MS: 20})
+	s.connects.add(ConnectSample{At: now.Add(-time.Minute), Relay: "one-ms", MS: 1})
+	s.connects.add(ConnectSample{At: now.Add(-time.Minute), Relay: "recent", MS: 25})
+
+	got := s.connects.snapshot(now.Add(-connectSampleWindow))
+	if len(got) != 2 {
+		t.Fatalf("samples = %+v, want boundary and recent samples", got)
+	}
+	if got[0].Relay != "boundary" || got[1].Relay != "recent" || got[1].MS != 25 {
+		t.Fatalf("samples = %+v, want boundary followed by recent 25ms sample", got)
 	}
 }

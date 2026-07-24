@@ -28,6 +28,15 @@ export function fmtDuration(ms) {
 }
 
 export const fmtUptime = (seconds) => fmtDuration((Number(seconds) || 0) * 1000);
+export const connectLatencyWindowMS = 10 * 60 * 1000;
+
+export function filterConnectLatencySamples(samples, now = Date.now()) {
+  const cutoff = now - connectLatencyWindowMS;
+  return (samples || []).filter((sample) => {
+    const at = new Date(sample.at).getTime();
+    return Number(sample.ms) > 1 && at >= cutoff && at <= now;
+  });
+}
 
 export function fmtTime(iso) {
   if (!iso || iso.startsWith?.("0001")) return "—";

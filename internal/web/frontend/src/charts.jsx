@@ -322,15 +322,20 @@ function connectivityColor(item) {
 
 // LineChart plots discrete latency samples over real time: one dot per
 // request, connected by a line, with time on the x axis.
-export function LineChart({ points = [], formatY = (value) => `${value} ms`, height = 150, label = "Latency over time", unit = "ms" }) {
+export function LineChart({ points = [], formatY = (value) => `${value} ms`, height = 150, label = "Latency over time", unit = "ms", windowSeconds = 0, windowEnd = 0 }) {
   const key = points.map((point) => `${point.time}:${point.value}:${point.detail || ""}`).join("|");
   const refs = useChart((svg, width, tooltip, container) => {
     const margin = { top: 16, right: 10, bottom: 26, left: 46 }, innerWidth = Math.max(1, width - margin.left - margin.right), innerHeight = height - margin.top - margin.bottom;
-    const data = points.map((point) => ({ ...point, date: new Date(point.time), value: Math.max(0, Number(point.value) || 0) })).filter((point) => !Number.isNaN(point.date.getTime()));
+    const end = windowSeconds > 0 ? new Date(windowEnd || Date.now()) : null;
+    const start = end ? new Date(end.getTime() - windowSeconds * 1000) : null;
+    const data = points.map((point) => ({ ...point, date: new Date(point.time), value: Math.max(0, Number(point.value) || 0) })).filter((point) => {
+      if (Number.isNaN(point.date.getTime())) return false;
+      return !start || (point.date >= start && point.date <= end);
+    });
     svg.selectAll("*").remove();
     svg.attr("viewBox", `0 0 ${width} ${height}`).attr("width", width).attr("height", height);
     if (data.length < 2) return;
-    const x = d3.scaleTime().domain(d3.extent(data, (point) => point.date)).range([0, innerWidth]);
+    const x = d3.scaleTime().domain(start ? [start, end] : d3.extent(data, (point) => point.date)).range([0, innerWidth]);
     const y = d3.scaleLinear().domain([0, Math.max(1, d3.max(data, (point) => point.value) * 1.1)]).nice(4).range([innerHeight, 0]);
     const root = svg.append("g").attr("transform", `translate(${margin.left},${margin.top})`);
     root.append("text").attr("class", "axis-unit").attr("x", 0).attr("y", -6).text(unit);
@@ -359,7 +364,7 @@ export function LineChart({ points = [], formatY = (value) => `${value} ms`, hei
       const box = overlay.node().getBoundingClientRect();
       if (pointer.x >= box.left && pointer.x <= box.right && pointer.y >= box.top && pointer.y <= box.bottom) showAt(pointer.x, pointer.y);
     }
-  }, [key, formatY, height, label, unit]);
+  }, [key, formatY, height, label, unit, windowSeconds, windowEnd]);
   return <ChartShell refs={refs} className="line-chart" label={label}/>;
 }
 

@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { gaugeGeometry } from "./math.js";
-import { cacheStateColor, clientIP, filterSessions, fmtTime, sumBy } from "./utils.js";
+import { cacheStateColor, clientIP, connectLatencyWindowMS, filterConnectLatencySamples, filterSessions, fmtTime, sumBy } from "./utils.js";
 
 test("semicircular gauges never request a major arc", () => {
   assert.equal(gaugeGeometry(300, 500).largeArcFlag, 0);
@@ -41,4 +41,15 @@ test("invalid and zero timestamps render a placeholder", () => {
   assert.equal(fmtTime(), "—");
   assert.equal(fmtTime("0001-01-01T00:00:00Z"), "—");
   assert.equal(fmtTime("not-a-date"), "—");
+});
+
+test("connect latency keeps ten minutes and removes one-millisecond samples", () => {
+  const now = Date.parse("2026-07-24T12:00:00Z");
+  const samples = [
+    { at: new Date(now - connectLatencyWindowMS - 1).toISOString(), ms: 20 },
+    { at: new Date(now - connectLatencyWindowMS).toISOString(), ms: 25 },
+    { at: new Date(now - 1000).toISOString(), ms: 1 },
+    { at: new Date(now - 500).toISOString(), ms: 30 },
+  ];
+  assert.deepEqual(filterConnectLatencySamples(samples, now), [samples[1], samples[3]]);
 });

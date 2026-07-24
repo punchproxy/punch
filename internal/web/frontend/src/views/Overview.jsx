@@ -1,7 +1,7 @@
 import { useStatus } from "../App.jsx";
 import { AreaChart, ConnectivityBars, Donut, LineChart, Sparkline } from "../charts.jsx";
 import { Card, CardHeader, Empty, Pill, StatTile } from "../components.jsx";
-import { fmtBytes, fmtLatency, fmtNum, fmtRate, fmtUptime, shortName, statusColor } from "../utils.js";
+import { connectLatencyWindowMS, filterConnectLatencySamples, fmtBytes, fmtLatency, fmtNum, fmtRate, fmtUptime, shortName, statusColor } from "../utils.js";
 
 const colors = { relay: "var(--orange)", direct: "var(--teal)", reject: "var(--red)", up: "var(--orange)", down: "var(--blue)" };
 const statusColors = { green: "var(--green)", amber: "var(--amber)", red: "var(--red)", blue: "var(--blue)", gray: "var(--text-faint)" };
@@ -57,12 +57,13 @@ function GroupRow({ group }) {
 }
 
 function ConnectLatency({ samples = [] }) {
-  const points = samples.map((sample) => ({ time: sample.at, value: sample.ms, detail: shortName(sample.relay) || "direct" }));
-  const last = samples.at(-1);
+  const now = Date.now(), recent = filterConnectLatencySamples(samples, now);
+  const points = recent.map((sample) => ({ time: sample.at, value: sample.ms, detail: shortName(sample.relay) || "direct" }));
+  const last = recent.at(-1);
   return <div className="connection">
     <div className="spread"><strong>Connect latency</strong><span className="mono muted">{last ? fmtLatency(last.ms) : "—"}</span></div>
-    <div className="connection-url muted">per-request relay dial time, live traffic</div>
-    {points.length > 1 ? <LineChart points={points} formatY={fmtLatency} height={150} label="Per-request connect latency" unit="Connect ms"/> : <span className="faint">Not enough traffic recorded yet.</span>}
+    <div className="connection-url muted">per-request relay dial time · last 10 min</div>
+    {points.length > 1 ? <LineChart points={points} formatY={fmtLatency} height={150} label="Per-request connect latency over the last 10 minutes" unit="Connect ms" windowSeconds={connectLatencyWindowMS / 1000} windowEnd={now}/> : <span className="faint">Not enough traffic recorded yet.</span>}
   </div>;
 }
 
