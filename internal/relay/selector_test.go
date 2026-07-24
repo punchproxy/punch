@@ -448,6 +448,37 @@ func TestApplyConfigPreservesExistingHealthAndMarksNewRelaysPending(t *testing.T
 	}
 }
 
+func TestApplyConfigRetiresAdaptersWithoutClosingActiveStreams(t *testing.T) {
+	st, err := config.Open(filepath.Join(t.TempDir(), "punch.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+
+	selector, err := NewSelector(config.Relay{}, config.Check{}, nil, nil, st, eventbus.New(), nil)
+	if err != nil {
+		t.Fatalf("NewSelector() error = %v", err)
+	}
+	old := &closeTrackingDialer{}
+	t.Cleanup(func() { _ = old.Close() })
+
+	selector.mu.Lock()
+	selector.groups = []*group{{
+		name:    "old",
+		mode:    "manual",
+		dialers: []Dialer{old},
+	}}
+	selector.active.Store(0)
+	selector.mu.Unlock()
+
+	if err := selector.ApplyConfig(config.Relay{}, config.Check{}); err != nil {
+		t.Fatalf("ApplyConfig() error = %v", err)
+	}
+	if old.closed.Load() {
+		t.Fatal("superseded adapter was closed while live streams may still reference it")
+	}
+}
+
 func TestHealthListIncludesRelaySpec(t *testing.T) {
 	st, err := config.Open(filepath.Join(t.TempDir(), "punch.db"))
 	if err != nil {

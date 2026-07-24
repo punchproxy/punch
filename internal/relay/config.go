@@ -15,7 +15,6 @@ func (s *Selector) ApplyConfig(relayCfg config.Relay, checkCfg config.Check) err
 
 	s.mu.Lock()
 	prevActive := s.activeNameLocked()
-	oldGroups := s.groups
 	oldHealth := s.health
 	selections := s.snapshotSelectionsLocked()
 	if selections.ActiveGroup == "" {
@@ -48,11 +47,11 @@ func (s *Selector) ApplyConfig(relayCfg config.Relay, checkCfg config.Check) err
 	s.saveSelectionsLocked()
 	s.mu.Unlock()
 
-	for _, g := range oldGroups {
-		for _, d := range g.dialers {
-			_ = d.Close()
-		}
-	}
+	// Do not explicitly close superseded Mihomo adapters. Connections returned
+	// by Mihomo retain an adapter reference, so its auto-close finalizer can
+	// release pooled resources after the last live stream finishes. Closing the
+	// old group here would reset active multiplexed sessions during live config
+	// changes.
 
 	s.notifyCheckConfigChanged()
 	s.publishRelayChange(prevActive)
