@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/netip"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -197,6 +198,7 @@ func (d *LazyRelayDialer) getDialer(ctx context.Context, allowResolve bool) (Dia
 			if len(ips) == 0 {
 				return nil, fmt.Errorf("resolve relay server %q: no addresses returned", server)
 			}
+			preserveImplicitAnyTLSServerName(mapping, d.relayType, server)
 			mapping["server"] = ips[0].String()
 			if ips[0].Is6() {
 				mapping["ip-version"] = "ipv6"
@@ -219,6 +221,16 @@ func (d *LazyRelayDialer) getDialer(ctx context.Context, allowResolve bool) (Dia
 	d.resolved = next
 	d.expiresAt = expiresAt
 	return d.resolved, nil
+}
+
+func preserveImplicitAnyTLSServerName(mapping map[string]any, relayType, server string) {
+	if !strings.EqualFold(relayType, "anytls") {
+		return
+	}
+	sni, _ := mapping["sni"].(string)
+	if strings.TrimSpace(sni) == "" {
+		mapping["sni"] = server
+	}
 }
 
 func NewDialerFromMapping(mapping map[string]any) (Dialer, error) {

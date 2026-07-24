@@ -59,3 +59,30 @@ func TestExpiredRelayDNSRetiresAdapterWithoutClosingActiveStreams(t *testing.T) 
 		t.Fatal("expired adapter was closed while live streams may still reference it")
 	}
 }
+
+func TestPreserveImplicitAnyTLSServerName(t *testing.T) {
+	tests := []struct {
+		name      string
+		relayType string
+		sni       string
+		want      string
+	}{
+		{name: "implicit AnyTLS SNI", relayType: "anytls", want: "relay.example"},
+		{name: "mixed-case AnyTLS type", relayType: "AnyTLS", want: "relay.example"},
+		{name: "explicit AnyTLS SNI", relayType: "anytls", sni: "front.example", want: "front.example"},
+		{name: "other relay type", relayType: "trojan", want: ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mapping := map[string]any{}
+			if tt.sni != "" {
+				mapping["sni"] = tt.sni
+			}
+			preserveImplicitAnyTLSServerName(mapping, tt.relayType, "relay.example")
+			got, _ := mapping["sni"].(string)
+			if got != tt.want {
+				t.Fatalf("sni = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
