@@ -212,9 +212,10 @@ func (d *LazyRelayDialer) getDialer(ctx context.Context, allowResolve bool) (Dia
 	if err != nil {
 		return nil, err
 	}
-	if d.resolved != nil {
-		_ = d.resolved.Close()
-	}
+	// Do not explicitly close the expired adapter here. Mihomo connections
+	// retain a reference to their adapter, and its auto-close finalizer releases
+	// pooled resources once the last live connection is gone. Closing it during
+	// DNS rotation would tear down active multiplexed sessions such as AnyTLS.
 	d.resolved = next
 	d.expiresAt = expiresAt
 	return d.resolved, nil
