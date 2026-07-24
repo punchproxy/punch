@@ -1,6 +1,6 @@
 import { useStatus } from "../App.jsx";
 import { AreaChart, ConnectivityBars, Donut, LineChart, Sparkline } from "../charts.jsx";
-import { Card, CardHeader, Empty, Pill, StatTile } from "../components.jsx";
+import { Card, CardHeader, Empty, Pill, StatTile, Tag } from "../components.jsx";
 import { connectLatencyWindowMS, filterConnectLatencySamples, fmtBytes, fmtLatency, fmtNum, fmtRate, fmtUptime, shortName, statusColor } from "../utils.js";
 
 const colors = { relay: "var(--orange)", direct: "var(--teal)", reject: "var(--red)", up: "var(--orange)", down: "var(--blue)" };
@@ -40,7 +40,8 @@ export default function Overview() {
 
 function Decision({ label, stat, color, total }) {
   const value = stat?.requests || 0, percent = total ? Math.round(value / total * 100) : 0;
-  return <div className="decision-row"><div className="spread"><span><i className="swatch" style={{background: color}}/>{label}</span><span className="mono muted">{fmtNum(value)} · {percent}%</span></div><div className="last-domain"><span>Last routed</span><span className="mono" title={stat?.last_domain}>{stat?.last_domain || "—"}</span></div></div>;
+  const lastTitle = stat?.last_domain ? `${stat.last_domain}${stat.last_qtype ? ` [${stat.last_qtype}]` : ""}` : undefined;
+  return <div className="decision-row"><div className="spread"><span><i className="swatch" style={{background: color}}/>{label}</span><span className="mono muted">{fmtNum(value)} · {percent}%</span></div><div className="last-domain"><span>Last routed</span><span className="last-domain-value" title={lastTitle}><span className="mono">{stat?.last_domain || "—"}</span>{stat?.last_domain && stat?.last_qtype && <Tag>{stat.last_qtype}</Tag>}</span></div></div>;
 }
 
 function GroupRow({ group }) {

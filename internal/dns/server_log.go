@@ -27,10 +27,13 @@ func (s *Server) addQueryLog(ql QueryLog) {
 	switch string(ql.Decision) {
 	case string(DecisionRelay), config.DecisionRelay:
 		s.lastRelayDomain = ql.Domain
+		s.lastRelayQType = ql.QType
 	case string(DecisionDirect), config.DecisionDirect:
 		s.lastDirectDomain = ql.Domain
+		s.lastDirectQType = ql.QType
 	case string(DecisionReject), config.DecisionReject:
 		s.lastRejectDomain = ql.Domain
+		s.lastRejectQType = ql.QType
 	}
 }
 

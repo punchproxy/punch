@@ -3,6 +3,7 @@ package dns
 type DecisionStats struct {
 	Requests   int64  `json:"requests"`
 	LastDomain string `json:"last_domain,omitempty"`
+	LastQType  string `json:"last_qtype,omitempty"`
 }
 
 type Stats struct {
@@ -26,8 +27,11 @@ func (s *Server) Stats() Stats {
 
 	s.mu.Lock()
 	stats.Relay.LastDomain = s.lastRelayDomain
+	stats.Relay.LastQType = s.lastRelayQType
 	stats.Direct.LastDomain = s.lastDirectDomain
+	stats.Direct.LastQType = s.lastDirectQType
 	stats.Reject.LastDomain = s.lastRejectDomain
+	stats.Reject.LastQType = s.lastRejectQType
 	s.mu.Unlock()
 	return stats
 }

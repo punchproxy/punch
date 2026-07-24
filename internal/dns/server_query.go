@@ -94,7 +94,7 @@ func (s *Server) serveMsgWithOptions(ctx context.Context, r *dns.Msg, source str
 		Time:     start,
 		Source:   source,
 		Domain:   domain,
-		QType:    dns.TypeToString[q.Qtype],
+		QType:    qtypeName(q.Qtype),
 		Decision: decision,
 		Result:   resultStr,
 		Upstream: upstream,

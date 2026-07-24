@@ -13,43 +13,43 @@ func TestStatsTracksLastDomainPerDecision(t *testing.T) {
 	server.rejectDecisions.Add(2)
 
 	for _, entry := range []QueryLog{
-		{Decision: DecisionRelay, Domain: "relay-old.example"},
-		{Decision: DecisionDirect, Domain: "direct.example"},
-		{Decision: DecisionReject, Domain: "reject-old.example"},
-		{Decision: DecisionRelay, Domain: "relay-new.example"},
-		{Decision: DecisionReject, Domain: "reject-new.example"},
-		{Decision: DecisionIgnore, Domain: "ignored.example"},
+		{Decision: DecisionRelay, Domain: "relay-old.example", QType: "A"},
+		{Decision: DecisionDirect, Domain: "direct.example", QType: "AAAA"},
+		{Decision: DecisionReject, Domain: "reject-old.example", QType: "PTR"},
+		{Decision: DecisionRelay, Domain: "relay-new.example", QType: "HTTPS"},
+		{Decision: DecisionReject, Domain: "reject-new.example", QType: "SVCB"},
+		{Decision: DecisionIgnore, Domain: "ignored.example", QType: "TXT"},
 	} {
 		server.addQueryLog(entry)
 	}
 
 	stats := server.Stats()
-	if stats.Relay.Requests != 2 || stats.Relay.LastDomain != "relay-new.example" {
-		t.Fatalf("relay stats = %+v, want 2 requests and relay-new.example", stats.Relay)
+	if stats.Relay.Requests != 2 || stats.Relay.LastDomain != "relay-new.example" || stats.Relay.LastQType != "HTTPS" {
+		t.Fatalf("relay stats = %+v, want 2 requests and relay-new.example HTTPS", stats.Relay)
 	}
-	if stats.Direct.Requests != 1 || stats.Direct.LastDomain != "direct.example" {
-		t.Fatalf("direct stats = %+v, want 1 request and direct.example", stats.Direct)
+	if stats.Direct.Requests != 1 || stats.Direct.LastDomain != "direct.example" || stats.Direct.LastQType != "AAAA" {
+		t.Fatalf("direct stats = %+v, want 1 request and direct.example AAAA", stats.Direct)
 	}
-	if stats.Reject.Requests != 2 || stats.Reject.LastDomain != "reject-new.example" {
-		t.Fatalf("reject stats = %+v, want 2 requests and reject-new.example", stats.Reject)
+	if stats.Reject.Requests != 2 || stats.Reject.LastDomain != "reject-new.example" || stats.Reject.LastQType != "SVCB" {
+		t.Fatalf("reject stats = %+v, want 2 requests and reject-new.example SVCB", stats.Reject)
 	}
 }
 
 func TestStatsTracksConfigDecisionValues(t *testing.T) {
 	server := &Server{cache: NewCache(10, 0, 60)}
 
-	server.addQueryLog(QueryLog{Decision: Decision(config.DecisionRelay), Domain: "relay.example"})
-	server.addQueryLog(QueryLog{Decision: Decision(config.DecisionDirect), Domain: "direct.example"})
-	server.addQueryLog(QueryLog{Decision: Decision(config.DecisionReject), Domain: "reject.example"})
+	server.addQueryLog(QueryLog{Decision: Decision(config.DecisionRelay), Domain: "relay.example", QType: "A"})
+	server.addQueryLog(QueryLog{Decision: Decision(config.DecisionDirect), Domain: "direct.example", QType: "AAAA"})
+	server.addQueryLog(QueryLog{Decision: Decision(config.DecisionReject), Domain: "reject.example", QType: "HTTPS"})
 
 	stats := server.Stats()
-	if stats.Relay.LastDomain != "relay.example" {
-		t.Fatalf("relay last domain = %q, want relay.example", stats.Relay.LastDomain)
+	if stats.Relay.LastDomain != "relay.example" || stats.Relay.LastQType != "A" {
+		t.Fatalf("relay last query = %q %q, want relay.example A", stats.Relay.LastDomain, stats.Relay.LastQType)
 	}
-	if stats.Direct.LastDomain != "direct.example" {
-		t.Fatalf("direct last domain = %q, want direct.example", stats.Direct.LastDomain)
+	if stats.Direct.LastDomain != "direct.example" || stats.Direct.LastQType != "AAAA" {
+		t.Fatalf("direct last query = %q %q, want direct.example AAAA", stats.Direct.LastDomain, stats.Direct.LastQType)
 	}
-	if stats.Reject.LastDomain != "reject.example" {
-		t.Fatalf("reject last domain = %q, want reject.example", stats.Reject.LastDomain)
+	if stats.Reject.LastDomain != "reject.example" || stats.Reject.LastQType != "HTTPS" {
+		t.Fatalf("reject last query = %q %q, want reject.example HTTPS", stats.Reject.LastDomain, stats.Reject.LastQType)
 	}
 }

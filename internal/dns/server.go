@@ -43,11 +43,14 @@ type Server struct {
 	rejectDecisions  atomic.Int64
 	defaultRuleHits  atomic.Int64
 
-	// Last queried domains by DNS decision, guarded by mu.
+	// Last query domain and type by DNS decision, guarded by mu.
 	mu               sync.Mutex
 	lastRelayDomain  string
+	lastRelayQType   string
 	lastDirectDomain string
+	lastDirectQType  string
 	lastRejectDomain string
+	lastRejectQType  string
 
 	queryStreamMu      sync.Mutex
 	queryStreamClients map[chan<- QueryLog]struct{}
