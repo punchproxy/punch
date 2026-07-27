@@ -320,9 +320,9 @@ function connectivityColor(item) {
   return css("--green");
 }
 
-// LineChart plots discrete latency samples over real time: one dot per
-// request, connected by a line, with time on the x axis.
-export function LineChart({ points = [], formatY = (value) => `${value} ms`, height = 150, label = "Latency over time", unit = "ms", windowSeconds = 0, windowEnd = 0 }) {
+// ScatterPlot plots discrete latency samples over real time: one dot per
+// request, with time on the x axis.
+export function ScatterPlot({ points = [], formatY = (value) => `${value} ms`, height = 150, label = "Latency over time", unit = "ms", windowSeconds = 0, windowEnd = 0 }) {
   const key = points.map((point) => `${point.time}:${point.value}:${point.detail || ""}`).join("|");
   const refs = useChart((svg, width, tooltip, container) => {
     const margin = { top: 16, right: 10, bottom: 26, left: 46 }, innerWidth = Math.max(1, width - margin.left - margin.right), innerHeight = height - margin.top - margin.bottom;
@@ -342,8 +342,6 @@ export function LineChart({ points = [], formatY = (value) => `${value} ms`, hei
     root.append("g").attr("class", "chart-grid").call(d3.axisLeft(y).ticks(4).tickSize(-innerWidth).tickFormat(""));
     root.append("g").attr("class", "chart-axis y-axis").call(d3.axisLeft(y).ticks(4).tickFormat(formatY));
     root.append("g").attr("class", "chart-axis x-axis").attr("transform", `translate(0,${innerHeight})`).call(d3.axisBottom(x).ticks(width < 460 ? 3 : 5).tickFormat(d3.timeFormat("%H:%M:%S")));
-    const line = d3.line().x((point) => x(point.date)).y((point) => y(point.value)).curve(d3.curveMonotoneX);
-    root.append("path").datum(data).attr("d", line).attr("fill", "none").attr("stroke", css("--orange")).attr("stroke-width", 1.6);
     root.append("g").selectAll("circle").data(data).join("circle")
       .attr("cx", (point) => x(point.date)).attr("cy", (point) => y(point.value))
       .attr("r", 2).attr("fill", css("--orange"));
@@ -365,7 +363,7 @@ export function LineChart({ points = [], formatY = (value) => `${value} ms`, hei
       if (pointer.x >= box.left && pointer.x <= box.right && pointer.y >= box.top && pointer.y <= box.bottom) showAt(pointer.x, pointer.y);
     }
   }, [key, formatY, height, label, unit, windowSeconds, windowEnd]);
-  return <ChartShell refs={refs} className="line-chart" label={label}/>;
+  return <ChartShell refs={refs} className="scatter-plot" label={label}/>;
 }
 
 function truncate(value, maxLength) {

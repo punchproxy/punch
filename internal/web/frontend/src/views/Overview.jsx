@@ -1,5 +1,5 @@
 import { useStatus } from "../App.jsx";
-import { AreaChart, ConnectivityBars, Donut, LineChart, Sparkline } from "../charts.jsx";
+import { AreaChart, ConnectivityBars, Donut, ScatterPlot, Sparkline } from "../charts.jsx";
 import { Card, CardHeader, Empty, Pill, StatTile, Tag } from "../components.jsx";
 import { connectLatencyWindowMS, filterConnectLatencySamples, fmtBytes, fmtLatency, fmtNum, fmtRate, fmtUptime, shortName, statusColor } from "../utils.js";
 
@@ -64,7 +64,7 @@ function ConnectLatency({ samples = [] }) {
   return <div className="connection">
     <div className="spread"><strong>Connect latency</strong><span className="mono muted">{last ? fmtLatency(last.ms) : "—"}</span></div>
     <div className="connection-url muted">per-request relay dial time · last 10 min</div>
-    {points.length > 1 ? <LineChart points={points} formatY={fmtLatency} height={150} label="Per-request connect latency over the last 10 minutes" unit="Connect ms" windowSeconds={connectLatencyWindowMS / 1000} windowEnd={now}/> : <span className="faint">Not enough traffic recorded yet.</span>}
+    {points.length > 1 ? <ScatterPlot points={points} formatY={fmtLatency} height={150} label="Per-request connect latency over the last 10 minutes" unit="Connect ms" windowSeconds={connectLatencyWindowMS / 1000} windowEnd={now}/> : <span className="faint">Not enough traffic recorded yet.</span>}
   </div>;
 }
 
