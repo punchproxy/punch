@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { gaugeGeometry } from "./math.js";
-import { cacheStateColor, clientIP, connectLatencyWindowMS, filterConnectLatencySamples, filterSessions, fmtTime, sumBy } from "./utils.js";
+import { cacheStateColor, clientIP, connectLatencyWindowMS, filterConnectLatencySamples, filterSessions, fmtTime, nextRelayGroupSelectMode, sumBy } from "./utils.js";
 
 test("semicircular gauges never request a major arc", () => {
   assert.equal(gaugeGeometry(300, 500).largeArcFlag, 0);
@@ -52,4 +52,9 @@ test("connect latency keeps ten minutes and removes one-millisecond samples", ()
     { at: new Date(now - 500).toISOString(), ms: 30 },
   ];
   assert.deepEqual(filterConnectLatencySamples(samples, now), [samples[1], samples[3]]);
+});
+
+test("relay group select mode toggles between auto and manual", () => {
+  assert.equal(nextRelayGroupSelectMode("auto"), "manual");
+  assert.equal(nextRelayGroupSelectMode("manual"), "auto");
 });

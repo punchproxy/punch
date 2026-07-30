@@ -69,6 +69,7 @@ export function statusColor(status) {
 
 export const cacheStateColor = (state) => state === "live" ? "green" : state === "stale" ? "amber" : "gray";
 export const isSessionActive = (session) => !session.closed_at || session.closed_at.startsWith("0001");
+export const nextRelayGroupSelectMode = (mode) => mode === "auto" ? "manual" : "auto";
 
 // Strips the port from a source address: "1.2.3.4:5678" → "1.2.3.4", "[::1]:5678" → "::1".
 export function clientIP(source) {

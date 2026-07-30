@@ -2,7 +2,7 @@ import { useCallback, useMemo, useState } from "react";
 import { api } from "../api.js";
 import { Sparkline } from "../charts.jsx";
 import { Card, Empty, ErrorState, Pill, Tag, usePolling, useToast } from "../components.jsx";
-import { fmtLatency, shortName, statusColor, timeAgo } from "../utils.js";
+import { fmtLatency, nextRelayGroupSelectMode, shortName, statusColor, timeAgo } from "../utils.js";
 
 export default function Relays() {
   const [groups, setGroups] = useState([]), [relays, setRelays] = useState([]), [error, setError] = useState(null);
@@ -45,9 +45,10 @@ export default function Relays() {
 }
 
 function GroupCard({ group, busy, act }) {
-  const selectKey = `gsel-${group.name}`, checkKey = `gcheck-${group.name}`, refreshKey = `grefresh-${group.name}`;
+  const selectKey = `gsel-${group.name}`, modeKey = `gmode-${group.name}`, checkKey = `gcheck-${group.name}`, refreshKey = `grefresh-${group.name}`;
+  const nextMode = nextRelayGroupSelectMode(group.select);
   return <Card className={group.selected ? "selected-card" : ""}><div className="card-head"><div className="flex"><h3>{group.name}</h3>{group.selected && <Pill color="orange">active</Pill>}</div><Pill plain>{group.type}</Pill></div><div className="card-body tight">
-    <div className="spread info-row"><span className="muted">Select mode</span><Pill color={group.select === "auto" ? "blue" : "gray"} plain>{group.select}</Pill></div>
+    <div className="spread info-row"><span className="muted">Select mode</span>{group.type === "direct" ? <Pill color="gray" plain>{group.select}</Pill> : <button type="button" className={`pill ${group.select === "auto" ? "blue" : "gray"} plain select-mode-toggle`} disabled={busy.has(modeKey)} aria-label={`Switch ${group.name} relay selection to ${nextMode}`} aria-pressed={group.select === "auto"} title={`Switch to ${nextMode}`} onClick={() => act(modeKey, () => api.put(`/relaygroups/${encodeURIComponent(group.name)}`, { ...group.config, select: nextMode }), `${group.name} relay selection switched to ${nextMode}`)}>{group.select}</button>}</div>
     <div className="spread info-row"><span className="muted">Relays</span><span className="mono">{group.relay_count}</span></div>
     <div className="spread info-row"><span className="muted">Current</span><span className="mono">{shortName(group.current_relay, group.name) || "—"}</span></div>
     <div className="spread info-row"><span className="muted">Status</span>{group.current_status ? <Pill color={statusColor(group.current_status)}>{group.current_status}</Pill> : <span className="faint">—</span>}</div>
