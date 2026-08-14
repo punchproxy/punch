@@ -89,3 +89,41 @@ func TestUDPSenderDropPendingCountsPendingDrops(t *testing.T) {
 		t.Fatalf("UDPStats() = %+v, want two pending drops", stats)
 	}
 }
+
+func TestUDPSenderRegistryReplacesClosedSender(t *testing.T) {
+	h := &handler{}
+	registry := newUDPSenderRegistry()
+	create := func() *udpSender {
+		return newUDPSender(h, "test", nil, M.Socksaddr{}, M.Socksaddr{})
+	}
+
+	first, created := registry.getOrCreate("destination", create)
+	if !created {
+		t.Fatal("first sender was not created")
+	}
+	first.Close()
+
+	second, created := registry.getOrCreate("destination", create)
+	if !created {
+		t.Fatal("closed sender was reused")
+	}
+	if second == first {
+		t.Fatal("closed sender was not replaced")
+	}
+
+	// Cleanup from the old sender may arrive after its replacement was stored.
+	// It must not remove the replacement.
+	first.cleanup()
+	got, created := registry.getOrCreate("destination", create)
+	if created || got != second {
+		t.Fatal("stale sender cleanup removed its replacement")
+	}
+
+	// Once the active sender finishes cleanup, the next packet gets a new one.
+	second.cleanup()
+	third, created := registry.getOrCreate("destination", create)
+	if !created || third == second {
+		t.Fatal("cleaned sender remained in the registry")
+	}
+	registry.close()
+}

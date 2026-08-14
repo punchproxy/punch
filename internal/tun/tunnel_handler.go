@@ -95,12 +95,8 @@ func (h *handler) NewPacketConnectionEx(ctx context.Context, conn N.PacketConn, 
 	defer conn.Close()
 
 	writer := &packetWriteBack{conn: conn}
-	senders := make(map[string]*udpSender)
-	defer func() {
-		for _, sender := range senders {
-			sender.Close()
-		}
-	}()
+	senders := newUDPSenderRegistry()
+	defer senders.close()
 
 	for {
 		packet := singbuf.NewPacket()
@@ -119,10 +115,10 @@ func (h *handler) NewPacketConnectionEx(ctx context.Context, conn N.PacketConn, 
 		}
 
 		key := destination.String()
-		sender := senders[key]
-		if sender == nil {
-			sender = newUDPSender(h, source.String()+"->"+key, writer, source, destination)
-			senders[key] = sender
+		sender, created := senders.getOrCreate(key, func() *udpSender {
+			return newUDPSender(h, source.String()+"->"+key, writer, source, destination)
+		})
+		if created {
 			go sender.Process()
 		}
 		sender.Send(&udpTunPacket{buffer: packet, destination: destination})
@@ -406,6 +402,56 @@ type udpTunPacket struct {
 	destination M.Socksaddr
 }
 
+// udpSenderRegistry owns the per-destination senders within one TUN UDP
+// association. Senders run independently from the packet-reading goroutine,
+// so removal must be synchronized with lookups and association shutdown.
+type udpSenderRegistry struct {
+	mu      sync.Mutex
+	senders map[string]*udpSender
+}
+
+func newUDPSenderRegistry() *udpSenderRegistry {
+	return &udpSenderRegistry{senders: make(map[string]*udpSender)}
+}
+
+func (r *udpSenderRegistry) getOrCreate(key string, create func() *udpSender) (*udpSender, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if sender := r.senders[key]; sender != nil && !sender.closed() {
+		return sender, false
+	}
+
+	sender := create()
+	sender.onCleanup = func(cleaned *udpSender) {
+		r.remove(key, cleaned)
+	}
+	r.senders[key] = sender
+	return sender, true
+}
+
+func (r *udpSenderRegistry) remove(key string, sender *udpSender) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.senders[key] == sender {
+		delete(r.senders, key)
+	}
+}
+
+func (r *udpSenderRegistry) close() {
+	r.mu.Lock()
+	senders := make([]*udpSender, 0, len(r.senders))
+	for _, sender := range r.senders {
+		senders = append(senders, sender)
+	}
+	r.senders = make(map[string]*udpSender)
+	r.mu.Unlock()
+
+	for _, sender := range senders {
+		sender.Close()
+	}
+}
+
 type udpSender struct {
 	handler     *handler
 	key         string
@@ -421,6 +467,7 @@ type udpSender struct {
 	sessionStatus session.Status
 	closeReason   string
 	closeOnce     sync.Once
+	onCleanup     func(*udpSender)
 }
 
 func newUDPSender(h *handler, key string, writer N.PacketWriter, source M.Socksaddr, destination M.Socksaddr) *udpSender {
@@ -488,6 +535,15 @@ func (s *udpSender) Send(packet *udpTunPacket) {
 func (s *udpSender) Close() {
 	s.cancel()
 	s.dropPending()
+}
+
+func (s *udpSender) closed() bool {
+	select {
+	case <-s.ctx.Done():
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *udpSender) handlePacket(packet *udpTunPacket) error {
@@ -606,6 +662,9 @@ func (s *udpSender) cleanup() {
 				s.sess.SetCloseReason(s.closeReason)
 			}
 			s.handler.sessions.CloseSession(s.sess.ID, s.sessionStatus)
+		}
+		if s.onCleanup != nil {
+			s.onCleanup(s)
 		}
 	})
 }
