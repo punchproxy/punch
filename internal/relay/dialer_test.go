@@ -2,12 +2,23 @@ package relay
 
 import (
 	"context"
+	"errors"
 	"net"
 	"net/netip"
 	"sync/atomic"
 	"testing"
 	"time"
 )
+
+type closeWriteTrackingConn struct {
+	net.Conn
+	called atomic.Bool
+}
+
+func (c *closeWriteTrackingConn) CloseWrite() error {
+	c.called.Store(true)
+	return nil
+}
 
 type closeTrackingDialer struct {
 	closed atomic.Bool
@@ -57,6 +68,34 @@ func TestExpiredRelayDNSRetiresAdapterWithoutClosingActiveStreams(t *testing.T) 
 	}
 	if old.closed.Load() {
 		t.Fatal("expired adapter was closed while live streams may still reference it")
+	}
+}
+
+func TestRelayConnectionWrappersForwardCloseWrite(t *testing.T) {
+	conn, peer := net.Pipe()
+	defer conn.Close()
+	defer peer.Close()
+	inner := &closeWriteTrackingConn{Conn: conn}
+	wrapped := &relayTrackedConn{
+		Conn:   &connWrapper{Conn: inner},
+		health: &RelayHealth{},
+	}
+
+	if err := wrapped.CloseWrite(); err != nil {
+		t.Fatalf("CloseWrite() error = %v", err)
+	}
+	if !inner.called.Load() {
+		t.Fatal("CloseWrite was not forwarded to the underlying relay connection")
+	}
+}
+
+func TestRelayConnectionWrapperReportsUnsupportedCloseWrite(t *testing.T) {
+	conn, peer := net.Pipe()
+	defer conn.Close()
+	defer peer.Close()
+
+	if err := (&connWrapper{Conn: conn}).CloseWrite(); !errors.Is(err, errors.ErrUnsupported) {
+		t.Fatalf("CloseWrite() error = %v, want errors.ErrUnsupported", err)
 	}
 }
 

@@ -2,6 +2,7 @@ package relay
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -276,6 +277,13 @@ func cloneRelayMapping(mapping map[string]any) map[string]any {
 // connWrapper wraps mihomo's C.Conn to implement net.Conn
 type connWrapper struct {
 	net.Conn
+}
+
+func (c *connWrapper) CloseWrite() error {
+	if conn, ok := c.Conn.(interface{ CloseWrite() error }); ok {
+		return conn.CloseWrite()
+	}
+	return errors.ErrUnsupported
 }
 
 // packetConnWrapper wraps a PacketConn to behave as a net.Conn for UDP

@@ -2,6 +2,7 @@ package relay
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -175,4 +176,11 @@ func (c *relayTrackedConn) Write(b []byte) (int, error) {
 		c.health.Upload.Add(int64(n))
 	}
 	return n, err
+}
+
+func (c *relayTrackedConn) CloseWrite() error {
+	if conn, ok := c.Conn.(interface{ CloseWrite() error }); ok {
+		return conn.CloseWrite()
+	}
+	return errors.ErrUnsupported
 }

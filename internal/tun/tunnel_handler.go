@@ -82,7 +82,7 @@ func (h *handler) NewConnectionEx(ctx context.Context, conn net.Conn, source M.S
 		closeErr = h.handleDNSConn(ctx, conn)
 		return
 	}
-	closeErr = h.handleTCPConn(conn, source, destination)
+	closeErr = h.handleTCPConn(ctx, conn, source, destination)
 }
 
 func (h *handler) NewPacketConnectionEx(ctx context.Context, conn N.PacketConn, source M.Socksaddr, _ M.Socksaddr, onClose N.CloseHandlerFunc) {
@@ -149,7 +149,7 @@ func (h *handler) Close() error {
 	return nil
 }
 
-func (h *handler) handleTCPConn(conn net.Conn, source M.Socksaddr, destination M.Socksaddr) error {
+func (h *handler) handleTCPConn(ctx context.Context, conn net.Conn, source M.Socksaddr, destination M.Socksaddr) error {
 	defer conn.Close()
 
 	target, domain, dstIP, rule, err := h.targetForDestination(destination)
@@ -177,7 +177,7 @@ func (h *handler) handleTCPConn(conn net.Conn, source M.Socksaddr, destination M
 		"rule", rule,
 	)
 
-	dialCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	dialCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	dialStart := time.Now()
 	remoteConn, err := h.selector.DialContext(dialCtx, "tcp", target)
 	cancel()
@@ -191,29 +191,13 @@ func (h *handler) handleTCPConn(conn net.Conn, source M.Socksaddr, destination M
 	sess.Relay = h.selector.ActiveName()
 	h.selector.RecordConnectLatency(sess.Relay, time.Since(dialStart))
 	sess.MarkConnected()
-	h.bindSessionCloser(sess, releaseFakeIP, conn, remoteConn)
+	shutdown := &tcpShutdownState{}
+	h.bindSessionCloser(sess, closeFunc(shutdown.begin), releaseFakeIP, conn, remoteConn)
 	releaseFakeIP = nil
 
-	type copyResult struct {
-		dir string
-		err error
-	}
-	remote := relayTaggedConn{Conn: remoteConn}
-	errCh := make(chan copyResult, 2)
-	go func() {
-		_, err := io.Copy(remote, session.NewTrackedConn(conn, sess, true))
-		errCh <- copyResult{dir: "upload", err: err}
-	}()
-	go func() {
-		_, err := io.Copy(session.NewTrackedConn(conn, sess, false), remote)
-		errCh <- copyResult{dir: "download", err: err}
-	}()
+	result := runTCPRelay(ctx, conn, remoteConn, sess, shutdown, sess.Close, tcpFallbackDrainTimeout)
 
-	first := <-errCh
-	sess.Close()
-	<-errCh
-
-	abnormal, relaySide := classifyCopyError(first.err)
+	abnormal, relaySide := classifyCopyError(result.err, result.shutdownInitiated)
 	if !abnormal {
 		h.sessions.CloseSession(sess.ID, session.StatusClosed)
 		return nil
@@ -222,22 +206,22 @@ func (h *handler) handleTCPConn(conn net.Conn, source M.Socksaddr, destination M
 	if relaySide {
 		side = "relay"
 	}
-	sess.SetCloseReason(fmt.Sprintf("%s copy (%s side): %v", first.dir, side, first.err))
+	sess.SetCloseReason(fmt.Sprintf("%s copy (%s side): %v", result.dir, side, result.err))
 	if relaySide {
 		h.selector.ReportStreamAbort(sess.Relay)
 		slog.Warn("relay aborted stream mid-transfer",
 			"session", sess.ID,
 			"relay", sess.Relay,
 			"target", target,
-			"direction", first.dir,
+			"direction", result.dir,
 			"upload_bytes", sess.UploadBytes(),
 			"download_bytes", sess.DownloadBytes(),
 			"duration", time.Since(sess.StartTime).Round(time.Millisecond),
-			"error", first.err,
+			"error", result.err,
 		)
 	}
 	h.sessions.CloseSession(sess.ID, session.StatusError)
-	return first.err
+	return result.err
 }
 
 func (h *handler) targetForDestination(destination M.Socksaddr) (target string, domain string, dstIP netip.Addr, rule string, err error) {
