@@ -44,6 +44,7 @@ type RelayHealth struct {
 	Group           string         `json:"group"`
 	Type            string         `json:"type"`
 	Addr            string         `json:"addr"`
+	ResolvedAddr    string         `json:"resolved_addr,omitempty"`
 	Status          HealthStatus   `json:"status"`
 	Latency         int64          `json:"latency_ms"`
 	URLTestLatency  int64          `json:"url_test_latency_ms,omitempty"`

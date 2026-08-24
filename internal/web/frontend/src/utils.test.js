@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { gaugeGeometry } from "./math.js";
-import { cacheStateColor, clientIP, connectLatencyWindowMS, filterConnectLatencySamples, filterRelays, filterSessions, fmtTime, nextRelayGroupSelectMode, sumBy } from "./utils.js";
+import { cacheStateColor, clientIP, connectLatencyWindowMS, filterConnectLatencySamples, filterRelays, filterSessions, fmtTime, formatRelayAddress, nextRelayGroupSelectMode, sumBy } from "./utils.js";
 
 test("semicircular gauges never request a major arc", () => {
   assert.equal(gaugeGeometry(300, 500).largeArcFlag, 0);
@@ -61,7 +61,7 @@ test("relay group select mode toggles between auto and manual", () => {
 
 test("relays default to the selected group and can show all groups", () => {
   const relays = [
-    { name: "main / hk-1", group: "main", addr: "192.0.2.1:443" },
+    { name: "main / hk-1", group: "main", addr: "relay.example:443", resolved_addr: "192.0.2.1:443" },
     { name: "main / jp-1", group: "main", addr: "192.0.2.2:443" },
     { name: "backup / us-1", group: "backup", addr: "192.0.2.3:443" },
   ];
@@ -69,5 +69,12 @@ test("relays default to the selected group and can show all groups", () => {
   assert.deepEqual(filterRelays(relays, "main", "", false), relays.slice(0, 2));
   assert.deepEqual(filterRelays(relays, "main", "", true), relays);
   assert.deepEqual(filterRelays(relays, "main", "jp", false), [relays[1]]);
+  assert.deepEqual(filterRelays(relays, "main", "192.0.2.1", false), [relays[0]]);
   assert.deepEqual(filterRelays(relays, "", "", false), relays);
+});
+
+test("relay addresses include a distinct resolved endpoint", () => {
+  assert.equal(formatRelayAddress("relay.example:443", "192.0.2.1:443"), "relay.example:443 (192.0.2.1:443)");
+  assert.equal(formatRelayAddress("192.0.2.1:443", "192.0.2.1:443"), "192.0.2.1:443");
+  assert.equal(formatRelayAddress("relay.example:443", ""), "relay.example:443");
 });

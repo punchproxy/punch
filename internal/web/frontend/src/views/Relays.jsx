@@ -2,7 +2,7 @@ import { useCallback, useMemo, useState } from "react";
 import { api } from "../api.js";
 import { Sparkline } from "../charts.jsx";
 import { Card, Empty, ErrorState, Pill, Tag, usePolling, useToast } from "../components.jsx";
-import { filterRelays, fmtLatency, nextRelayGroupSelectMode, shortName, statusColor, timeAgo } from "../utils.js";
+import { filterRelays, fmtLatency, formatRelayAddress, nextRelayGroupSelectMode, shortName, statusColor, timeAgo } from "../utils.js";
 
 export default function Relays() {
   const [groups, setGroups] = useState([]), [relays, setRelays] = useState([]), [error, setError] = useState(null);
@@ -75,7 +75,7 @@ function RelayRow({ relay, busy, act }) {
   const latency = relay.url_test_latency_ms || relay.latency_ms || 0, color = statusColor(relay.status), name = shortName(relay.name, relay.group);
   const selectKey = `sel-${relay.name}`, checkKey = `check-${relay.name}`;
   return <tr className={relay.selected ? "selected-row" : ""}>
-    <td data-label="Relay"><div className="flex"><span className="mono">{name}</span>{relay.selected && <Pill color="orange">active</Pill>}</div><small className="mono faint block">{relay.addr}</small></td>
+    <td data-label="Relay"><div className="flex"><span className="mono">{name}</span>{relay.selected && <Pill color="orange">active</Pill>}</div><small className="mono faint block">{formatRelayAddress(relay.addr, relay.resolved_addr)}</small></td>
     <td data-label="Group" className="muted">{relay.group}</td><td data-label="Type"><Tag>{relay.type || "?"}</Tag></td><td data-label="Status"><div className="flex"><Pill color={color}>{relay.status || "unknown"}</Pill>{relay.recent_stream_aborts > 0 && <span title={`${relay.recent_stream_aborts} relay-side stream abort(s) in the last minute (${relay.stream_aborts} total this run). The relay accepts new connections but is killing live streams.`}><Pill color="amber">{relay.recent_stream_aborts} aborts/1m</Pill></span>}</div></td>
     <td data-label="Roundtrip"><LatencyCell history={relay.history} metric="latency_ms" current={latency} label={`${name} roundtrip latency history`}/></td>
     <td data-label="Checked" className="faint nowrap">{timeAgo(relay.last_checked_at)}</td>

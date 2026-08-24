@@ -92,7 +92,12 @@ export function filterRelays(relays, selectedGroup, search, showAll = false) {
   const needle = search.trim().toLowerCase();
   return relays
     .filter((relay) => showAll || !selectedGroup || relay.group === selectedGroup)
-    .filter((relay) => !needle || `${relay.name || ""} ${relay.group || ""} ${relay.addr || ""}`.toLowerCase().includes(needle));
+    .filter((relay) => !needle || `${relay.name || ""} ${relay.group || ""} ${relay.addr || ""} ${relay.resolved_addr || ""}`.toLowerCase().includes(needle));
+}
+
+export function formatRelayAddress(addr, resolvedAddr) {
+  if (!addr) return resolvedAddr || "";
+  return resolvedAddr && resolvedAddr !== addr ? `${addr} (${resolvedAddr})` : addr;
 }
 
 export const sumBy = (rows, key) => rows.reduce((total, row) => total + (Number(row[key]) || 0), 0);

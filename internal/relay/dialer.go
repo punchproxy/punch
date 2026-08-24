@@ -114,13 +114,22 @@ type LazyRelayDialer struct {
 	mapping  map[string]any
 	resolver RelayResolveFunc
 
-	resolved  Dialer
-	expiresAt time.Time
+	resolved     Dialer
+	resolvedAddr string
+	expiresAt    time.Time
 }
 
 func (d *LazyRelayDialer) Name() string { return d.name }
 func (d *LazyRelayDialer) Type() string { return d.relayType }
 func (d *LazyRelayDialer) Addr() string { return d.addr }
+
+// ResolvedAddr returns the IP endpoint cached by the most recent successful
+// hostname resolution. It never triggers a DNS lookup.
+func (d *LazyRelayDialer) ResolvedAddr() string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.resolvedAddr
+}
 
 func (d *LazyRelayDialer) SupportUDP() bool {
 	dialer, err := d.getDialer(context.Background(), false)
@@ -146,6 +155,7 @@ func (d *LazyRelayDialer) Close() error {
 	}
 	err := d.resolved.Close()
 	d.resolved = nil
+	d.resolvedAddr = ""
 	d.expiresAt = time.Time{}
 	return err
 }
@@ -189,6 +199,7 @@ func (d *LazyRelayDialer) getDialer(ctx context.Context, allowResolve bool) (Dia
 
 	mapping := cloneRelayMapping(d.mapping)
 	expiresAt := time.Time{}
+	resolvedAddr := ""
 	if d.resolver != nil {
 		server, _ := mapping["server"].(string)
 		if server != "" && net.ParseIP(server) == nil {
@@ -206,6 +217,11 @@ func (d *LazyRelayDialer) getDialer(ctx context.Context, allowResolve bool) (Dia
 			} else {
 				mapping["ip-version"] = "ipv4"
 			}
+			if port := fmt.Sprint(mapping["port"]); port != "" && port != "<nil>" {
+				resolvedAddr = net.JoinHostPort(ips[0].String(), port)
+			} else {
+				resolvedAddr = ips[0].String()
+			}
 			expiresAt = ttlExpiry
 			slog.Debug("resolved relay hostname", "group", d.groupName, "relay", d.name, "host", server, "ip", ips[0].String(), "expires_at", ttlExpiry)
 		}
@@ -220,6 +236,7 @@ func (d *LazyRelayDialer) getDialer(ctx context.Context, allowResolve bool) (Dia
 	// pooled resources once the last live connection is gone. Closing it during
 	// DNS rotation would tear down active multiplexed sessions such as AnyTLS.
 	d.resolved = next
+	d.resolvedAddr = resolvedAddr
 	d.expiresAt = expiresAt
 	return d.resolved, nil
 }

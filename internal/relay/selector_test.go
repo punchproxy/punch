@@ -523,6 +523,36 @@ func TestHealthListIncludesRelaySpec(t *testing.T) {
 	}
 }
 
+func TestHealthListIncludesCachedResolvedRelayAddress(t *testing.T) {
+	dialer := &LazyRelayDialer{
+		groupName:    "main",
+		name:         "hk-1",
+		relayType:    "trojan",
+		addr:         "relay.example:443",
+		resolvedAddr: "192.0.2.10:443",
+	}
+	selector := &Selector{
+		groups: []*group{{name: "main", dialers: []Dialer{dialer}}},
+		health: map[string]*RelayHealth{
+			"main\x00hk-1": {
+				Name:   "main / hk-1",
+				Group:  "main",
+				Type:   "trojan",
+				Addr:   "relay.example:443",
+				Status: HealthHealthy,
+			},
+		},
+	}
+
+	health := selector.HealthList()
+	if len(health) != 1 {
+		t.Fatalf("HealthList() length = %d, want 1", len(health))
+	}
+	if got := health[0].ResolvedAddr; got != "192.0.2.10:443" {
+		t.Fatalf("resolved address = %q, want %q", got, "192.0.2.10:443")
+	}
+}
+
 func TestBenchmarkLimitsConcurrentRelayChecks(t *testing.T) {
 	st, err := config.Open(filepath.Join(t.TempDir(), "punch.db"))
 	if err != nil {
@@ -738,8 +768,8 @@ func TestSelectedConnectivityBypassesBenchmarkSemaphore(t *testing.T) {
 	selector.groups = []*group{g}
 	staleCheckedAt := time.Now().Add(-time.Hour)
 	selector.health[selector.healthKey(g.name, active.Name())] = &RelayHealth{
-		Name:              selector.displayName(g.name, active.Name()),
-		Group:             g.name,
+		Name:           selector.displayName(g.name, active.Name()),
+		Group:          g.name,
 		Status:         HealthHealthy,
 		Latency:        99,
 		URLTestLatency: 99,

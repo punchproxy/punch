@@ -69,6 +69,30 @@ func TestExpiredRelayDNSRetiresAdapterWithoutClosingActiveStreams(t *testing.T) 
 	if old.closed.Load() {
 		t.Fatal("expired adapter was closed while live streams may still reference it")
 	}
+	if got := d.ResolvedAddr(); got != "192.0.2.2:443" {
+		t.Fatalf("ResolvedAddr() = %q, want %q", got, "192.0.2.2:443")
+	}
+}
+
+func TestLazyRelayResolvedAddrDoesNotTriggerResolution(t *testing.T) {
+	var resolutions atomic.Int64
+	d := &LazyRelayDialer{
+		groupName: "main",
+		name:      "relay",
+		relayType: "trojan",
+		addr:      "relay.example:443",
+		resolver: func(context.Context, string, string) ([]netip.Addr, time.Time, error) {
+			resolutions.Add(1)
+			return []netip.Addr{netip.MustParseAddr("192.0.2.10")}, time.Now().Add(time.Minute), nil
+		},
+	}
+
+	if got := d.ResolvedAddr(); got != "" {
+		t.Fatalf("ResolvedAddr() before resolution = %q, want empty", got)
+	}
+	if got := resolutions.Load(); got != 0 {
+		t.Fatalf("resolution count = %d, want 0", got)
+	}
 }
 
 func TestRelayConnectionWrappersForwardCloseWrite(t *testing.T) {

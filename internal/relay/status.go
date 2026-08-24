@@ -30,6 +30,7 @@ func (s *Selector) HealthList() []RelayHealth {
 				Group:              h.Group,
 				Type:               h.Type,
 				Addr:               h.Addr,
+				ResolvedAddr:       cachedResolvedAddr(d),
 				Status:             h.Status,
 				Latency:            h.Latency,
 				URLTestLatency:     h.URLTestLatency,
@@ -50,6 +51,17 @@ func (s *Selector) HealthList() []RelayHealth {
 		}
 	}
 	return result
+}
+
+type resolvedAddrProvider interface {
+	ResolvedAddr() string
+}
+
+func cachedResolvedAddr(d Dialer) string {
+	if provider, ok := d.(resolvedAddrProvider); ok {
+		return provider.ResolvedAddr()
+	}
+	return ""
 }
 
 func cloneRelaySpec(spec map[string]any) map[string]any {
