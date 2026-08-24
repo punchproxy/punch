@@ -208,6 +208,11 @@ func (e *Engine) stopLocked() error {
 	}
 
 	var firstErr error
+	if e.tunnel != nil {
+		// Reject new callbacks before tearing down the stack. Close below waits
+		// for callbacks already in flight and their session-history writes.
+		e.tunnel.stopAccepting()
+	}
 	if e.routeMonitor != nil {
 		e.routeMonitor.Stop()
 	}

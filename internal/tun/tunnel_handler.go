@@ -57,7 +57,10 @@ type handler struct {
 	inet6Address []netip.Prefix
 	udp          udpCounters
 
-	closeOnce sync.Once
+	closeOnce   sync.Once
+	lifecycleMu sync.Mutex
+	lifecycleWG sync.WaitGroup
+	closing     bool
 }
 
 func newHandler(dnsServer *pdns.Server, selector *relay.Selector, sessions *session.Manager, inet4Address, inet6Address []netip.Prefix) *handler {
@@ -77,6 +80,12 @@ func (h *handler) NewConnectionEx(ctx context.Context, conn net.Conn, source M.S
 			onClose(closeErr)
 		}
 	}()
+	if !h.beginActivity() {
+		closeErr = net.ErrClosed
+		_ = conn.Close()
+		return
+	}
+	defer h.endActivity()
 
 	if isDNSDestination(destination) {
 		closeErr = h.handleDNSConn(ctx, conn)
@@ -92,6 +101,12 @@ func (h *handler) NewPacketConnectionEx(ctx context.Context, conn N.PacketConn, 
 			onClose(closeErr)
 		}
 	}()
+	if !h.beginActivity() {
+		closeErr = net.ErrClosed
+		_ = conn.Close()
+		return
+	}
+	defer h.endActivity()
 	defer conn.Close()
 
 	writer := &packetWriteBack{conn: conn}
@@ -119,7 +134,7 @@ func (h *handler) NewPacketConnectionEx(ctx context.Context, conn N.PacketConn, 
 			return newUDPSender(h, source.String()+"->"+key, writer, source, destination)
 		})
 		if created {
-			go sender.Process()
+			sender.Start()
 		}
 		sender.Send(&udpTunPacket{buffer: packet, destination: destination})
 	}
@@ -145,8 +160,40 @@ func (h *handler) UDPStats() UDPStats {
 }
 
 func (h *handler) Close() error {
-	h.closeOnce.Do(func() {})
+	h.stopAccepting()
+	if h.sessions != nil {
+		// Catch sessions created by callbacks that entered immediately before
+		// stopAccepting. Closing their connections lets those callbacks reach
+		// CloseSession and finish their synchronous history writes.
+		h.sessions.KillAllSessions()
+	}
+	h.lifecycleWG.Wait()
 	return nil
+}
+
+func (h *handler) stopAccepting() {
+	h.closeOnce.Do(func() {
+		h.lifecycleMu.Lock()
+		h.closing = true
+		h.lifecycleMu.Unlock()
+		if h.sessions != nil {
+			h.sessions.KillAllSessions()
+		}
+	})
+}
+
+func (h *handler) beginActivity() bool {
+	h.lifecycleMu.Lock()
+	defer h.lifecycleMu.Unlock()
+	if h.closing {
+		return false
+	}
+	h.lifecycleWG.Add(1)
+	return true
+}
+
+func (h *handler) endActivity() {
+	h.lifecycleWG.Done()
 }
 
 func (h *handler) handleTCPConn(ctx context.Context, conn net.Conn, source M.Socksaddr, destination M.Socksaddr) error {
@@ -434,6 +481,9 @@ func (r *udpSenderRegistry) close() {
 	for _, sender := range senders {
 		sender.Close()
 	}
+	for _, sender := range senders {
+		sender.Wait()
+	}
 }
 
 type udpSender struct {
@@ -451,6 +501,9 @@ type udpSender struct {
 	sessionStatus session.Status
 	closeReason   string
 	closeOnce     sync.Once
+	startOnce     sync.Once
+	started       chan struct{}
+	done          chan struct{}
 	onCleanup     func(*udpSender)
 }
 
@@ -466,10 +519,20 @@ func newUDPSender(h *handler, key string, writer N.PacketWriter, source M.Socksa
 		cancel:        cancel,
 		ch:            make(chan *udpTunPacket, udpPacketQueueSize),
 		sessionStatus: session.StatusClosed,
+		started:       make(chan struct{}),
+		done:          make(chan struct{}),
 	}
 }
 
+func (s *udpSender) Start() {
+	s.startOnce.Do(func() {
+		close(s.started)
+		go s.Process()
+	})
+}
+
 func (s *udpSender) Process() {
+	defer close(s.done)
 	defer s.cleanup()
 
 	for {
@@ -519,6 +582,14 @@ func (s *udpSender) Send(packet *udpTunPacket) {
 func (s *udpSender) Close() {
 	s.cancel()
 	s.dropPending()
+}
+
+func (s *udpSender) Wait() {
+	select {
+	case <-s.started:
+		<-s.done
+	default:
+	}
 }
 
 func (s *udpSender) closed() bool {
