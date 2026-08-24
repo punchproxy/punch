@@ -2,11 +2,12 @@ import { useCallback, useMemo, useState } from "react";
 import { api } from "../api.js";
 import { Sparkline } from "../charts.jsx";
 import { Card, Empty, ErrorState, Pill, Tag, usePolling, useToast } from "../components.jsx";
-import { fmtLatency, nextRelayGroupSelectMode, shortName, statusColor, timeAgo } from "../utils.js";
+import { filterRelays, fmtLatency, nextRelayGroupSelectMode, shortName, statusColor, timeAgo } from "../utils.js";
 
 export default function Relays() {
   const [groups, setGroups] = useState([]), [relays, setRelays] = useState([]), [error, setError] = useState(null);
   const [search, setSearch] = useState(""), [sort, setSort] = useState("latency"), [busy, setBusy] = useState(new Set());
+  const [showAllRelays, setShowAllRelays] = useState(false);
   const toast = useToast();
   const refresh = useCallback(async () => {
     try {
@@ -24,7 +25,8 @@ export default function Relays() {
     finally { setBusy((current) => { const next = new Set(current); next.delete(key); return next; }); }
   };
 
-  const shown = useMemo(() => relays.filter((relay) => !search.trim() || `${relay.name || ""} ${relay.group || ""} ${relay.addr || ""}`.toLowerCase().includes(search.trim().toLowerCase())).sort((a, b) => compareRelays(a, b, sort)), [relays, search, sort]);
+  const selectedGroup = groups.find((group) => group.selected)?.name || "";
+  const shown = useMemo(() => filterRelays(relays, selectedGroup, search, showAllRelays).sort((a, b) => compareRelays(a, b, sort)), [relays, selectedGroup, search, showAllRelays, sort]);
   if (error && !groups.length && !relays.length) return <ErrorState error={error}/>;
   return <>
     <div className="toolbar">
@@ -36,7 +38,7 @@ export default function Relays() {
     </div>
     <div className="section-title">Groups</div>
     <div className="grid cols-3">{groups.length ? groups.map((group) => <GroupCard key={group.name} group={group} busy={busy} act={act}/>) : <Empty>No relay groups configured.</Empty>}</div>
-    <div className="section-title">Relays <span>({shown.length})</span></div>
+    <div className="section-title relay-section-title"><div>Relays <span>({shown.length})</span></div><label className="relay-scope-toggle"><input type="checkbox" role="switch" checked={showAllRelays} onChange={(event) => setShowAllRelays(event.target.checked)}/><span>Show all relays</span></label></div>
     <Card><div className="table-wrap"><table className="data responsive-table relays-table"><thead><tr><th>Relay</th><th>Group</th><th>Type</th><th>Status</th><th>Roundtrip</th><th>Checked</th><th>Actions</th></tr></thead><tbody>
       {shown.map((relay) => <RelayRow key={`${relay.group}-${relay.name}`} relay={relay} busy={busy} act={act}/>)}
       {!shown.length && <tr className="empty-row"><td colSpan="7"><Empty>No relays.</Empty></td></tr>}

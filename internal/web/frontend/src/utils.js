@@ -88,6 +88,13 @@ export function filterSessions(sessions, filter, search) {
     .filter((session) => !needle || `${session.destination || ""} ${session.source || ""} ${session.relay || ""}`.toLowerCase().includes(needle));
 }
 
+export function filterRelays(relays, selectedGroup, search, showAll = false) {
+  const needle = search.trim().toLowerCase();
+  return relays
+    .filter((relay) => showAll || !selectedGroup || relay.group === selectedGroup)
+    .filter((relay) => !needle || `${relay.name || ""} ${relay.group || ""} ${relay.addr || ""}`.toLowerCase().includes(needle));
+}
+
 export const sumBy = (rows, key) => rows.reduce((total, row) => total + (Number(row[key]) || 0), 0);
 export function shortName(name, group = "") {
   if (!name) return "";
