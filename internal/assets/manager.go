@@ -45,6 +45,11 @@ type Manager struct {
 	failed    map[string]bool
 	ready     bool // true after MarkReady is called; suppresses background refresh during startup
 	handlers  []ReadyHandler
+	// sources records every remote URL that has been opened through the
+	// manager, and whether it was opened directly. The periodic refresh loop
+	// only re-fetches these: components read an asset once at startup and then
+	// hold the parsed result, so nothing else would ever ask again.
+	sources map[string]bool
 }
 
 type refreshState struct {
@@ -73,6 +78,7 @@ func New(s *config.Store, refreshInterval time.Duration, dialContext DialContext
 		directClient:    newHTTPClient(directDialContext),
 		refreshes:       make(map[string]*refreshState),
 		failed:          make(map[string]bool),
+		sources:         make(map[string]bool),
 	}, nil
 }
 
@@ -133,6 +139,7 @@ func openLocal(source string) (io.ReadCloser, error) {
 
 func (m *Manager) ensureCached(url string, direct bool) ([]byte, error) {
 	m.mu.Lock()
+	m.sources[url] = direct
 	cached, _ := m.store.GetAsset(url)
 
 	if cached != nil && !m.shouldRefresh(cached.UpdatedAt) {
@@ -224,6 +231,71 @@ func (m *Manager) fetchWithFallback(url string, direct bool) ([]byte, error) {
 		return nil, err
 	}
 	return body2, nil
+}
+
+// StartRefreshLoop re-fetches cached remote assets once their copies age past
+// the refresh interval, until stop is closed. Nothing else does this on a
+// schedule: ensureCached only revalidates when something opens an asset, and
+// components (DNS rule matchers, TUN route sets, relay providers) open theirs
+// once and then hold the parsed result. Without this loop a long-running
+// daemon keeps serving an ever-staler GFW/direct list while the CLI and
+// dashboard advertise a next-update time that never arrives.
+//
+// Refreshed bodies reach their consumers through the existing OnReady
+// handlers, which rebuild the matchers and route sets.
+func (m *Manager) StartRefreshLoop(stop <-chan struct{}) {
+	if m.refreshInterval <= 0 {
+		return
+	}
+	go func() {
+		ticker := time.NewTicker(refreshCheckInterval(m.refreshInterval))
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-ticker.C:
+				m.refreshStaleSources()
+			}
+		}
+	}()
+}
+
+// refreshCheckInterval picks how often to look for stale assets. It is a
+// fraction of the refresh interval so an asset that was already stale at
+// startup (where ensureCached deliberately skips revalidation) is picked up
+// promptly rather than a full interval later.
+func refreshCheckInterval(refreshInterval time.Duration) time.Duration {
+	check := refreshInterval / 4
+	if check < time.Minute {
+		check = time.Minute
+	}
+	if check > 15*time.Minute {
+		check = 15 * time.Minute
+	}
+	return check
+}
+
+func (m *Manager) refreshStaleSources() {
+	m.mu.Lock()
+	if !m.ready {
+		m.mu.Unlock()
+		return
+	}
+	for url, direct := range m.sources {
+		cached, err := m.store.GetAsset(url)
+		if err != nil || cached == nil {
+			// No cached copy: either a fetch is already in flight or the last
+			// one failed. RetryFailedAsync owns that case.
+			continue
+		}
+		if !m.shouldRefresh(cached.UpdatedAt) {
+			continue
+		}
+		slog.Debug("refreshing stale asset", "url", url, "last_updated", cached.UpdatedAt)
+		_ = m.startRefreshLocked(url, direct)
+	}
+	m.mu.Unlock()
 }
 
 // RetryFailedAsync kicks off (proxied) refreshes for every URL whose last

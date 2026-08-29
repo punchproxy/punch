@@ -104,8 +104,8 @@ func TestRecentSessionsMergesActiveAndHistory(t *testing.T) {
 	if recent[0].ID != second.ID {
 		t.Fatalf("newest session = %s, want active %s", recent[0].ID, second.ID)
 	}
-	if recent[1].ID != first.ID || recent[1].Status != StatusClosed {
-		t.Fatalf("restored session = %s (%s), want %s (CLOSED)", recent[1].ID, recent[1].Status, first.ID)
+	if recent[1].ID != first.ID || recent[1].Status() != StatusClosed {
+		t.Fatalf("restored session = %s (%s), want %s (CLOSED)", recent[1].ID, recent[1].Status(), first.ID)
 	}
 }
 

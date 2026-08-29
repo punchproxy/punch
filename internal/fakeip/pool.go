@@ -337,6 +337,13 @@ func (p *Pool) Gateway() netip.Addr {
 	return p.ranges[p.defaultFamily].gateway
 }
 
+// TTL reports the lifetime the pool grants a mapping. DNS answers must not
+// advertise a longer TTL than this, or a client can keep using a fake IP the
+// pool has already reclaimed.
+func (p *Pool) TTL() time.Duration {
+	return p.ttl
+}
+
 // Gateway6 returns the IPv6 gateway address.
 func (p *Pool) Gateway6() (netip.Addr, bool) {
 	p.mu.RLock()
@@ -472,7 +479,11 @@ func (p *Pool) allocateLocked(family Family) (netip.Addr, *Mapping) {
 	if r == nil {
 		return netip.Addr{}, nil
 	}
-	for {
+	// Bound the scan by the size of the range: once the allocator has cycled,
+	// every candidate may be occupied, and a pool whose addresses are all
+	// pinned by live sessions must fail allocation rather than spin forever.
+	attempts := r.lastOff - r.firstOff + 1
+	for i := uint64(0); i <= attempts; i++ {
 		off := r.nextOff
 		if off > r.lastOff || off < r.firstOff {
 			r.cycled = true
@@ -500,12 +511,20 @@ func (p *Pool) allocateLocked(family Family) (netip.Addr, *Mapping) {
 			if !r.cycled {
 				continue
 			}
+			// Never reclaim an address a live session is still pinned to:
+			// LookBack would stop resolving it, in-flight connections would
+			// fail with "unknown fake-ip destination", and the session would
+			// lose the pin it was promised.
+			if len(existing.sessions) > 0 {
+				continue
+			}
 			ev := existing.mapping()
 			evicted = &ev
 			p.deleteEntryLocked(ip, existing)
 		}
 		return ip, evicted
 	}
+	return netip.Addr{}, nil
 }
 
 func (r *rangeState) addrAt(off uint64) netip.Addr {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -32,6 +33,7 @@ type Server struct {
 
 	udpServer *dns.Server
 	tcpServer *dns.Server
+	stopping  atomic.Bool
 
 	// Stats
 	totalQueries     atomic.Int64
@@ -131,33 +133,49 @@ func buildUpstreams(cache *Cache) []*UpstreamResolver {
 
 func (s *Server) Start() error {
 	handler := dns.HandlerFunc(s.handleDNS)
+
+	// Bind synchronously so a failure is reported to the caller instead of
+	// being raced against a fixed sleep and then swallowed by an unread
+	// channel.
+	packetConn, err := net.ListenPacket("udp", s.listenAddr)
+	if err != nil {
+		return fmt.Errorf("dns server failed to start: %w", err)
+	}
+	listener, err := net.Listen("tcp", s.listenAddr)
+	if err != nil {
+		_ = packetConn.Close()
+		return fmt.Errorf("dns server failed to start: %w", err)
+	}
+
 	s.udpServer = &dns.Server{
-		Addr:    s.listenAddr,
-		Net:     "udp",
-		Handler: handler,
+		PacketConn: packetConn,
+		Net:        "udp",
+		Handler:    handler,
 	}
 	s.tcpServer = &dns.Server{
-		Addr:    s.listenAddr,
-		Net:     "tcp",
-		Handler: handler,
+		Listener: listener,
+		Net:      "tcp",
+		Handler:  handler,
 	}
 
-	errCh := make(chan error, 2)
-	go func() { errCh <- s.udpServer.ListenAndServe() }()
-	go func() { errCh <- s.tcpServer.ListenAndServe() }()
-
-	time.Sleep(100 * time.Millisecond)
-	select {
-	case err := <-errCh:
-		return fmt.Errorf("dns server failed to start: %w", err)
-	default:
-	}
+	s.stopping.Store(false)
+	go func() {
+		if err := s.udpServer.ActivateAndServe(); err != nil && !s.stopping.Load() {
+			slog.Error("dns udp server stopped", "error", err)
+		}
+	}()
+	go func() {
+		if err := s.tcpServer.ActivateAndServe(); err != nil && !s.stopping.Load() {
+			slog.Error("dns tcp server stopped", "error", err)
+		}
+	}()
 
 	slog.Info("DNS server started", "listen", s.listenAddr)
 	return nil
 }
 
 func (s *Server) Stop() error {
+	s.stopping.Store(true)
 	var errs []error
 	if s.udpServer != nil {
 		if err := s.udpServer.Shutdown(); err != nil {

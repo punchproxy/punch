@@ -8,6 +8,7 @@ import (
 	"net/netip"
 	"net/url"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -255,6 +256,19 @@ func Get(key string) (string, error) {
 		return "", ErrNotInitialized
 	}
 	return getValue(singleton.cfg, key)
+}
+
+// APISecret returns the currently configured API secret without cloning the
+// whole configuration, so the API's auth middleware can consult the live value
+// on every request rather than a copy captured at startup. ok is false when
+// the configuration singleton has not been initialised.
+func APISecret() (secret string, ok bool) {
+	singleton.mu.RLock()
+	defer singleton.mu.RUnlock()
+	if singleton.cfg == nil {
+		return "", false
+	}
+	return singleton.cfg.API.Secret, true
 }
 
 // Set updates one scalar configuration key, persists the new configuration,
@@ -889,11 +903,18 @@ func SaveRelaySelections(s *Store, state RelaySelections) error {
 			return fmt.Errorf("clear relay selections: %w", err)
 		}
 		rows := make([]relaySelectionModel, 0, len(state.GroupRelay))
+		// Iterate in a stable order: Position is persisted, and map iteration
+		// would reshuffle it on every save.
+		groupNames := make([]string, 0, len(state.GroupRelay))
+		for groupName := range state.GroupRelay {
+			groupNames = append(groupNames, groupName)
+		}
+		sort.Strings(groupNames)
 		position := 0
-		for groupName, relayName := range state.GroupRelay {
+		for _, groupName := range groupNames {
 			rows = append(rows, relaySelectionModel{
 				GroupName: groupName,
-				RelayName: relayName,
+				RelayName: state.GroupRelay[groupName],
 				Active:    groupName == state.ActiveGroup,
 				Position:  position,
 			})

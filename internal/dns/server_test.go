@@ -598,3 +598,19 @@ func waitFor(t *testing.T, timeout time.Duration, condition func() bool) {
 	}
 	t.Fatal("condition was not met before timeout")
 }
+
+// Start must bind before returning so a listen failure reaches the caller,
+// rather than being raced against a sleep and dropped on an unread channel.
+func TestStartReportsBindFailure(t *testing.T) {
+	a := &Server{listenAddr: "127.0.0.1:15353"}
+	if err := a.Start(); err != nil {
+		t.Fatalf("first Start() error = %v", err)
+	}
+	defer a.Stop()
+
+	b := &Server{listenAddr: "127.0.0.1:15353"}
+	if err := b.Start(); err == nil {
+		b.Stop()
+		t.Fatal("Start() on an occupied port returned nil; the bind failure was swallowed")
+	}
+}

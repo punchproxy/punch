@@ -90,27 +90,28 @@ func (s *Server) handleTerminateSessions(w http.ResponseWriter, r *http.Request)
 
 func buildSessionResponse(s *session.Session, includeTrace bool) sessionResponse {
 	now := time.Now()
-	end := s.EndTime
+	closedAt := s.EndTime()
+	end := closedAt
 	if end.IsZero() {
 		end = now
 	}
 	resp := sessionResponse{
 		ID:          s.ID,
-		Status:      s.Status,
+		Status:      s.Status(),
 		Domain:      s.Domain,
 		Destination: sessionDestination(s),
 		Source:      s.Source,
 		DstIP:       s.DstIP,
 		DstPort:     s.DstPort,
 		Protocol:    fmt.Sprintf("%s:%d", s.Protocol, s.DstPort),
-		Relay:       s.Relay,
+		Relay:       s.Relay(),
 		Rule:        s.Rule,
 		Process:     s.Process,
 		FakeIP:      s.FakeIP,
 		Upload:      s.UploadBytes(),
 		Download:    s.DownloadBytes(),
 		Established: s.StartTime,
-		ClosedAt:    s.EndTime,
+		ClosedAt:    closedAt,
 		DurationMS:  end.Sub(s.StartTime).Milliseconds(),
 	}
 	if includeTrace {

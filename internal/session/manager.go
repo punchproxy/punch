@@ -55,18 +55,18 @@ func (m *Manager) NewSession(domain, source, dstIP string, dstPort int, protocol
 	id := m.nextID.Add(1)
 	s := &Session{
 		ID:             fmt.Sprintf("%d", id),
-		Status:         StatusActive,
 		Domain:         domain,
 		Source:         source,
 		DstIP:          dstIP,
 		DstPort:        dstPort,
 		Protocol:       protocol,
-		Relay:          relay,
 		Rule:           rule,
 		FakeIP:         opts.FakeIP,
 		StartTime:      time.Now(),
 		DNSRequestedAt: opts.DNSRequestedAt,
 	}
+	s.status = StatusActive
+	s.relay = relay
 	if !opts.DNSRequestedAt.IsZero() {
 		message := "DNS requested"
 		if opts.FakeIP != "" {
@@ -76,17 +76,19 @@ func (m *Manager) NewSession(domain, source, dstIP string, dstPort int, protocol
 	}
 	s.trace = append(s.trace, TraceEntry{At: s.StartTime, Message: "TUN connection received"})
 
-	m.mu.Lock()
-	m.active[s.ID] = s
-	m.addActiveFakeIPLocked(s)
-	m.mu.Unlock()
-
+	// Bind the update hook before the session is reachable from the manager,
+	// so a concurrent reader never races the assignment.
 	s.SetUpdateFunc(func() {
 		m.bus.Publish(eventbus.Event{
 			Type: eventbus.EventSessionUpdate,
 			Data: s,
 		})
 	})
+
+	m.mu.Lock()
+	m.active[s.ID] = s
+	m.addActiveFakeIPLocked(s)
+	m.mu.Unlock()
 
 	m.bus.Publish(eventbus.Event{
 		Type: eventbus.EventSessionOpen,
@@ -105,13 +107,6 @@ func (m *Manager) CloseSession(id string, status Status) {
 	}
 	delete(m.active, id)
 	m.removeActiveFakeIPLocked(s)
-
-	s.Status = status
-	s.EndTime = time.Now()
-	if status == StatusError && s.closeReason != "" {
-		s.trace = append(s.trace, TraceEntry{At: s.EndTime, Message: "error occurred: " + s.closeReason})
-	}
-	s.trace = append(s.trace, TraceEntry{At: s.EndTime, Message: "Session closed"})
 	m.totalUpload.Add(s.Upload.Load())
 	m.totalDownload.Add(s.Download.Load())
 
@@ -128,6 +123,10 @@ func (m *Manager) CloseSession(id string, status Status) {
 		}
 	}
 	m.mu.Unlock()
+
+	// Terminal state is stamped under the session's own lock, after it has
+	// left the active map.
+	s.markClosed(status)
 
 	s.Close()
 

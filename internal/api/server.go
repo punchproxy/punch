@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -79,10 +80,12 @@ func (s *Server) Start() error {
 
 	r.Route("/api", func(r chi.Router) {
 		// Auth guards the API only; the dashboard's static assets must load
-		// unauthenticated so the user can enter a token.
-		if s.cfg.Secret != "" {
-			r.Use(s.authMiddleware)
-		}
+		// unauthenticated so the user can enter a token. The middleware is
+		// always installed and consults the live secret per request: routes
+		// are built once at startup, so registering it conditionally would
+		// leave a daemon that started without a secret permanently unguarded,
+		// silently defeating `punchctl config set api.secret`.
+		r.Use(s.authMiddleware)
 		r.Get("/status", s.handleStatus)
 		r.Post("/shutdown", s.handleShutdown)
 		r.Get("/system", s.handleSystem)
@@ -398,19 +401,42 @@ func (s *Server) handleFlushCache(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
+// apiSecret returns the secret to enforce right now. It reads the live
+// configuration so both setting and clearing api.secret take effect
+// immediately, falling back to the value captured at startup only when the
+// config singleton is not initialised (tests construct servers directly).
+func (s *Server) apiSecret() string {
+	if secret, ok := config.APISecret(); ok {
+		return secret
+	}
+	return s.cfg.Secret
+}
+
 func (s *Server) authMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		secret := s.apiSecret()
+		if secret == "" {
+			next.ServeHTTP(w, r)
+			return
+		}
 		token := r.Header.Get("Authorization")
 		if token == "" {
 			token = r.URL.Query().Get("token")
 		}
-		expected := "Bearer " + s.cfg.Secret
-		if token != expected && token != s.cfg.Secret {
+		if !secretMatches(token, secret) {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
 			return
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// secretMatches accepts the token either bare or as a Bearer credential, in
+// constant time so the comparison does not leak the secret's prefix.
+func secretMatches(token, secret string) bool {
+	bearer := subtle.ConstantTimeCompare([]byte(token), []byte("Bearer "+secret))
+	bare := subtle.ConstantTimeCompare([]byte(token), []byte(secret))
+	return bearer|bare == 1
 }
 
 func corsMiddleware(next http.Handler) http.Handler {

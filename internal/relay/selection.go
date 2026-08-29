@@ -2,7 +2,6 @@ package relay
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -135,52 +134,31 @@ func (s *Selector) SelectManualGroup(name string) (string, error) {
 }
 
 func (s *Selector) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
-	_, d, h := s.activeSelection()
-	conn, err := d.DialContext(ctx, network, address)
-	if err != nil {
-		return nil, err
-	}
-	if h != nil {
-		return &relayTrackedConn{Conn: conn, health: h}, nil
-	}
-	return conn, nil
+	conn, _, err := s.DialContextRelay(ctx, network, address)
+	return conn, err
 }
 
-func (s *Selector) activeSelection() (*group, Dialer, *RelayHealth) {
+// DialContextRelay dials like DialContext and additionally reports the display
+// name of the relay that actually carried the dial. Callers that want to label
+// a connection must use this rather than reading ActiveName() afterwards: the
+// selector can switch relays while the dial is in flight, which would attribute
+// the connection to the wrong relay.
+func (s *Selector) DialContextRelay(ctx context.Context, network, address string) (net.Conn, string, error) {
+	d, name := s.activeSelection()
+	conn, err := d.DialContext(ctx, network, address)
+	if err != nil {
+		return nil, name, err
+	}
+	return conn, name, nil
+}
+
+func (s *Selector) activeSelection() (Dialer, string) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	if len(s.groups) == 0 {
-		return nil, &DirectDialer{}, nil
+		return &DirectDialer{}, "DIRECT"
 	}
 	g := s.groups[s.activeUsableGroupIndexLocked()]
 	d := g.dialers[s.activeDialerIndexLocked(g)]
-	return g, d, s.health[s.healthKey(g.name, d.Name())]
-}
-
-type relayTrackedConn struct {
-	net.Conn
-	health *RelayHealth
-}
-
-func (c *relayTrackedConn) Read(b []byte) (int, error) {
-	n, err := c.Conn.Read(b)
-	if n > 0 {
-		c.health.Download.Add(int64(n))
-	}
-	return n, err
-}
-
-func (c *relayTrackedConn) Write(b []byte) (int, error) {
-	n, err := c.Conn.Write(b)
-	if n > 0 {
-		c.health.Upload.Add(int64(n))
-	}
-	return n, err
-}
-
-func (c *relayTrackedConn) CloseWrite() error {
-	if conn, ok := c.Conn.(interface{ CloseWrite() error }); ok {
-		return conn.CloseWrite()
-	}
-	return errors.ErrUnsupported
+	return d, s.displayName(g.name, d.Name())
 }

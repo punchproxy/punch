@@ -1,6 +1,7 @@
 package fakeip
 
 import (
+	"fmt"
 	"net/netip"
 	"reflect"
 	"testing"
@@ -304,5 +305,40 @@ func TestActiveMappingNotPruned(t *testing.T) {
 
 	if _, ok := pool.LookBack(ip); !ok {
 		t.Fatal("active mapping was pruned despite session pin")
+	}
+}
+
+// A tiny pool whose every address is pinned must not hand out an address that
+// a live session is still using, and must not spin.
+func TestAllocateSkipsPinnedOnWraparound(t *testing.T) {
+	p, err := New("10.9.9.0/24", time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pinned := map[netip.Addr]string{}
+	for i := 0; i < 200; i++ {
+		host := fmt.Sprintf("pin%d.example.", i)
+		ip := p.Lookup(host)
+		if !ip.IsValid() {
+			break
+		}
+		id := host
+		if !p.Acquire(ip, id) {
+			t.Fatalf("acquire %s failed", ip)
+		}
+		pinned[ip] = host
+	}
+	if len(pinned) == 0 {
+		t.Fatal("no mappings allocated")
+	}
+	// Force many more allocations than the pool holds.
+	for i := 0; i < 500; i++ {
+		p.Lookup(fmt.Sprintf("fill%d.example.", i))
+	}
+	for ip, host := range pinned {
+		got, ok := p.LookBack(ip)
+		if !ok || got != host {
+			t.Fatalf("pinned mapping %s lost: LookBack=%q ok=%v (want %q)", ip, got, ok, host)
+		}
 	}
 }

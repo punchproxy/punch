@@ -83,15 +83,26 @@ func (s *Selector) dueRefreshGroups() []string {
 	return names
 }
 
+// Stop halts the background loops and closes every dialer. It is safe to call
+// more than once (shutdown paths call it from several places).
 func (s *Selector) Stop() {
-	close(s.stopCh)
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	for _, g := range s.groups {
-		for _, d := range g.dialers {
+	s.stopOnce.Do(func() {
+		close(s.stopCh)
+
+		// Snapshot the dialers before closing them: an adapter's Close can
+		// block on live connections, and holding the selector lock across that
+		// would stall every DialContext and ApplyConfig in the process.
+		var dialers []Dialer
+		s.mu.RLock()
+		for _, g := range s.groups {
+			dialers = append(dialers, g.dialers...)
+		}
+		s.mu.RUnlock()
+
+		for _, d := range dialers {
 			_ = d.Close()
 		}
-	}
+	})
 }
 
 func (s *Selector) anyAutoGroupLocked() bool {

@@ -47,20 +47,20 @@ type HistoryStore interface {
 func (s *Session) closedRecord() ClosedRecord {
 	return ClosedRecord{
 		ID:             s.ID,
-		Status:         s.Status,
+		Status:         s.Status(),
 		Domain:         s.Domain,
 		Source:         s.Source,
 		DstIP:          s.DstIP,
 		DstPort:        s.DstPort,
 		Protocol:       s.Protocol,
-		Relay:          s.Relay,
+		Relay:          s.Relay(),
 		Rule:           s.Rule,
 		Process:        s.Process,
 		FakeIP:         s.FakeIP,
 		Upload:         s.Upload.Load(),
 		Download:       s.Download.Load(),
 		StartTime:      s.StartTime,
-		EndTime:        s.EndTime,
+		EndTime:        s.EndTime(),
 		DNSRequestedAt: s.DNSRequestedAt,
 		CloseReason:    s.CloseReason(),
 		Trace:          s.Trace(),
@@ -72,20 +72,20 @@ func (s *Session) closedRecord() ClosedRecord {
 func (r ClosedRecord) restore() *Session {
 	s := &Session{
 		ID:             r.ID,
-		Status:         r.Status,
 		Domain:         r.Domain,
 		Source:         r.Source,
 		DstIP:          r.DstIP,
 		DstPort:        r.DstPort,
 		Protocol:       r.Protocol,
-		Relay:          r.Relay,
 		Rule:           r.Rule,
 		Process:        r.Process,
 		FakeIP:         r.FakeIP,
 		StartTime:      r.StartTime,
-		EndTime:        r.EndTime,
 		DNSRequestedAt: r.DNSRequestedAt,
 	}
+	s.status = r.Status
+	s.relay = r.Relay
+	s.endTime = r.EndTime
 	s.Upload.Store(r.Upload)
 	s.Download.Store(r.Download)
 	s.closeReason = r.CloseReason

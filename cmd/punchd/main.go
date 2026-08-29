@@ -233,6 +233,9 @@ func main() {
 	}()
 
 	assetManager.MarkReady()
+	assetRefreshStop := make(chan struct{})
+	assetManager.StartRefreshLoop(assetRefreshStop)
+
 	slog.Info("Punch is ready",
 		"dns", config.DNSListenAddr(cfg.DNS),
 		"api", cfg.API.Listen,
@@ -264,6 +267,7 @@ shutdown:
 	// Graceful shutdown in reverse order
 	slog.Info("shutting down...")
 
+	close(assetRefreshStop)
 	close(fakeIPSaverStop)
 	<-fakeIPSaverDone
 	if err := saveFakeIPs(st, dnsServer.FakeIPPool()); err != nil {

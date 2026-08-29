@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"testing"
 
@@ -214,5 +215,68 @@ func TestConfigHandlersUseTopLevelDNSKeys(t *testing.T) {
 	rec = runRelayHandler(t, s.handleConfig, http.MethodGet, "/api/config?key=dns.options.fake_ip_range", nil, nil)
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("legacy key status = %d, want 404", rec.Code)
+	}
+}
+
+// A daemon started without a secret must still be able to close the hole at
+// runtime: the routes are built once, so the middleware has to consult the
+// live configuration rather than the value captured in NewServer.
+func TestAPISecretSetAtRuntimeTakesEffectImmediately(t *testing.T) {
+	st, err := config.Open(filepath.Join(t.TempDir(), "punch.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { st.Close() })
+	if err := config.Init(st); err != nil {
+		t.Fatalf("seed config: %v", err)
+	}
+
+	// Started with no secret, as the vulnerable deployment would be.
+	s := NewServer(config.API{}, st, nil, nil, session.NewManager(eventbus.New(), 10))
+
+	guarded := s.authMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	rec := httptest.NewRecorder()
+	guarded.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/status", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("unauthenticated request with no secret = %d, want 200", rec.Code)
+	}
+
+	if err := config.Set("api.secret", "s3cret"); err != nil {
+		t.Fatalf("set api.secret: %v", err)
+	}
+
+	rec = httptest.NewRecorder()
+	guarded.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/status", nil))
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated request after setting the secret = %d, want 401", rec.Code)
+	}
+
+	for _, token := range []string{"s3cret", "Bearer s3cret"} {
+		rec = httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/api/status", nil)
+		req.Header.Set("Authorization", token)
+		guarded.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("request with token %q = %d, want 200", token, rec.Code)
+		}
+	}
+
+	rec = httptest.NewRecorder()
+	guarded.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/status?token=s3cret", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("query-token request = %d, want 200", rec.Code)
+	}
+
+	// Clearing it again must also apply live.
+	if err := config.Set("api.secret", ""); err != nil {
+		t.Fatalf("clear api.secret: %v", err)
+	}
+	rec = httptest.NewRecorder()
+	guarded.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/status", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("request after clearing the secret = %d, want 200", rec.Code)
 	}
 }

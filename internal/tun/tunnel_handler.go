@@ -112,6 +112,8 @@ func (h *handler) NewPacketConnectionEx(ctx context.Context, conn N.PacketConn, 
 	writer := &packetWriteBack{conn: conn}
 	senders := newUDPSenderRegistry()
 	defer senders.close()
+	dnsQueries := newDNSDispatcher(ctx, h, writer)
+	defer dnsQueries.close()
 
 	for {
 		packet := singbuf.NewPacket()
@@ -125,7 +127,7 @@ func (h *handler) NewPacketConnectionEx(ctx context.Context, conn N.PacketConn, 
 		}
 
 		if isDNSDestination(destination) {
-			h.handleDNSPacket(ctx, writer, packet, destination)
+			dnsQueries.Send(packet, destination)
 			continue
 		}
 
@@ -226,7 +228,7 @@ func (h *handler) handleTCPConn(ctx context.Context, conn net.Conn, source M.Soc
 
 	dialCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	dialStart := time.Now()
-	remoteConn, err := h.selector.DialContext(dialCtx, "tcp", target)
+	remoteConn, dialedRelay, err := h.selector.DialContextRelay(dialCtx, "tcp", target)
 	cancel()
 	if err != nil {
 		sess.SetCloseReason(fmt.Sprintf("dial relay: %v", err))
@@ -235,8 +237,8 @@ func (h *handler) handleTCPConn(ctx context.Context, conn net.Conn, source M.Soc
 	}
 	defer remoteConn.Close()
 
-	sess.Relay = h.selector.ActiveName()
-	h.selector.RecordConnectLatency(sess.Relay, time.Since(dialStart))
+	sess.SetRelay(dialedRelay)
+	h.selector.RecordConnectLatency(dialedRelay, time.Since(dialStart))
 	sess.MarkConnected()
 	shutdown := &tcpShutdownState{}
 	h.bindSessionCloser(sess, closeFunc(shutdown.begin), releaseFakeIP, conn, remoteConn)
@@ -255,10 +257,10 @@ func (h *handler) handleTCPConn(ctx context.Context, conn net.Conn, source M.Soc
 	}
 	sess.SetCloseReason(fmt.Sprintf("%s copy (%s side): %v", result.dir, side, result.err))
 	if relaySide {
-		h.selector.ReportStreamAbort(sess.Relay)
+		h.selector.ReportStreamAbort(sess.Relay())
 		slog.Warn("relay aborted stream mid-transfer",
 			"session", sess.ID,
-			"relay", sess.Relay,
+			"relay", sess.Relay(),
 			"target", target,
 			"direction", result.dir,
 			"upload_bytes", sess.UploadBytes(),
@@ -377,6 +379,69 @@ func (h *handler) handleDNSConn(ctx context.Context, conn net.Conn) error {
 			slog.Debug("served TUN DNS TCP query with failure response", "error", serveErr)
 		}
 	}
+}
+
+// dnsWorkerCount bounds how many TUN DNS queries one UDP association resolves
+// concurrently. Resolution can block for the full upstream timeout, so it must
+// not run inline in the association's packet-read loop: a single slow lookup
+// would stall every other UDP flow sharing that association until its
+// per-destination queue overflowed.
+const dnsWorkerCount = 4
+
+type dnsDispatcher struct {
+	handler   *handler
+	writer    N.PacketWriter
+	ctx       context.Context
+	ch        chan *udpTunPacket
+	wg        sync.WaitGroup
+	closeOnce sync.Once
+}
+
+func newDNSDispatcher(ctx context.Context, h *handler, writer N.PacketWriter) *dnsDispatcher {
+	d := &dnsDispatcher{
+		handler: h,
+		writer:  writer,
+		ctx:     ctx,
+		ch:      make(chan *udpTunPacket, udpPacketQueueSize),
+	}
+	d.wg.Add(dnsWorkerCount)
+	for i := 0; i < dnsWorkerCount; i++ {
+		go d.worker()
+	}
+	return d
+}
+
+func (d *dnsDispatcher) worker() {
+	defer d.wg.Done()
+	for packet := range d.ch {
+		select {
+		case <-d.ctx.Done():
+			packet.buffer.Release()
+			continue
+		default:
+		}
+		d.handler.handleDNSPacket(d.ctx, d.writer, packet.buffer, packet.destination)
+	}
+}
+
+// Send queues a DNS query for resolution. Send is only called from the
+// association's read loop, which also closes the dispatcher, so the queue is
+// never written after close. A full queue drops the query instead of blocking
+// that loop; DNS clients retry.
+func (d *dnsDispatcher) Send(packet *singbuf.Buffer, destination M.Socksaddr) {
+	select {
+	case d.ch <- &udpTunPacket{buffer: packet, destination: destination}:
+	default:
+		packet.Release()
+		if d.handler != nil {
+			d.handler.udp.queueFullDrops.Add(1)
+		}
+	}
+}
+
+func (d *dnsDispatcher) close() {
+	d.closeOnce.Do(func() { close(d.ch) })
+	d.wg.Wait()
 }
 
 func (h *handler) handleDNSPacket(ctx context.Context, writer N.PacketWriter, packet *singbuf.Buffer, destination M.Socksaddr) {
@@ -645,7 +710,7 @@ func (s *udpSender) init() error {
 	)
 
 	dialCtx, cancel := context.WithTimeout(s.ctx, 10*time.Second)
-	conn, err := s.handler.selector.DialContext(dialCtx, "udp", target)
+	conn, dialedRelay, err := s.handler.selector.DialContextRelay(dialCtx, "udp", target)
 	cancel()
 	if err != nil {
 		s.sess.SetCloseReason(fmt.Sprintf("dial relay: %v", err))
@@ -655,7 +720,7 @@ func (s *udpSender) init() error {
 	}
 
 	s.conn = conn
-	s.sess.Relay = s.handler.selector.ActiveName()
+	s.sess.SetRelay(dialedRelay)
 	s.sess.MarkConnected()
 	s.handler.bindSessionCloser(s.sess, releaseFakeIP, conn, closeFunc(s.cancel))
 	releaseFakeIP = nil
@@ -690,10 +755,10 @@ func (s *udpSender) readBack() {
 				s.sessionStatus = session.StatusError
 				s.closeReason = fmt.Sprintf("relay read: %v", err)
 				if s.sess != nil {
-					s.handler.selector.ReportStreamAbort(s.sess.Relay)
+					s.handler.selector.ReportStreamAbort(s.sess.Relay())
 					slog.Warn("relay aborted UDP flow",
 						"session", s.sess.ID,
-						"relay", s.sess.Relay,
+						"relay", s.sess.Relay(),
 						"destination", s.destination.String(),
 						"error", err,
 					)

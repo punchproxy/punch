@@ -15,6 +15,10 @@ type systemDNSState struct {
 	Servers []string
 	Empty   bool
 	Content string
+	// Link records the target when Name is a symlink (Linux resolv.conf is
+	// commonly a link into /run/systemd/resolve). It is restored as a link
+	// rather than as a regular file, and never written through.
+	Link string
 }
 
 type SystemDNSInfo struct {

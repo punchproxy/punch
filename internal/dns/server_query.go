@@ -429,17 +429,33 @@ func answerMinTTL(msg *dns.Msg) uint32 {
 	return minTTL
 }
 
+// defaultFakeIPAnswerTTL caps how long clients cache a fake IP. It is only an
+// upper bound: a pool configured with a shorter TTL wins, so a client never
+// keeps trusting an address the pool may have already reclaimed.
+const defaultFakeIPAnswerTTL = 300
+
+func (s *Server) fakeIPAnswerTTL() uint32 {
+	ttl := uint32(defaultFakeIPAnswerTTL)
+	if pool := s.FakeIPPool(); pool != nil {
+		if poolTTL := uint32(pool.TTL().Seconds()); poolTTL > 0 && poolTTL < ttl {
+			ttl = poolTTL
+		}
+	}
+	return ttl
+}
+
 func (s *Server) buildFakeIPResponse(r *dns.Msg, ip netip.Addr) *dns.Msg {
 	resp := new(dns.Msg)
 	resp.SetReply(r)
 	resp.RecursionAvailable = true
 
+	ttl := s.fakeIPAnswerTTL()
 	rr := &dns.A{
 		Hdr: dns.RR_Header{
 			Name:   r.Question[0].Name,
 			Rrtype: dns.TypeA,
 			Class:  dns.ClassINET,
-			Ttl:    300,
+			Ttl:    ttl,
 		},
 		A: ip.AsSlice(),
 	}
@@ -449,7 +465,7 @@ func (s *Server) buildFakeIPResponse(r *dns.Msg, ip netip.Addr) *dns.Msg {
 				Name:   r.Question[0].Name,
 				Rrtype: dns.TypeAAAA,
 				Class:  dns.ClassINET,
-				Ttl:    300,
+				Ttl:    ttl,
 			},
 			AAAA: ip.AsSlice(),
 		}}

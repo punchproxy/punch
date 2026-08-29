@@ -100,10 +100,7 @@ func TestRelayConnectionWrappersForwardCloseWrite(t *testing.T) {
 	defer conn.Close()
 	defer peer.Close()
 	inner := &closeWriteTrackingConn{Conn: conn}
-	wrapped := &relayTrackedConn{
-		Conn:   &connWrapper{Conn: inner},
-		health: &RelayHealth{},
-	}
+	wrapped := &connWrapper{Conn: inner}
 
 	if err := wrapped.CloseWrite(); err != nil {
 		t.Fatalf("CloseWrite() error = %v", err)

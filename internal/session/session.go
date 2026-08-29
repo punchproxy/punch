@@ -15,31 +15,36 @@ const (
 	StatusError  Status = "ERROR"
 )
 
+// Session describes one proxied connection. The exported fields are immutable
+// once NewSession returns; every mutable field lives below mu and is reached
+// through accessors, so readers (the API, the manager) never observe a torn
+// write. Sessions become visible to KillSession before the relay dial
+// completes, so "only the owning goroutine touches this" is never true here.
 type Session struct {
-	ID             string       `json:"id"`
-	Status         Status       `json:"status"`
-	Domain         string       `json:"domain"`
-	Source         string       `json:"source"`
-	DstIP          string       `json:"dst_ip"`
-	DstPort        int          `json:"dst_port"`
-	Protocol       string       `json:"protocol"`
-	Relay          string       `json:"relay"`
-	Rule           string       `json:"rule"`
-	Process        string       `json:"process"`
-	FakeIP         string       `json:"fake_ip,omitempty"`
-	Upload         atomic.Int64 `json:"-"`
-	Download       atomic.Int64 `json:"-"`
-	StartTime      time.Time    `json:"start_time"`
-	EndTime        time.Time    `json:"end_time,omitempty"`
-	DNSRequestedAt time.Time    `json:"dns_requested_at,omitempty"`
+	ID             string
+	Domain         string
+	Source         string
+	DstIP          string
+	DstPort        int
+	Protocol       string
+	Rule           string
+	Process        string
+	FakeIP         string
+	Upload         atomic.Int64
+	Download       atomic.Int64
+	StartTime      time.Time
+	DNSRequestedAt time.Time
 
 	mu            sync.RWMutex
+	status        Status
+	relay         string
+	endTime       time.Time
 	connectedAt   time.Time
 	requestSentAt time.Time
 	firstByteAt   time.Time
 	closeReason   string
 	trace         []TraceEntry
-	closeOnce     sync.Once
+	closed        bool
 	closeFn       func()
 	updateFn      func()
 }
@@ -52,19 +57,65 @@ type TraceEntry struct {
 func (s *Session) UploadBytes() int64   { return s.Upload.Load() }
 func (s *Session) DownloadBytes() int64 { return s.Download.Load() }
 
+func (s *Session) Status() Status {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.status
+}
+
+func (s *Session) EndTime() time.Time {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.endTime
+}
+
+func (s *Session) Relay() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.relay
+}
+
+// SetRelay records which relay actually carried the connection. Callers pass
+// the name resolved by the dial itself rather than re-reading the selector,
+// which may have switched relays in the meantime.
+func (s *Session) SetRelay(name string) {
+	s.mu.Lock()
+	s.relay = name
+	s.mu.Unlock()
+}
+
+// Close runs the bound closer exactly once. A Close that lands before the
+// closer is bound (a kill racing the relay dial) is remembered, and
+// SetCloseFunc runs it as soon as the connections exist — otherwise the kill
+// would report success while the connection kept running.
 func (s *Session) Close() {
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return
+	}
+	s.closed = true
 	fn := s.closeFn
+	s.mu.Unlock()
 	if fn != nil {
-		s.closeOnce.Do(fn)
+		fn()
 	}
 }
 
 func (s *Session) SetCloseFunc(fn func()) {
+	s.mu.Lock()
 	s.closeFn = fn
+	pending := s.closed
+	s.mu.Unlock()
+	if pending && fn != nil {
+		fn()
+	}
 }
 
 func (s *Session) SetUpdateFunc(fn func()) {
+	s.mu.Lock()
 	s.updateFn = fn
+	s.mu.Unlock()
 }
 
 func (s *Session) MarkConnected() {
@@ -113,6 +164,21 @@ func (s *Session) MarkFirstByte() {
 	if update != nil {
 		update()
 	}
+}
+
+// markClosed stamps the terminal state and closing trace entries. The manager
+// calls it after dropping the session from its active map, so every write to
+// the session still happens under the session's own lock.
+func (s *Session) markClosed(status Status) time.Time {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.status = status
+	s.endTime = time.Now()
+	if status == StatusError && s.closeReason != "" {
+		s.trace = append(s.trace, TraceEntry{At: s.endTime, Message: "error occurred: " + s.closeReason})
+	}
+	s.trace = append(s.trace, TraceEntry{At: s.endTime, Message: "Session closed"})
+	return s.endTime
 }
 
 func (s *Session) ConnectedAt() time.Time {

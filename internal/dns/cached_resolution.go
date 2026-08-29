@@ -52,7 +52,9 @@ func resolveCachedDNS(ctx context.Context, opts cachedDNSOptions) (cachedDNSResu
 				}
 				stale = result
 				hasStale = true
-			} else if !(opts.respectAnswerTTL && hit.answerMinTTL() == 0) {
+			} else {
+				// Reaching here already means the entry is fresh: the branch
+				// above covers both hit.stale and the expired-answer case.
 				return result, nil
 			}
 		}

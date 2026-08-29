@@ -69,6 +69,62 @@ func TestLinuxResolvConfDNSOverrideRestoresOriginalContent(t *testing.T) {
 	}
 }
 
+// The resolv.conf fallback runs exactly when systemd-resolved is broken, which
+// is when /etc/resolv.conf is most likely a symlink into /run/systemd/resolve.
+// Writing through that link would truncate a systemd-owned file.
+func TestLinuxResolvConfDNSOverrideReplacesSymlinkInsteadOfWritingThrough(t *testing.T) {
+	dir := t.TempDir()
+	oldPath := linuxResolvConfPath
+	linuxResolvConfPath = filepath.Join(dir, "resolv.conf")
+	t.Cleanup(func() {
+		linuxResolvConfPath = oldPath
+	})
+
+	target := filepath.Join(dir, "stub-resolv.conf")
+	original := "nameserver 127.0.0.53\noptions edns0\n"
+	if err := os.WriteFile(target, []byte(original), 0o644); err != nil {
+		t.Fatalf("write link target: %v", err)
+	}
+	if err := os.Symlink(target, linuxResolvConfPath); err != nil {
+		t.Fatalf("symlink resolv.conf: %v", err)
+	}
+
+	states, err := linuxCurrentResolvConfDNS()
+	if err != nil {
+		t.Fatalf("linuxCurrentResolvConfDNS() error = %v", err)
+	}
+	if states[0].Link != target {
+		t.Fatalf("recorded link = %q, want %q", states[0].Link, target)
+	}
+
+	if err := linuxApplyResolvConfDNSOverride(states, "198.18.0.2"); err != nil {
+		t.Fatalf("linuxApplyResolvConfDNSOverride() error = %v", err)
+	}
+	kept, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("read link target: %v", err)
+	}
+	if string(kept) != original {
+		t.Fatalf("systemd-owned link target was overwritten: %q, want %q", string(kept), original)
+	}
+	if info, err := os.Lstat(linuxResolvConfPath); err != nil {
+		t.Fatalf("lstat resolv.conf: %v", err)
+	} else if info.Mode()&os.ModeSymlink != 0 {
+		t.Fatal("resolv.conf is still a symlink after the override")
+	}
+
+	if err := linuxRestoreResolvConfDNS(states); err != nil {
+		t.Fatalf("linuxRestoreResolvConfDNS() error = %v", err)
+	}
+	restored, err := os.Readlink(linuxResolvConfPath)
+	if err != nil {
+		t.Fatalf("resolv.conf was not restored as a symlink: %v", err)
+	}
+	if restored != target {
+		t.Fatalf("restored link = %q, want %q", restored, target)
+	}
+}
+
 func TestLinuxOverrideSystemDNSFallsBackToResolvConfWhenResolvedUnavailable(t *testing.T) {
 	oldPath := linuxResolvConfPath
 	oldLookPath := linuxLookPath

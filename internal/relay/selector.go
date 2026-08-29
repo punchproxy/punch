@@ -61,10 +61,8 @@ type RelayHealth struct {
 	Error           string         `json:"error,omitempty"`
 	// Stream aborts count relay-side mid-transfer failures on live traffic,
 	// which connectivity probes on fresh connections do not observe.
-	RecentStreamAborts int          `json:"recent_stream_aborts,omitempty"`
-	StreamAborts       int64        `json:"stream_aborts,omitempty"`
-	Upload             atomic.Int64 `json:"-"`
-	Download           atomic.Int64 `json:"-"`
+	RecentStreamAborts int   `json:"recent_stream_aborts,omitempty"`
+	StreamAborts       int64 `json:"stream_aborts,omitempty"`
 }
 
 type HealthRecord struct {
@@ -154,6 +152,7 @@ type Selector struct {
 	checkSem                chan struct{}
 	bus                     *eventbus.Bus
 	stopCh                  chan struct{}
+	stopOnce                sync.Once
 	benchmarkConfigCh       chan struct{}
 	selectedConfigCh        chan struct{}
 	store                   *config.Store
