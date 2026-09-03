@@ -21,24 +21,32 @@ func TestClassifyCopyError(t *testing.T) {
 		shutdown bool
 		abnormal bool
 		relay    bool
+		relayTyp string
 	}{
-		{"clean close", nil, false, false, false},
-		{"eof", io.EOF, false, false, false},
-		{"client closed connection", net.ErrClosed, false, false, false},
-		{"session torn down", net.ErrClosed, true, false, false},
-		{"relay closed before teardown", tagRelayError(net.ErrClosed), false, true, true},
-		{"tagged closed conn from teardown", tagRelayError(net.ErrClosed), true, false, false},
-		{"client reset (app went away)", syscall.ECONNRESET, false, false, false},
-		{"client broken pipe", syscall.EPIPE, false, false, false},
-		{"relay reset mid-stream", tagRelayError(syscall.ECONNRESET), false, true, true},
-		{"relay broken pipe", tagRelayError(syscall.EPIPE), false, true, true},
-		{"relay reset wrapped in op error", tagRelayError(fmt.Errorf("read tcp: %w", syscall.ECONNRESET)), false, true, true},
-		{"relay generic error", tagRelayError(errors.New("tls: bad record")), false, true, true},
-		{"client generic error", errors.New("short write"), false, true, false},
-		{"generic teardown error", errors.New("short write"), true, false, false},
+		{"clean close", nil, false, false, false, ""},
+		{"eof", io.EOF, false, false, false, ""},
+		{"client closed connection", net.ErrClosed, false, false, false, ""},
+		{"session torn down", net.ErrClosed, true, false, false, ""},
+		{"relay closed before teardown", tagRelayError(net.ErrClosed), false, true, true, ""},
+		{"tagged closed conn from teardown", tagRelayError(net.ErrClosed), true, false, false, ""},
+		{"client reset (app went away)", syscall.ECONNRESET, false, false, false, ""},
+		{"client broken pipe", syscall.EPIPE, false, false, false, ""},
+		{"relay reset mid-stream", tagRelayError(syscall.ECONNRESET), false, true, true, ""},
+		{"relay broken pipe", tagRelayError(syscall.EPIPE), false, true, true, ""},
+		{"relay reset wrapped in op error", tagRelayError(fmt.Errorf("read tcp: %w", syscall.ECONNRESET)), false, true, true, ""},
+		{"relay generic error", tagRelayError(errors.New("tls: bad record")), false, true, true, ""},
+		{"client generic error", errors.New("short write"), false, true, false, ""},
+		{"generic teardown error", errors.New("short write"), true, false, false, ""},
+		{"ss relay reset is a normal end", tagRelayError(syscall.ECONNRESET), false, false, false, "ss"},
+		{"ss relay broken pipe is a normal end", tagRelayError(syscall.EPIPE), false, false, false, "ss"},
+		{"shadowsocks adapter reset is a normal end", tagRelayError(syscall.ECONNRESET), false, false, false, "Shadowsocks"},
+		{"ssr relay reset is a normal end", tagRelayError(syscall.ECONNRESET), false, false, false, "ssr"},
+		{"ss reset wrapped in op error is a normal end", tagRelayError(fmt.Errorf("read tcp: %w", syscall.ECONNRESET)), false, false, false, "ss"},
+		{"non-ss relay reset is still an abort", tagRelayError(syscall.ECONNRESET), false, true, true, "vmess"},
+		{"ss relay generic error stays abnormal", tagRelayError(errors.New("tls: bad record")), false, true, true, "ss"},
 	}
 	for _, tc := range cases {
-		abnormal, relay := classifyCopyError(tc.err, tc.shutdown)
+		abnormal, relay := classifyCopyError(tc.err, tc.shutdown, tc.relayTyp)
 		if abnormal != tc.abnormal || relay != tc.relay {
 			t.Errorf("%s: classifyCopyError() = (%v, %v), want (%v, %v)", tc.name, abnormal, relay, tc.abnormal, tc.relay)
 		}
@@ -48,7 +56,7 @@ func TestClassifyCopyError(t *testing.T) {
 func TestRunTCPRelayPreservesClientHalfCloseForDelayedResponse(t *testing.T) {
 	client, local := newHalfClosePipe()
 	remote, server := newHalfClosePipe()
-	result, closeBoth := startTCPRelay(t, context.Background(), local, remote, time.Second)
+	result, closeBoth := startTCPRelay(t, context.Background(), local, remote, time.Second, "")
 	defer closeBoth()
 	defer client.Close()
 	defer server.Close()
@@ -78,13 +86,13 @@ func TestRunTCPRelayPreservesClientHalfCloseForDelayedResponse(t *testing.T) {
 	if request := <-serverResult; string(request) != "request" {
 		t.Fatalf("request = %q, want request", request)
 	}
-	assertCleanTCPResult(t, awaitTCPResult(t, result))
+	assertCleanTCPResult(t, awaitTCPResult(t, result), "")
 }
 
 func TestRunTCPRelayPreservesUploadAfterServerFIN(t *testing.T) {
 	client, local := newHalfClosePipe()
 	remote, server := newHalfClosePipe()
-	result, closeBoth := startTCPRelay(t, context.Background(), local, remote, time.Second)
+	result, closeBoth := startTCPRelay(t, context.Background(), local, remote, time.Second, "")
 	defer closeBoth()
 	defer client.Close()
 	defer server.Close()
@@ -113,14 +121,14 @@ func TestRunTCPRelayPreservesUploadAfterServerFIN(t *testing.T) {
 	if upload := <-serverResult; string(upload) != "late upload" {
 		t.Fatalf("upload = %q, want late upload", upload)
 	}
-	assertCleanTCPResult(t, awaitTCPResult(t, result))
+	assertCleanTCPResult(t, awaitTCPResult(t, result), "")
 }
 
 func TestRunTCPRelayDrainsTransportWithoutCloseWrite(t *testing.T) {
 	client, local := newHalfClosePipe()
 	remotePipe, server := newHalfClosePipe()
 	remote := struct{ net.Conn }{Conn: remotePipe}
-	result, closeBoth := startTCPRelay(t, context.Background(), local, remote, time.Second)
+	result, closeBoth := startTCPRelay(t, context.Background(), local, remote, time.Second, "")
 	defer closeBoth()
 	defer client.Close()
 	defer server.Close()
@@ -146,14 +154,14 @@ func TestRunTCPRelayDrainsTransportWithoutCloseWrite(t *testing.T) {
 	if string(response) != "response" {
 		t.Fatalf("response = %q, want response", response)
 	}
-	assertCleanTCPResult(t, awaitTCPResult(t, result))
+	assertCleanTCPResult(t, awaitTCPResult(t, result), "")
 }
 
 func TestRunTCPRelayBoundsDrainWithoutCloseWrite(t *testing.T) {
 	client, local := newHalfClosePipe()
 	remotePipe, server := newHalfClosePipe()
 	remote := struct{ net.Conn }{Conn: remotePipe}
-	result, closeBoth := startTCPRelay(t, context.Background(), local, remote, 20*time.Millisecond)
+	result, closeBoth := startTCPRelay(t, context.Background(), local, remote, 20*time.Millisecond, "")
 	defer closeBoth()
 	defer client.Close()
 	defer server.Close()
@@ -165,14 +173,14 @@ func TestRunTCPRelayBoundsDrainWithoutCloseWrite(t *testing.T) {
 	if !got.shutdownInitiated {
 		t.Fatalf("fallback drain result = %+v, want Punch-initiated shutdown", got)
 	}
-	assertCleanTCPResult(t, got)
+	assertCleanTCPResult(t, got, "")
 }
 
 func TestRunTCPRelayExtendsFallbackDrainWhileActive(t *testing.T) {
 	client, local := newHalfClosePipe()
 	remotePipe, server := newHalfClosePipe()
 	remote := struct{ net.Conn }{Conn: remotePipe}
-	result, closeBoth := startTCPRelay(t, context.Background(), local, remote, 100*time.Millisecond)
+	result, closeBoth := startTCPRelay(t, context.Background(), local, remote, 100*time.Millisecond, "")
 	defer closeBoth()
 	defer client.Close()
 	defer server.Close()
@@ -196,21 +204,48 @@ func TestRunTCPRelayExtendsFallbackDrainWhileActive(t *testing.T) {
 	if string(response) != "active" {
 		t.Fatalf("response = %q, want active", response)
 	}
-	assertCleanTCPResult(t, awaitTCPResult(t, result))
+	assertCleanTCPResult(t, awaitTCPResult(t, result), "")
 }
 
 func TestRunTCPRelayReportsRelayClosedBeforeShutdown(t *testing.T) {
 	client, local := newHalfClosePipe()
 	remote, server := newHalfClosePipe()
-	result, closeBoth := startTCPRelay(t, context.Background(), local, remote, time.Second)
+	result, closeBoth := startTCPRelay(t, context.Background(), local, remote, time.Second, "")
 	defer closeBoth()
 	defer client.Close()
 
 	server.closeWithError(net.ErrClosed)
 	got := awaitTCPResult(t, result)
-	abnormal, relay := classifyCopyError(got.err, got.shutdownInitiated)
+	abnormal, relay := classifyCopyError(got.err, got.shutdownInitiated, "")
 	if !abnormal || !relay {
 		t.Fatalf("relay close classified as abnormal=%v relay=%v; result=%+v", abnormal, relay, got)
+	}
+}
+
+func TestRunTCPRelayTreatsShadowsocksResetAsClean(t *testing.T) {
+	client, local := newHalfClosePipe()
+	remote, server := newHalfClosePipe()
+	result, closeBoth := startTCPRelay(t, context.Background(), local, remote, time.Second, "ss")
+	defer closeBoth()
+	defer client.Close()
+
+	server.closeWithError(syscall.ECONNRESET)
+	got := awaitTCPResult(t, result)
+	assertCleanTCPResult(t, got, "ss")
+}
+
+func TestRunTCPRelayReportsNonSSResetAsAbort(t *testing.T) {
+	client, local := newHalfClosePipe()
+	remote, server := newHalfClosePipe()
+	result, closeBoth := startTCPRelay(t, context.Background(), local, remote, time.Second, "vmess")
+	defer closeBoth()
+	defer client.Close()
+
+	server.closeWithError(syscall.ECONNRESET)
+	got := awaitTCPResult(t, result)
+	abnormal, relay := classifyCopyError(got.err, got.shutdownInitiated, "vmess")
+	if !abnormal || !relay {
+		t.Fatalf("non-SS relay reset classified as abnormal=%v relay=%v; result=%+v", abnormal, relay, got)
 	}
 }
 
@@ -218,7 +253,7 @@ func TestRunTCPRelayCancellationIsCleanShutdown(t *testing.T) {
 	client, local := newHalfClosePipe()
 	remote, server := newHalfClosePipe()
 	ctx, cancel := context.WithCancel(context.Background())
-	result, closeBoth := startTCPRelay(t, ctx, local, remote, time.Second)
+	result, closeBoth := startTCPRelay(t, ctx, local, remote, time.Second, "")
 	defer closeBoth()
 	defer client.Close()
 	defer server.Close()
@@ -228,7 +263,7 @@ func TestRunTCPRelayCancellationIsCleanShutdown(t *testing.T) {
 	if !errors.Is(got.err, context.Canceled) || !got.shutdownInitiated {
 		t.Fatalf("cancellation result = %+v, want canceled Punch shutdown", got)
 	}
-	assertCleanTCPResult(t, got)
+	assertCleanTCPResult(t, got, "")
 }
 
 func TestTagRelayErrorPreservesEOFForIOCopy(t *testing.T) {
@@ -240,7 +275,7 @@ func TestTagRelayErrorPreservesEOFForIOCopy(t *testing.T) {
 	}
 }
 
-func startTCPRelay(t *testing.T, ctx context.Context, client, remote net.Conn, drainTimeout time.Duration) (<-chan tcpCopyResult, func()) {
+func startTCPRelay(t *testing.T, ctx context.Context, client, remote net.Conn, drainTimeout time.Duration, relayType string) (<-chan tcpCopyResult, func()) {
 	t.Helper()
 	shutdown := &tcpShutdownState{}
 	var closeOnce sync.Once
@@ -253,14 +288,14 @@ func startTCPRelay(t *testing.T, ctx context.Context, client, remote net.Conn, d
 	}
 	result := make(chan tcpCopyResult, 1)
 	go func() {
-		result <- runTCPRelay(ctx, client, remote, &session.Session{}, shutdown, closeBoth, drainTimeout)
+		result <- runTCPRelay(ctx, client, remote, &session.Session{}, shutdown, closeBoth, drainTimeout, relayType)
 	}()
 	return result, closeBoth
 }
 
-func assertCleanTCPResult(t *testing.T, result tcpCopyResult) {
+func assertCleanTCPResult(t *testing.T, result tcpCopyResult, relayType string) {
 	t.Helper()
-	if abnormal, relay := classifyCopyError(result.err, result.shutdownInitiated); abnormal || relay {
+	if abnormal, relay := classifyCopyError(result.err, result.shutdownInitiated, relayType); abnormal || relay {
 		t.Fatalf("TCP result = %+v, classified as abnormal=%v relay=%v", result, abnormal, relay)
 	}
 }
