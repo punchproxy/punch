@@ -5,6 +5,7 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"log/slog"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -24,16 +25,17 @@ import (
 )
 
 type Server struct {
-	httpServer *http.Server
-	cfg        config.API
-	store      *config.Store
-	dns        *pdns.Server
-	selector   *relay.Selector
-	sessions   *session.Manager
-	tun        *tun.Engine
-	startedAt  time.Time
-	version    string
-	shutdown   func()
+	httpServer    *http.Server
+	cfg           config.API
+	store         *config.Store
+	dns           *pdns.Server
+	selector      *relay.Selector
+	sessions      *session.Manager
+	tun           *tun.Engine
+	startedAt     time.Time
+	version       string
+	shutdown      func()
+	requestCancel context.CancelFunc
 
 	throughputMu           sync.Mutex
 	throughputHistory      []throughputSample
@@ -146,10 +148,7 @@ func (s *Server) Start() error {
 	// is matched first, so dashboard assets never shadow API routes.
 	r.Handle("/*", web.Handler())
 
-	s.httpServer = &http.Server{
-		Addr:    s.cfg.Listen,
-		Handler: r,
-	}
+	s.configureHTTPServer(r)
 
 	go func() {
 		slog.Info("API started", "listen", s.cfg.Listen)
@@ -159,6 +158,18 @@ func (s *Server) Start() error {
 	}()
 
 	return nil
+}
+
+func (s *Server) configureHTTPServer(handler http.Handler) {
+	requestContext, cancel := context.WithCancel(context.Background())
+	s.requestCancel = cancel
+	s.httpServer = &http.Server{
+		Addr:    s.cfg.Listen,
+		Handler: handler,
+		BaseContext: func(net.Listener) context.Context {
+			return requestContext
+		},
+	}
 }
 
 func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
@@ -205,6 +216,13 @@ func (s *Server) Stop() error {
 	if s.statusSamplerCancel != nil {
 		s.statusSamplerCancel()
 		s.statusSamplerCancel = nil
+	}
+	if s.requestCancel != nil {
+		// Shutdown does not cancel active request contexts. Cancel the server's
+		// base context explicitly so long-lived log and DNS streams can return
+		// before Shutdown waits for their handlers.
+		s.requestCancel()
+		s.requestCancel = nil
 	}
 	if s.httpServer == nil {
 		return nil
