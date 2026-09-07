@@ -134,31 +134,33 @@ func (s *Selector) SelectManualGroup(name string) (string, error) {
 }
 
 func (s *Selector) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
-	conn, _, err := s.DialContextRelay(ctx, network, address)
+	conn, _, _, err := s.DialContextRelay(ctx, network, address)
 	return conn, err
 }
 
 // DialContextRelay dials like DialContext and additionally reports the display
-// name of the relay that actually carried the dial. Callers that want to label
-// a connection must use this rather than reading ActiveName() afterwards: the
-// selector can switch relays while the dial is in flight, which would attribute
-// the connection to the wrong relay.
-func (s *Selector) DialContextRelay(ctx context.Context, network, address string) (net.Conn, string, error) {
-	d, name := s.activeSelection()
+// name and adapter type of the relay that actually carried the dial. Callers
+// that want to label a connection must use this rather than reading ActiveName()
+// afterwards: the selector can switch relays while the dial is in flight, which
+// would attribute the connection to the wrong relay. The relay type lets
+// protocol-aware callers (such as copy-error classification) adapt behavior to
+// the transport that actually carried the stream.
+func (s *Selector) DialContextRelay(ctx context.Context, network, address string) (net.Conn, string, string, error) {
+	d, name, relayType := s.activeSelection()
 	conn, err := d.DialContext(ctx, network, address)
 	if err != nil {
-		return nil, name, err
+		return nil, name, relayType, err
 	}
-	return conn, name, nil
+	return conn, name, relayType, nil
 }
 
-func (s *Selector) activeSelection() (Dialer, string) {
+func (s *Selector) activeSelection() (Dialer, string, string) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	if len(s.groups) == 0 {
-		return &DirectDialer{}, "DIRECT"
+		return &DirectDialer{}, "DIRECT", "direct"
 	}
 	g := s.groups[s.activeUsableGroupIndexLocked()]
 	d := g.dialers[s.activeDialerIndexLocked(g)]
-	return d, s.displayName(g.name, d.Name())
+	return d, s.displayName(g.name, d.Name()), d.Type()
 }

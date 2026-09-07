@@ -228,7 +228,7 @@ func (h *handler) handleTCPConn(ctx context.Context, conn net.Conn, source M.Soc
 
 	dialCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	dialStart := time.Now()
-	remoteConn, dialedRelay, err := h.selector.DialContextRelay(dialCtx, "tcp", target)
+	remoteConn, dialedRelay, relayType, err := h.selector.DialContextRelay(dialCtx, "tcp", target)
 	cancel()
 	if err != nil {
 		sess.SetCloseReason(fmt.Sprintf("dial relay: %v", err))
@@ -244,9 +244,9 @@ func (h *handler) handleTCPConn(ctx context.Context, conn net.Conn, source M.Soc
 	h.bindSessionCloser(sess, closeFunc(shutdown.begin), releaseFakeIP, conn, remoteConn)
 	releaseFakeIP = nil
 
-	result := runTCPRelay(ctx, conn, remoteConn, sess, shutdown, sess.Close, tcpFallbackDrainTimeout)
+	result := runTCPRelay(ctx, conn, remoteConn, sess, shutdown, sess.Close, tcpFallbackDrainTimeout, relayType)
 
-	abnormal, relaySide := classifyCopyError(result.err, result.shutdownInitiated)
+	abnormal, relaySide := classifyCopyError(result.err, result.shutdownInitiated, relayType)
 	if !abnormal {
 		h.sessions.CloseSession(sess.ID, session.StatusClosed)
 		return nil
@@ -710,7 +710,7 @@ func (s *udpSender) init() error {
 	)
 
 	dialCtx, cancel := context.WithTimeout(s.ctx, 10*time.Second)
-	conn, dialedRelay, err := s.handler.selector.DialContextRelay(dialCtx, "udp", target)
+	conn, dialedRelay, _, err := s.handler.selector.DialContextRelay(dialCtx, "udp", target)
 	cancel()
 	if err != nil {
 		s.sess.SetCloseReason(fmt.Sprintf("dial relay: %v", err))

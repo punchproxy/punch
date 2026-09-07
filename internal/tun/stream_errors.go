@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"strings"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -45,12 +46,34 @@ func tagRelayError(err error) error {
 	return &relaySideError{err: err}
 }
 
+// ambiguousResetTransports lists relay protocols whose wire transport tears
+// down the client connection with a reset for conditions that do not reflect a
+// relay failure. Shadowsocks has no in-band close or error signaling, so a
+// server that simply aborts its upstream leg (destination reset, refused
+// target, no half-close support) closes the client connection hard, which the
+// client observes as ECONNRESET or EPIPE. Counting those resets as abnormal
+// relay aborts would misattribute destination behavior to the relay. The
+// matched values cover both the subscription mapping type (lowercase "ss") and
+// the resolved adapter type ("Shadowsocks").
+func ambiguousResetTransport(relayType string) bool {
+	switch strings.ToLower(relayType) {
+	case "ss", "shadowsocks", "ssr", "shadowsocksr":
+		return true
+	default:
+		return false
+	}
+}
+
 // classifyCopyError reports whether a session copy error is an abnormal
 // stream termination and whether the relay side caused it. Errors caused by
 // a Punch-initiated shutdown are expected. Before shutdown, a relay-side
 // closed connection, reset, or broken pipe is an actual stream abort; the same
-// errors from the client just mean the local application went away.
-func classifyCopyError(err error, shutdownInitiated bool) (abnormal, relaySide bool) {
+// errors from the client just mean the local application went away. relayType
+// is the adapter type that carried the stream: transports with no in-band
+// error signaling (see ambiguousResetTransports) legitimately reset the client
+// connection to reflect upstream behavior, so their relay-side resets are
+// treated as a normal connection end rather than an abort.
+func classifyCopyError(err error, shutdownInitiated bool, relayType string) (abnormal, relaySide bool) {
 	if err == nil || errors.Is(err, io.EOF) || shutdownInitiated {
 		return false, false
 	}
@@ -60,6 +83,9 @@ func classifyCopyError(err error, shutdownInitiated bool) (abnormal, relaySide b
 		return fromRelay, fromRelay
 	}
 	if errors.Is(err, syscall.EPIPE) || errors.Is(err, syscall.ECONNRESET) {
+		if fromRelay && ambiguousResetTransport(relayType) {
+			return false, false
+		}
 		return fromRelay, fromRelay
 	}
 	return true, fromRelay
@@ -83,6 +109,9 @@ type tcpCopyResult struct {
 // half-close semantics. Some multiplexed relays (including AnyTLS) cannot
 // express a half-close; those connections get a bounded idle drain window
 // instead, which extends while the remaining direction is making progress.
+// relayType carries the adapter type that owns the remote connection so
+// copy-error classification can ignore resets from transports that use them to
+// reflect ordinary upstream behavior.
 func runTCPRelay(
 	ctx context.Context,
 	client net.Conn,
@@ -91,6 +120,7 @@ func runTCPRelay(
 	shutdown *tcpShutdownState,
 	closeBoth func(),
 	fallbackDrainTimeout time.Duration,
+	relayType string,
 ) tcpCopyResult {
 	remoteTagged := relayTaggedConn{Conn: remote}
 	activity := newTCPActivity()
@@ -131,7 +161,7 @@ func runTCPRelay(
 		return first
 	}
 
-	abnormal, _ := classifyCopyError(first.err, false)
+	abnormal, _ := classifyCopyError(first.err, false, relayType)
 	if abnormal || first.err != nil {
 		closeBoth()
 		<-results
@@ -154,7 +184,7 @@ func runTCPRelay(
 	for {
 		select {
 		case second := <-results:
-			secondAbnormal, _ := classifyCopyError(second.err, second.shutdownInitiated)
+			secondAbnormal, _ := classifyCopyError(second.err, second.shutdownInitiated, relayType)
 			if second.err == nil {
 				propagateTCPHalfClose(second.dir, client, remote)
 			}
