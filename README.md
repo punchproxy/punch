@@ -290,6 +290,61 @@ Relay hostnames resolve through the normal DNS upstream configuration. For
 provider domains that need a specific DNS server, add a domain-scoped upstream,
 for example `punchctl dns upstreams create https://some-dns-server --bootstrap 223.5.5.5 --domains sbs`.
 
+### Connect a relay through another group
+
+Set `dialer-proxy` on a proxy entry to the exact name of another Punch relay
+group. For example, an entry in the `exit` group can use the `transit` group:
+
+```yaml
+proxies:
+  - name: exit-1
+    type: socks5
+    server: exit.example.com
+    port: 1080
+    dialer-proxy: transit
+```
+
+The connection goes through the selected relay in `transit`, then `exit-1`,
+then the destination. The destination sees `exit-1` as the exit. References
+can form longer chains, but missing groups and cycles are rejected. Create
+dependency groups before adding proxy entries that reference them.
+
+Groups are eligible as exits by default. Mark a group as transit-only to keep
+automatic exit selection from choosing it directly:
+
+```sh
+punchctl relaygroups set transit --exit-eligible=false
+```
+
+For a manual transit group, change its selected member without changing the
+active exit:
+
+```sh
+punchctl relays select transit-2 --group transit --activate=false
+```
+
+The dashboard shows the active path in connection order, marks dependency
+groups and relays as `transit in use`, and includes their relay candidates in
+the default view. Use **Set relay** to change a group's member, **Use as exit**
+to change the exit, and **Allow as exit** to control exit eligibility.
+
+Frequent health checks cover the selected exit through its complete chain and
+the selected relays in its dependency groups. Full checks test dependencies
+before their consumers. After repeated failures, automatic dependency groups
+can try alternative members through the failed exit before a full benchmark.
+A dependency's standalone URL result does not establish whether it can reach
+a particular exit server. Dependent health results are retested after a path
+change, and future connections use fresh adapters while existing streams finish
+on their original paths.
+
+Both TCP and UDP transports are supported when the selected protocols can carry
+them. For example, a QUIC-based relay needs UDP transport through its dependency
+even for a TCP application connection. An unsupported transport fails explicitly;
+it does not fall back to a direct connection. Adapter types that do not support
+the custom transport hook are rejected, including `direct`, `dns`, `reject`,
+`rematch`, and `tailscale`. Relay-server DNS still uses Punch's configured DNS
+upstreams. `dialer-proxy` does not change subscription download or DNS routing.
+
 Don't commit real relay credentials or private subscription URLs to a repo.
 
 ## How it fits together

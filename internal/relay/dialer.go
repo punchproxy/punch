@@ -27,6 +27,12 @@ type Dialer interface {
 	Close() error
 }
 
+// PacketDialer opens a packet connection through a relay to a remote endpoint.
+// It is optional so stream-only dialers do not have to emulate packet support.
+type PacketDialer interface {
+	ListenPacketContext(ctx context.Context, network, address string) (net.PacketConn, error)
+}
+
 type DialContextFunc func(ctx context.Context, network, address string) (net.Conn, error)
 type RelayResolveFunc func(ctx context.Context, groupName, host string) ([]netip.Addr, time.Time, error)
 
@@ -41,11 +47,34 @@ func (d *RelayDialer) Addr() string     { return d.adapter.Addr() }
 func (d *RelayDialer) SupportUDP() bool { return d.adapter.SupportUDP() }
 
 func (d *RelayDialer) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
+	metadata, err := relayMetadata(network, address)
+	if err != nil {
+		return nil, err
+	}
+	switch metadata.NetWork {
+	case C.TCP:
+		conn, err := d.adapter.DialContext(ctx, metadata)
+		if err != nil {
+			return nil, fmt.Errorf("relay %s dial: %w", d.adapter.Name(), err)
+		}
+		return &connWrapper{Conn: conn}, nil
+	case C.UDP:
+		pc, err := d.ListenPacketContext(ctx, network, address)
+		if err != nil {
+			return nil, err
+		}
+		return &packetConnWrapper{PacketConn: pc, addr: address}, nil
+	default:
+		return nil, fmt.Errorf("unsupported network: %s", network)
+	}
+}
+
+func relayMetadata(network, address string) (*C.Metadata, error) {
 	host, portStr, err := net.SplitHostPort(address)
 	if err != nil {
 		return nil, err
 	}
-	port, err := strconv.Atoi(portStr)
+	port, err := strconv.ParseUint(portStr, 10, 16)
 	if err != nil {
 		return nil, err
 	}
@@ -54,25 +83,38 @@ func (d *RelayDialer) DialContext(ctx context.Context, network, address string) 
 		Host:    host,
 		DstPort: uint16(port),
 	}
+	if ip, err := netip.ParseAddr(host); err == nil {
+		metadata.DstIP = ip.Unmap()
+		metadata.Host = ""
+	}
 
 	switch network {
 	case "tcp", "tcp4", "tcp6":
 		metadata.NetWork = C.TCP
-		conn, err := d.adapter.DialContext(ctx, metadata)
-		if err != nil {
-			return nil, fmt.Errorf("relay %s dial: %w", d.adapter.Name(), err)
-		}
-		return &connWrapper{Conn: conn}, nil
 	case "udp", "udp4", "udp6":
 		metadata.NetWork = C.UDP
-		pc, err := d.adapter.ListenPacketContext(ctx, metadata)
-		if err != nil {
-			return nil, fmt.Errorf("relay %s listen packet: %w", d.adapter.Name(), err)
-		}
-		return &packetConnWrapper{PacketConn: pc, addr: address}, nil
 	default:
 		return nil, fmt.Errorf("unsupported network: %s", network)
 	}
+	return metadata, nil
+}
+
+func (d *RelayDialer) ListenPacketContext(ctx context.Context, network, address string) (net.PacketConn, error) {
+	metadata, err := relayMetadata(network, address)
+	if err != nil {
+		return nil, err
+	}
+	if metadata.NetWork != C.UDP {
+		return nil, fmt.Errorf("unsupported packet network: %s", network)
+	}
+	if !d.SupportUDP() {
+		return nil, fmt.Errorf("relay %s does not support UDP: %w", d.Name(), errors.ErrUnsupported)
+	}
+	pc, err := d.adapter.ListenPacketContext(ctx, metadata)
+	if err != nil {
+		return nil, fmt.Errorf("relay %s listen packet: %w", d.Name(), err)
+	}
+	return pc, nil
 }
 
 func (d *RelayDialer) Close() error {
@@ -100,6 +142,24 @@ func (d *DirectDialer) DialContext(ctx context.Context, network, address string)
 	return (&net.Dialer{}).DialContext(ctx, network, address)
 }
 
+func (d *DirectDialer) ListenPacketContext(ctx context.Context, network, address string) (net.PacketConn, error) {
+	if _, err := relayMetadata(network, address); err != nil {
+		return nil, err
+	}
+	switch network {
+	case "udp", "udp4", "udp6":
+	default:
+		return nil, fmt.Errorf("unsupported packet network: %s", network)
+	}
+	// Use the configured direct dial function so packet transport retains the
+	// daemon's routing and interface policy.
+	conn, err := d.DialContext(ctx, network, address)
+	if err != nil {
+		return nil, err
+	}
+	return &connectedPacketConn{Conn: conn}, nil
+}
+
 func NewDirectDialer(dialContext DialContextFunc) *DirectDialer {
 	return &DirectDialer{dialContext: dialContext}
 }
@@ -113,6 +173,7 @@ type LazyRelayDialer struct {
 
 	mapping  map[string]any
 	resolver RelayResolveFunc
+	options  []adapter.ProxyOption
 
 	resolved     Dialer
 	resolvedAddr string
@@ -145,6 +206,18 @@ func (d *LazyRelayDialer) DialContext(ctx context.Context, network, address stri
 		return nil, err
 	}
 	return dialer.DialContext(ctx, network, address)
+}
+
+func (d *LazyRelayDialer) ListenPacketContext(ctx context.Context, network, address string) (net.PacketConn, error) {
+	dialer, err := d.getDialer(ctx, true)
+	if err != nil {
+		return nil, err
+	}
+	packetDialer, ok := dialer.(PacketDialer)
+	if !ok {
+		return nil, fmt.Errorf("relay %s does not support packet dialing: %w", d.Name(), errors.ErrUnsupported)
+	}
+	return packetDialer.ListenPacketContext(ctx, network, address)
 }
 
 func (d *LazyRelayDialer) Close() error {
@@ -227,7 +300,7 @@ func (d *LazyRelayDialer) getDialer(ctx context.Context, allowResolve bool) (Dia
 		}
 	}
 
-	next, err := NewDialerFromMapping(mapping)
+	next, err := newDialerFromMapping(mapping, d.options...)
 	if err != nil {
 		return nil, err
 	}
@@ -252,7 +325,11 @@ func preserveImplicitAnyTLSServerName(mapping map[string]any, relayType, server 
 }
 
 func NewDialerFromMapping(mapping map[string]any) (Dialer, error) {
-	relay, err := adapter.ParseProxy(mapping)
+	return newDialerFromMapping(mapping)
+}
+
+func newDialerFromMapping(mapping map[string]any, options ...adapter.ProxyOption) (Dialer, error) {
+	relay, err := adapter.ParseProxy(mapping, options...)
 	if err != nil {
 		return nil, err
 	}
@@ -260,6 +337,10 @@ func NewDialerFromMapping(mapping map[string]any) (Dialer, error) {
 }
 
 func NewLazyRelayDialer(groupName string, mapping map[string]any, resolver RelayResolveFunc) (Dialer, error) {
+	return newLazyRelayDialer(groupName, mapping, resolver)
+}
+
+func newLazyRelayDialer(groupName string, mapping map[string]any, resolver RelayResolveFunc, options ...adapter.ProxyOption) (Dialer, error) {
 	name, _ := mapping["name"].(string)
 	if name == "" {
 		return nil, fmt.Errorf("relay missing name")
@@ -280,6 +361,7 @@ func NewLazyRelayDialer(groupName string, mapping map[string]any, resolver Relay
 		addr:      addr,
 		mapping:   cloneRelayMapping(mapping),
 		resolver:  resolver,
+		options:   append([]adapter.ProxyOption(nil), options...),
 	}, nil
 }
 
@@ -325,4 +407,22 @@ func (p *packetConnWrapper) Write(b []byte) (int, error) {
 func (p *packetConnWrapper) RemoteAddr() net.Addr {
 	addr, _ := net.ResolveUDPAddr("udp", p.addr)
 	return addr
+}
+
+// connectedPacketConn preserves a direct UDP socket's route while exposing the
+// packet API required by Mihomo transports. Its destination is fixed at dial.
+type connectedPacketConn struct {
+	net.Conn
+}
+
+func (c *connectedPacketConn) ReadFrom(p []byte) (int, net.Addr, error) {
+	n, err := c.Read(p)
+	return n, c.RemoteAddr(), err
+}
+
+func (c *connectedPacketConn) WriteTo(p []byte, addr net.Addr) (int, error) {
+	if addr == nil || addr.String() != c.RemoteAddr().String() {
+		return 0, fmt.Errorf("packet destination %v differs from dialed endpoint %s", addr, c.RemoteAddr())
+	}
+	return c.Write(p)
 }

@@ -51,23 +51,27 @@ func (s *Server) handleSetConfigValue(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid config value: " + err.Error()})
 		return
 	}
-	if err := config.Set(key, req.Value); err != nil {
+	if s.selector != nil && isLiveRelayConfigKey(key) {
+		expected, err := config.Snapshot()
+		if err != nil {
+			writeJSON(w, configErrorStatus(err), map[string]string{"error": err.Error()})
+			return
+		}
+		cfg, err := config.WithValue(expected, key, req.Value)
+		if err != nil {
+			writeJSON(w, configErrorStatus(err), map[string]string{"error": err.Error()})
+			return
+		}
+		if err := s.selector.ApplyConfigWithSave(cfg.Relay, cfg.Check, func() error { return config.ReplaceIfUnchanged(expected, cfg) }); err != nil {
+			writeJSON(w, configErrorStatus(err), map[string]string{"error": err.Error()})
+			return
+		}
+	} else if err := config.Set(key, req.Value); err != nil {
 		writeJSON(w, configErrorStatus(err), map[string]string{"error": err.Error()})
 		return
 	}
 	if key == "system.log_level" {
 		logging.SetLevel(req.Value)
-	}
-	if s.selector != nil && isLiveRelayConfigKey(key) {
-		cfg, err := config.Snapshot()
-		if err != nil {
-			writeJSON(w, configErrorStatus(err), map[string]string{"error": err.Error()})
-			return
-		}
-		if err := s.selector.ApplyConfig(cfg.Relay, cfg.Check); err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-			return
-		}
 	}
 	value, err := config.Get(key)
 	if err != nil {
@@ -87,6 +91,9 @@ func configErrorStatus(err error) int {
 	}
 	if errors.Is(err, config.ErrNotFound) {
 		return http.StatusNotFound
+	}
+	if errors.Is(err, config.ErrConflict) {
+		return http.StatusConflict
 	}
 	if errors.Is(err, config.ErrNotInitialized) {
 		return http.StatusInternalServerError

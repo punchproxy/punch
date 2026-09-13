@@ -52,18 +52,20 @@ func (s *Selector) reportAutoRelaySwitchLocked(prevName, prevKey string) {
 
 func (s *Selector) publishRelayChangeLocked(prev string) {
 	next := s.activeNameLocked()
-	if prev == next || s.bus == nil {
+	_, pathKey := s.activePathLocked()
+	if (prev == next && pathKey == s.publishedPath) || s.bus == nil {
 		return
 	}
+	s.publishedPath = pathKey
+	s.resetSelectedCheckFailuresLocked()
+	s.notifyDependencyCheckLocked()
 	s.bus.Publish(eventbus.Event{Type: eventbus.EventRelayChange, Data: next})
 }
 
 func (s *Selector) publishRelayChange(prev string) {
-	next := s.ActiveName()
-	if prev == next || s.bus == nil {
-		return
-	}
-	s.bus.Publish(eventbus.Event{Type: eventbus.EventRelayChange, Data: next})
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.publishRelayChangeLocked(prev)
 }
 
 func (s *Selector) healthKey(group, relay string) string {
@@ -92,11 +94,11 @@ func (s *Selector) activeUsableGroupIndexLocked() int {
 		return 0
 	}
 	idx := s.activeGroupIndexLocked()
-	if len(s.groups[idx].dialers) > 0 {
+	if len(s.groups[idx].dialers) > 0 && s.exitEligibleLocked(s.groups[idx]) {
 		return idx
 	}
 	for i, g := range s.groups {
-		if len(g.dialers) > 0 {
+		if len(g.dialers) > 0 && s.exitEligibleLocked(g) {
 			return i
 		}
 	}
@@ -160,7 +162,7 @@ func (s *Selector) restoreSelections(state config.RelaySelections) {
 		if len(g.dialers) == 0 {
 			continue
 		}
-		if state.ActiveGroup == g.name {
+		if state.ActiveGroup == g.name && s.exitEligibleLocked(g) {
 			s.active.Store(int32(gi))
 			slog.Debug("restored relay group selection", "group", g.name)
 		}

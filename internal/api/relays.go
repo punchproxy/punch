@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -155,7 +156,7 @@ func (s *Server) handleSelectRelayGroup(w http.ResponseWriter, r *http.Request) 
 	}
 	selected, err := s.selector.SelectManualGroup(name)
 	if err != nil {
-		if errors.Is(err, relay.ErrGroupSelectionAutoMode) {
+		if errors.Is(err, relay.ErrGroupSelectionAutoMode) || errors.Is(err, relay.ErrGroupNotExitEligible) {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 			return
 		}
@@ -408,13 +409,30 @@ func (s *Server) handleSelectRelay(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "relay selector unavailable"})
 		return
 	}
-	if groupName := r.URL.Query().Get("group"); groupName != "" {
-		relayName = s.displayRelayName(groupName, relayName)
+	activate := true
+	if value := r.URL.Query().Get("activate"); value != "" {
+		var err error
+		activate, err = strconv.ParseBool(value)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "activate must be a boolean"})
+			return
+		}
 	}
-	selected, err := s.selector.SelectManualRelay(relayName)
+	groupName := r.URL.Query().Get("group")
+	if !activate && groupName == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "group is required when activate is false"})
+		return
+	}
+	var selected string
+	var err error
+	if groupName != "" {
+		selected, err = s.selector.SelectGroupRelay(groupName, relayName, activate)
+	} else {
+		selected, err = s.selector.SelectManualRelay(relayName)
+	}
 	if err != nil {
 		switch {
-		case errors.Is(err, relay.ErrRelaySelectionAutoGroup):
+		case errors.Is(err, relay.ErrRelaySelectionAutoGroup), errors.Is(err, relay.ErrGroupNotExitEligible), errors.Is(err, relay.ErrGroupSelectionAutoMode):
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		case errors.Is(err, relay.ErrRelaySelectionAmbiguous):
 			writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
@@ -446,15 +464,18 @@ func (s *Server) handleCheckRelay(w http.ResponseWriter, r *http.Request) {
 }
 
 func saveRelayConfig(w http.ResponseWriter, s *Server, cfg *config.Config, checkGroups ...string) bool {
-	if err := config.Replace(cfg); err != nil {
+	save := func() error { return config.Replace(cfg) }
+	var err error
+	if s.selector != nil {
+		err = s.selector.ApplyConfigWithSave(cfg.Relay, cfg.Check, save)
+	} else {
+		err = save()
+	}
+	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return false
 	}
 	if s.selector != nil {
-		if err := s.selector.ApplyConfig(cfg.Relay, cfg.Check); err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-			return false
-		}
 		for _, name := range checkGroups {
 			go func(groupName string) {
 				if err := s.selector.BenchmarkTarget(groupName); err != nil {

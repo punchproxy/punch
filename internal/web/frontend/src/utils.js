@@ -90,9 +90,10 @@ export function filterSessions(sessions, filter, search) {
 
 export function filterRelays(relays, selectedGroup, search, showAll = false) {
   const needle = search.trim().toLowerCase();
+  const inUseGroups = new Set(relays.filter((relay) => relay.in_use).map((relay) => relay.group));
   return relays
-    .filter((relay) => showAll || !selectedGroup || relay.group === selectedGroup)
-    .filter((relay) => !needle || `${relay.name || ""} ${relay.group || ""} ${relay.addr || ""} ${relay.resolved_addr || ""}`.toLowerCase().includes(needle));
+    .filter((relay) => showAll || !selectedGroup || relay.group === selectedGroup || inUseGroups.has(relay.group))
+    .filter((relay) => !needle || `${relay.name || ""} ${relay.group || ""} ${relay.addr || ""} ${relay.resolved_addr || ""} ${relay.dialer_proxy || ""}`.toLowerCase().includes(needle));
 }
 
 export function formatRelayAddress(addr, resolvedAddr) {

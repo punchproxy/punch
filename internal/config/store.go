@@ -206,6 +206,7 @@ type relayGroupModel struct {
 	Keep            string `gorm:"column:keep;not null"`
 	Remove          string `gorm:"column:remove;not null"`
 	Select          string `gorm:"column:select;not null"`
+	ExitEligible    *bool  `gorm:"column:exit_eligible"`
 }
 
 func (relayGroupModel) TableName() string { return "relay_groups" }

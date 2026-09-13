@@ -78,3 +78,15 @@ test("relay addresses include a distinct resolved endpoint", () => {
   assert.equal(formatRelayAddress("192.0.2.1:443", "192.0.2.1:443"), "192.0.2.1:443");
   assert.equal(formatRelayAddress("relay.example:443", ""), "relay.example:443");
 });
+
+test("relay filtering includes candidates from transit groups in use", () => {
+  const relays = [
+    { name: "exit", group: "main", selected: true, in_use: true, dialer_proxy: "transit" },
+    { name: "transit-1", group: "transit", in_use: true },
+    { name: "transit-2", group: "transit" },
+    { name: "spare", group: "backup" },
+  ];
+  assert.deepEqual(filterRelays(relays, "main", "", false), relays.slice(0, 3));
+  assert.deepEqual(filterRelays(relays, "main", "transit", false), relays.slice(0, 3));
+  assert.deepEqual(filterRelays(relays, "main", "", true), relays);
+});

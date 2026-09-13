@@ -31,6 +31,7 @@ type relayGroupConfig struct {
 	Keep            string           `json:"keep,omitempty" yaml:"keep,omitempty"`
 	Remove          string           `json:"remove,omitempty" yaml:"remove,omitempty"`
 	Select          string           `json:"select,omitempty" yaml:"select,omitempty"`
+	ExitEligible    *bool            `json:"exit_eligible,omitempty" yaml:"exit_eligible,omitempty"`
 	Proxies         []map[string]any `json:"proxies,omitempty" yaml:"proxies,omitempty"`
 }
 
@@ -39,6 +40,10 @@ type relayGroupStatus struct {
 	Type            string           `json:"type" yaml:"type"`
 	RelayCount      int              `json:"relay_count" yaml:"relay_count"`
 	Selected        bool             `json:"selected" yaml:"selected"`
+	InUse           bool             `json:"in_use" yaml:"in_use"`
+	ExitEligible    bool             `json:"exit_eligible" yaml:"exit_eligible"`
+	DialerProxy     string           `json:"dialer_proxy,omitempty" yaml:"dialer_proxy,omitempty"`
+	Path            []relayHop       `json:"path,omitempty" yaml:"path,omitempty"`
 	Select          string           `json:"select" yaml:"select"`
 	CurrentRelay    string           `json:"current_relay,omitempty" yaml:"current_relay,omitempty"`
 	CurrentStatus   string           `json:"current_status,omitempty" yaml:"current_status,omitempty"`
@@ -67,6 +72,10 @@ type relayHealth struct {
 	NextRefreshAt   time.Time      `json:"next_refresh_at,omitempty" yaml:"next_refresh_at,omitempty"`
 	RefreshInterval int64          `json:"refresh_interval,omitempty" yaml:"refresh_interval,omitempty"`
 	Selected        bool           `json:"selected" yaml:"selected"`
+	InUse           bool           `json:"in_use" yaml:"in_use"`
+	GroupSelected   bool           `json:"group_selected" yaml:"group_selected"`
+	DialerProxy     string         `json:"dialer_proxy,omitempty" yaml:"dialer_proxy,omitempty"`
+	Path            []relayHop     `json:"path,omitempty" yaml:"path,omitempty"`
 	GroupMode       string         `json:"group_mode,omitempty" yaml:"group_mode,omitempty"`
 	GroupSourceURL  string         `json:"group_source_url,omitempty" yaml:"group_source_url,omitempty"`
 	Error           string         `json:"error,omitempty" yaml:"error,omitempty"`
@@ -80,12 +89,21 @@ type relayHistory struct {
 	Latency int64     `json:"latency_ms,omitempty" yaml:"latency_ms,omitempty"`
 }
 
+type relayHop struct {
+	Group string `json:"group" yaml:"group"`
+	Relay string `json:"relay" yaml:"relay"`
+}
+
 type relayGroupRow struct {
 	Name            string    `json:"name" yaml:"name"`
 	Type            string    `json:"type" yaml:"type"`
 	Relays          int       `json:"relays" yaml:"relays"`
 	Select          string    `json:"select" yaml:"select"`
 	Selected        string    `json:"selected" yaml:"selected"`
+	InUse           string    `json:"in_use" yaml:"in_use"`
+	ExitEligible    string    `json:"exit_eligible" yaml:"exit_eligible"`
+	DialerProxy     string    `json:"dialer_proxy,omitempty" yaml:"dialer_proxy,omitempty"`
+	Path            string    `json:"path,omitempty" yaml:"path,omitempty"`
 	Relay           string    `json:"relay" yaml:"relay"`
 	Status          string    `json:"status" yaml:"status"`
 	Latency         latencyMS `json:"latency_ms" yaml:"latency_ms"`
@@ -105,6 +123,10 @@ type relayRow struct {
 	Status          string    `json:"status" yaml:"status"`
 	Latency         latencyMS `json:"latency_ms" yaml:"latency_ms"`
 	Selected        string    `json:"selected" yaml:"selected"`
+	InUse           string    `json:"in_use" yaml:"in_use"`
+	GroupSelected   string    `json:"group_selected" yaml:"group_selected"`
+	DialerProxy     string    `json:"dialer_proxy,omitempty" yaml:"dialer_proxy,omitempty"`
+	Path            string    `json:"path,omitempty" yaml:"path,omitempty"`
 	Addr            string    `json:"addr,omitempty" yaml:"addr,omitempty"`
 	Remote          string    `json:"remote,omitempty" yaml:"remote,omitempty"`
 	LastCheckedAt   string    `json:"last_checked_at,omitempty" yaml:"last_checked_at,omitempty"`
@@ -166,6 +188,7 @@ func newRelayGroupGetCommand(cfg *commandConfig) *cobra.Command {
 func newRelayGroupCreateCommand(cfg *commandConfig) *cobra.Command {
 	var providerFile, remoteURL, selectMode, keep, remove string
 	var refresh int
+	var exitEligible bool
 	cmd := &cobra.Command{
 		Use:   "create NAME",
 		Short: "Create a relay group",
@@ -175,6 +198,9 @@ func newRelayGroupCreateCommand(cfg *commandConfig) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if c.Flags().Changed("exit-eligible") {
+				group.ExitEligible = &exitEligible
+			}
 			if err := createRelayGroup(c.Context(), *cfg, group); err != nil {
 				return err
 			}
@@ -183,12 +209,14 @@ func newRelayGroupCreateCommand(cfg *commandConfig) *cobra.Command {
 		},
 	}
 	addRelayGroupFlags(cmd, &providerFile, &remoteURL, &selectMode, &keep, &remove, &refresh)
+	cmd.Flags().BoolVar(&exitEligible, "exit-eligible", true, "allow this group to be selected as the traffic exit")
 	return cmd
 }
 
 func newRelayGroupSetCommand(cfg *commandConfig) *cobra.Command {
 	var providerFile, remoteURL, selectMode, keep, remove string
 	var refresh int
+	var exitEligible bool
 	cmd := &cobra.Command{
 		Use:   "set NAME",
 		Short: "Update a relay group",
@@ -203,6 +231,10 @@ func newRelayGroupSetCommand(cfg *commandConfig) *cobra.Command {
 			}
 			group := current.Config
 			changed := false
+			if c.Flags().Changed("exit-eligible") {
+				group.ExitEligible = &exitEligible
+				changed = true
+			}
 			if c.Flags().Changed("url") {
 				group.Type = "remote"
 				group.URL = strings.TrimSpace(remoteURL)
@@ -236,7 +268,7 @@ func newRelayGroupSetCommand(cfg *commandConfig) *cobra.Command {
 				changed = true
 			}
 			if !changed {
-				return fmt.Errorf("nothing to update: provide --url, --provider-file, --select, --keep, --remove, and/or --refresh-duration")
+				return fmt.Errorf("nothing to update: provide --url, --provider-file, --select, --keep, --remove, --refresh-duration, and/or --exit-eligible")
 			}
 			if err := updateRelayGroup(c.Context(), *cfg, args[0], group); err != nil {
 				return err
@@ -246,6 +278,7 @@ func newRelayGroupSetCommand(cfg *commandConfig) *cobra.Command {
 		},
 	}
 	addRelayGroupFlags(cmd, &providerFile, &remoteURL, &selectMode, &keep, &remove, &refresh)
+	cmd.Flags().BoolVar(&exitEligible, "exit-eligible", true, "allow this group to be selected as the traffic exit")
 	return cmd
 }
 
@@ -471,29 +504,38 @@ func newRelaySetCommand(cfg *commandConfig) *cobra.Command {
 
 func newRelaySelectCommand(cfg *commandConfig) *cobra.Command {
 	var group string
+	var activate bool
 	cmd := &cobra.Command{
 		Use:   "select RELAY",
 		Short: "Select a relay in a manual relay group",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(c *cobra.Command, args []string) error {
+			if !activate && group == "" {
+				return fmt.Errorf("--group is required with --activate=false")
+			}
 			if err := ensureRelayNameUnambiguous(c.Context(), *cfg, args[0], group); err != nil {
 				if errors.Is(err, errRelayNotFound) {
 					return fmt.Errorf("relay %q not found", args[0])
 				}
 				return err
 			}
-			selected, err := selectRelayByName(c.Context(), *cfg, args[0], group)
+			selected, err := selectRelayByName(c.Context(), *cfg, args[0], group, activate)
 			if err != nil {
 				if errors.Is(err, errRelayNotFound) {
 					return fmt.Errorf("relay %q not found", args[0])
 				}
 				return err
 			}
-			fmt.Fprintf(c.OutOrStdout(), "relay %q selected\n", selected)
+			if activate {
+				fmt.Fprintf(c.OutOrStdout(), "relay %q selected\n", selected)
+			} else {
+				fmt.Fprintf(c.OutOrStdout(), "relay %q selected within group %q\n", selected, group)
+			}
 			return nil
 		},
 	}
 	cmd.Flags().StringVar(&group, "group", "", "relay group name when RELAY is ambiguous")
+	cmd.Flags().BoolVar(&activate, "activate", true, "also select this group as the traffic exit")
 	return cmd
 }
 
@@ -904,12 +946,19 @@ func deleteRelay(ctx context.Context, cfg commandConfig, group, relay string) er
 	return err
 }
 
-func selectRelayByName(ctx context.Context, cfg commandConfig, relay, group string) (string, error) {
+func selectRelayByName(ctx context.Context, cfg commandConfig, relay, group string, activate bool) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, cfg.timeout)
 	defer cancel()
 	path := "/api/relays/" + url.PathEscape(relay) + "/select"
+	query := url.Values{}
 	if group != "" {
-		path += "?group=" + url.QueryEscape(group)
+		query.Set("group", group)
+	}
+	if !activate {
+		query.Set("activate", "false")
+	}
+	if len(query) > 0 {
+		path += "?" + query.Encode()
 	}
 	endpoint, err := apiURL(cfg.addr, path)
 	if err != nil {
@@ -1085,8 +1134,8 @@ func writeRelayGroups(w io.Writer, groups []relayGroupStatus, flags listFlags) e
 		flags.output = ""
 	}
 	printer, err := klo.PrinterFromFlag(flags.output, &klo.Specs{
-		DefaultColumnSpec: "NAME:{.Name},TYPE:{.Type},RELAYS:{.Relays},SELECT:{.Select},SELECTED:{.Selected},RELAY:{.Relay},STATUS:{.Status},LATENCY:{.Latency},TTL:{.TTL}",
-		WideColumnSpec:    "NAME:{.Name},TYPE:{.Type},RELAYS:{.Relays},SELECT:{.Select},SELECTED:{.Selected},RELAY:{.Relay},STATUS:{.Status},LATENCY:{.Latency},REMOTE:{.Remote},LAST-REFRESHED:{.LastRefreshedAt},NEXT-REFRESH:{.NextRefreshAt},TTL:{.TTL},ERROR:{.Error}",
+		DefaultColumnSpec: "NAME:{.Name},TYPE:{.Type},RELAYS:{.Relays},SELECT:{.Select},SELECTED:{.Selected},IN-USE:{.InUse},EXIT-ELIGIBLE:{.ExitEligible},RELAY:{.Relay},STATUS:{.Status},LATENCY:{.Latency},TTL:{.TTL}",
+		WideColumnSpec:    "NAME:{.Name},TYPE:{.Type},RELAYS:{.Relays},SELECT:{.Select},SELECTED:{.Selected},IN-USE:{.InUse},EXIT-ELIGIBLE:{.ExitEligible},RELAY:{.Relay},STATUS:{.Status},LATENCY:{.Latency},REMOTE:{.Remote},LAST-REFRESHED:{.LastRefreshedAt},NEXT-REFRESH:{.NextRefreshAt},TTL:{.TTL},ERROR:{.Error}",
 		GoTemplateArg:     flags.template,
 	})
 	if err != nil {
@@ -1104,8 +1153,8 @@ func writeRelays(w io.Writer, relays []relayHealth, flags listFlags) error {
 		flags.output = ""
 	}
 	printer, err := klo.PrinterFromFlag(flags.output, &klo.Specs{
-		DefaultColumnSpec: "GROUP:{.Group},RELAY:{.Relay},TYPE:{.Type},STATUS:{.Status},LATENCY:{.Latency},SELECTED:{.Selected}",
-		WideColumnSpec:    "GROUP:{.Group},RELAY:{.Relay},TYPE:{.Type},STATUS:{.Status},LATENCY:{.Latency},SELECTED:{.Selected},ADDR:{.Addr},REMOTE:{.Remote},LAST-CHECKED:{.LastCheckedAt},LAST-REFRESHED:{.LastRefreshedAt},ERROR:{.Error}",
+		DefaultColumnSpec: "GROUP:{.Group},RELAY:{.Relay},TYPE:{.Type},STATUS:{.Status},LATENCY:{.Latency},SELECTED:{.Selected},IN-USE:{.InUse}",
+		WideColumnSpec:    "GROUP:{.Group},RELAY:{.Relay},TYPE:{.Type},STATUS:{.Status},LATENCY:{.Latency},SELECTED:{.Selected},IN-USE:{.InUse},GROUP-SELECTED:{.GroupSelected},DIALER-PROXY:{.DialerProxy},PATH:{.Path},ADDR:{.Addr},REMOTE:{.Remote},LAST-CHECKED:{.LastCheckedAt},LAST-REFRESHED:{.LastRefreshedAt},ERROR:{.Error}",
 		GoTemplateArg:     flags.template,
 	})
 	if err != nil {
@@ -1128,6 +1177,10 @@ func relayGroupRows(groups []relayGroupStatus) []relayGroupRow {
 			Relays:          group.RelayCount,
 			Select:          formatOptional(group.Select),
 			Selected:        formatBool(group.Selected),
+			InUse:           formatBool(group.InUse),
+			ExitEligible:    formatBool(group.ExitEligible),
+			DialerProxy:     group.DialerProxy,
+			Path:            formatRelayPath(group.Path),
 			Relay:           formatOptional(group.CurrentRelay),
 			Status:          formatOptional(group.CurrentStatus),
 			Latency:         latencyMS(group.CurrentLatency),
@@ -1153,6 +1206,10 @@ func relayRows(relays []relayHealth) []relayRow {
 			Status:          formatOptional(relay.Status),
 			Latency:         latencyMS(relay.Latency),
 			Selected:        formatBool(relay.Selected),
+			InUse:           formatBool(relay.InUse),
+			GroupSelected:   formatBool(relay.GroupSelected),
+			DialerProxy:     relay.DialerProxy,
+			Path:            formatRelayPath(relay.Path),
 			Addr:            formatOptional(relay.Addr),
 			Remote:          formatOptional(relay.GroupSourceURL),
 			LastCheckedAt:   formatTime(relay.LastCheckedAt),
@@ -1169,6 +1226,11 @@ func writeRelayGroupDescribe(w io.Writer, group relayGroupStatus) error {
 	fmt.Fprintf(w, "Type:              %s\n", formatOptional(group.Type))
 	fmt.Fprintf(w, "Relays:            %s\n", formatRelayCount(group.RelayCount, group.Config.Keep, group.Config.Remove))
 	fmt.Fprintf(w, "Selected:          %s\n", formatSelectedWithMode(group.Selected, group.Select))
+	fmt.Fprintf(w, "In Use:            %s\n", formatBool(group.InUse))
+	fmt.Fprintf(w, "Exit Eligible:     %s\n", formatBool(group.Config.ExitEligible == nil || *group.Config.ExitEligible))
+	if len(group.Path) > 0 {
+		fmt.Fprintf(w, "Path:              %s\n", formatRelayPath(group.Path))
+	}
 	fmt.Fprintf(w, "Current Relay:     %s\n", formatCurrentRelay(group))
 	fmt.Fprintf(w, "Remote Address:    %s\n", formatOptional(group.RemoteAddress))
 	fmt.Fprintf(w, "Last Checked:      %s\n", formatScheduledTime(now, group.LastCheckedAt, group.NextCheckAt, group.CheckInterval))
@@ -1182,6 +1244,14 @@ func writeRelayDescribe(w io.Writer, relay relayHealth) error {
 	fmt.Fprintf(w, "Name:            %s\n", formatOptional(relay.Name))
 	fmt.Fprintf(w, "Status:          %s\n", formatHealthSummary(relay.Status, relay.Latency))
 	fmt.Fprintf(w, "Selected:        %s\n", formatSelectedWithMode(relay.Selected, relay.GroupMode))
+	fmt.Fprintf(w, "In Use:          %s\n", formatBool(relay.InUse))
+	fmt.Fprintf(w, "Group Selected:  %s\n", formatBool(relay.GroupSelected))
+	if relay.DialerProxy != "" {
+		fmt.Fprintf(w, "Dialer Proxy:    %s\n", relay.DialerProxy)
+	}
+	if len(relay.Path) > 0 {
+		fmt.Fprintf(w, "Path:            %s\n", formatRelayPath(relay.Path))
+	}
 	fmt.Fprintf(w, "Last Checked:    %s\n", formatScheduledTime(now, relay.LastCheckedAt, relayNextCheckAt(relay), relay.CheckInterval))
 	fmt.Fprintf(w, "Last Refreshed:  %s\n", formatScheduledTime(now, relay.LastRefreshedAt, relay.NextRefreshAt, relay.RefreshInterval))
 	fmt.Fprintf(w, "Error:           %s\n", formatOptional(relay.Error))
@@ -1203,6 +1273,14 @@ func writeRelayDescribe(w io.Writer, relay relayHealth) error {
 		return nil
 	}
 	return writeYAMLIndented(w, relay.Spec, 2)
+}
+
+func formatRelayPath(path []relayHop) string {
+	hops := make([]string, 0, len(path))
+	for _, hop := range path {
+		hops = append(hops, hop.Group+" / "+relayShortName(hop.Relay, hop.Group))
+	}
+	return strings.Join(hops, " -> ")
 }
 
 func formatRelayCount(count int, keep, remove string) string {

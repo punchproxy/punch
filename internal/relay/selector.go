@@ -26,6 +26,7 @@ var (
 	ErrRelaySelectionAutoGroup = errors.New("relay belongs to an auto relay group")
 	ErrRelaySelectionAmbiguous = errors.New("relay name is ambiguous")
 	ErrGroupSelectionAutoMode  = errors.New("relay group selection is auto")
+	ErrGroupNotExitEligible    = errors.New("relay group is transit-only")
 )
 
 type HealthStatus string
@@ -40,6 +41,11 @@ const (
 )
 
 type RelayHealth struct {
+	InUse           bool       `json:"in_use"`
+	GroupSelected   bool       `json:"group_selected"`
+	DialerProxy     string     `json:"dialer_proxy,omitempty"`
+	Path            []RelayHop `json:"path,omitempty"`
+	pathKey         string
 	Name            string         `json:"name"`
 	Group           string         `json:"group"`
 	Type            string         `json:"type"`
@@ -66,6 +72,7 @@ type RelayHealth struct {
 }
 
 type HealthRecord struct {
+	Path    []RelayHop   `json:"path,omitempty"`
 	Time    time.Time    `json:"time"`
 	Status  HealthStatus `json:"status"`
 	Latency int64        `json:"latency_ms,omitempty"`
@@ -76,6 +83,10 @@ type HealthRecord struct {
 }
 
 type GroupStatus struct {
+	InUse           bool           `json:"in_use"`
+	ExitEligible    bool           `json:"exit_eligible"`
+	DialerProxy     string         `json:"dialer_proxy,omitempty"`
+	Path            []RelayHop     `json:"path,omitempty"`
 	Name            string         `json:"name"`
 	Type            string         `json:"type"`
 	RelayCount      int            `json:"relay_count"`
@@ -96,18 +107,20 @@ type GroupStatus struct {
 }
 
 type group struct {
-	name            string
-	mode            string
-	sourceURL       string
-	loadError       string
-	dialers         []Dialer
-	specs           map[string]map[string]any
-	refreshEvery    time.Duration
-	lastRefreshedAt time.Time
-	nextRefreshAt   time.Time
-	refreshing      bool
-	refreshBackoff  time.Duration
-	active          atomic.Int32
+	generation       uint64
+	relayGenerations map[string]uint64
+	name             string
+	mode             string
+	sourceURL        string
+	loadError        string
+	dialers          []Dialer
+	specs            map[string]map[string]any
+	refreshEvery     time.Duration
+	lastRefreshedAt  time.Time
+	nextRefreshAt    time.Time
+	refreshing       bool
+	refreshBackoff   time.Duration
+	active           atomic.Int32
 }
 
 // refreshRetryBase is the first retry delay after a failed auto refresh;
@@ -133,6 +146,12 @@ func (g *group) scheduleRefreshRetryLocked(now time.Time) {
 }
 
 type Selector struct {
+	fullBenchmarkMu         sync.Mutex
+	selectedChecksMu        sync.Mutex
+	nextGeneration          uint64
+	publishedPath           string
+	dependencyCheckCh       chan struct{}
+	dependencyFailures      map[string]time.Time
 	mu                      sync.RWMutex
 	groups                  []*group
 	health                  map[string]*RelayHealth
@@ -182,6 +201,7 @@ func NewSelector(
 	adapter.UnifiedDelay.Store(true)
 
 	s := &Selector{
+		dependencyCheckCh:     make(chan struct{}, 1),
 		health:                make(map[string]*RelayHealth),
 		mode:                  normalizeSelectMode(relayCfg.Select),
 		outsideURL:            checkCfg.OutsideURL,
@@ -215,4 +235,8 @@ func NewSelector(
 	return s, nil
 }
 
-func (s *Selector) Mode() string { return s.mode }
+func (s *Selector) Mode() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.mode
+}

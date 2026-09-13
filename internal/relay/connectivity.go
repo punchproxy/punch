@@ -16,6 +16,8 @@ type ConnectivityCheck struct {
 	LastCheckedAt time.Time      `json:"last_checked_at,omitempty"`
 	History       []HealthRecord `json:"history,omitempty"`
 	Error         string         `json:"error,omitempty"`
+	Path          []RelayHop     `json:"path,omitempty"`
+	pathKey       string
 }
 
 // ConnectivityStatus describes direct domestic reachability and selected
@@ -28,28 +30,43 @@ type ConnectivityStatus struct {
 	ConnectSamples  []ConnectSample   `json:"connect_samples,omitempty"`
 }
 
-// CheckSelectedConnectivity runs the domestic ("Internet") and outside
-// ("Relayed") reachability checks in parallel. Both checks run on every tick
-// regardless of the per-relay benchmark state — the outside check always uses
-// whatever relay is currently active at the moment of the check.
+// CheckSelectedConnectivity checks the selected path, its selected upstream
+// relays, and direct domestic connectivity. Only the final path updates the
+// outside connectivity result.
 func (s *Selector) CheckSelectedConnectivity() {
+	if !s.selectedChecksMu.TryLock() {
+		return
+	}
+	defer s.selectedChecksMu.Unlock()
+	s.mu.RLock()
+	dependencies := s.selectedDependencyTargetsLocked()
+	s.mu.RUnlock()
 	var outsideTarget benchmarkTarget
 	var outsideChecked bool
 	var outsideFailed bool
 	var domesticChecked bool
 	var domesticFailed bool
 	var wg sync.WaitGroup
-	wg.Add(2)
+	wg.Add(3)
 	go func() {
 		defer wg.Done()
-		outsideTarget, outsideChecked, outsideFailed = s.CheckOutsideConnectivity()
+		outsideTarget, outsideChecked, outsideFailed = s.checkOutsideConnectivity(false)
 	}()
 	go func() {
 		defer wg.Done()
 		domesticChecked, domesticFailed = s.CheckDomesticConnectivity()
 	}()
+	go func() {
+		defer wg.Done()
+		s.runRelayChecks(dependencies)
+	}()
 	wg.Wait()
 	if outsideChecked {
+		if !outsideFailed {
+			prevActive := s.ActiveName()
+			s.reevaluateAutoSelections()
+			s.publishRelayChange(prevActive)
+		}
 		s.triggerFullBenchmarkAfterSelectedCheck(outsideTarget, outsideFailed, domesticChecked && domesticFailed)
 	}
 }
@@ -64,6 +81,10 @@ func (s *Selector) CheckSelectedConnectivity() {
 // triggerFullBenchmarkAfterSelectedCheck), which re-tests every relay and
 // fails over to the best one.
 func (s *Selector) CheckOutsideConnectivity() (benchmarkTarget, bool, bool) {
+	return s.checkOutsideConnectivity(true)
+}
+
+func (s *Selector) checkOutsideConnectivity(reevaluate bool) (benchmarkTarget, bool, bool) {
 	target, ok := s.selectedBenchmarkTarget()
 	if !ok {
 		s.markOutsideUnavailableLocked("no active relay")
@@ -79,7 +100,9 @@ func (s *Selector) CheckOutsideConnectivity() (benchmarkTarget, bool, bool) {
 	s.applyOutsideConnectivityCheckResult(target, result)
 
 	if result.err == nil {
-		s.reevaluateAutoSelections()
+		if reevaluate {
+			s.reevaluateAutoSelections()
+		}
 		// A green probe on a fresh connection can coexist with live streams
 		// being reset; surface that contrast so unstable relays are visible.
 		if recent, total := s.StreamAbortStats(prevActive); recent > 0 {
@@ -101,6 +124,8 @@ func (s *Selector) markOutsideUnavailableLocked(reason string) {
 	s.outsideHealth.Latency = 0
 	s.outsideHealth.LastCheckedAt = time.Now()
 	s.outsideHealth.Error = reason
+	s.outsideHealth.Path = nil
+	s.outsideHealth.pathKey = ""
 	s.outsideHealthKey = ""
 	appendConnectivityHealthRecord(&s.outsideHealth, "")
 }
@@ -129,14 +154,23 @@ func (s *Selector) CheckDomesticConnectivity() (bool, bool) {
 	return true, result.err != nil
 }
 
-// applyOutsideConnectivityCheckResult unconditionally records the result of
-// an outside check against the relay we just tested. The result reflects the
-// relay that was active at the moment the check started; we do not discard it
-// even if the active selection changed during the check.
+// applyOutsideConnectivityCheckResult keeps observations from old paths in
+// history without replacing the current result with a superseded generation.
 func (s *Selector) applyOutsideConnectivityCheckResult(target benchmarkTarget, result relayCheckResult) {
 	key := s.healthKey(target.group.name, target.dialer.Name())
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if !s.benchmarkTargetCurrentLocked(target) {
+		observation := ConnectivityCheck{Path: append([]RelayHop(nil), target.path...)}
+		applyConnectivityCheckResult(&observation, s.outsideURL, result, s.displayName(target.group.name, target.dialer.Name()))
+		s.outsideHealth.History = append(s.outsideHealth.History, observation.History...)
+		if len(s.outsideHealth.History) > maxHealthRecords {
+			s.outsideHealth.History = s.outsideHealth.History[len(s.outsideHealth.History)-maxHealthRecords:]
+		}
+		return
+	}
+	s.outsideHealth.Path = append([]RelayHop(nil), target.path...)
+	s.outsideHealth.pathKey = target.pathKey
 	applyConnectivityCheckResult(&s.outsideHealth, s.outsideURL, result, s.displayName(target.group.name, target.dialer.Name()))
 	s.outsideHealthKey = key
 }
@@ -152,8 +186,22 @@ func (s *Selector) ConnectivityStatus() ConnectivityStatus {
 	}
 	status.Domestic.URL = s.domesticURL
 	status.Domestic.History = cloneHealthRecords(status.Domestic.History)
+	status.Domestic.Path = append([]RelayHop(nil), status.Domestic.Path...)
 	status.Outside.URL = s.outsideURL
 	status.Outside.History = cloneHealthRecords(status.Outside.History)
+	status.Outside.Path = append([]RelayHop(nil), status.Outside.Path...)
+	// A historical result for a different exit remains visible with its path.
+	// The same exit through a new upstream must be checked again.
+	if s.outsideHealth.pathKey != "" && s.outsideHealthKey == s.activeHealthKeyLocked() {
+		path, key := s.activePathLocked()
+		if key != s.outsideHealth.pathKey {
+			status.Outside.Status = HealthPending
+			status.Outside.Latency = 0
+			status.Outside.LastCheckedAt = time.Time{}
+			status.Outside.Error = ""
+			status.Outside.Path = path
+		}
+	}
 	status.ConnectSamples = s.ConnectLatencySamples()
 	return status
 }
@@ -196,6 +244,7 @@ func appendConnectivityHealthRecord(check *ConnectivityCheck, relay string) {
 		Status:  check.Status,
 		Latency: check.Latency,
 		Relay:   relay,
+		Path:    append([]RelayHop(nil), check.Path...),
 	})
 	if len(check.History) > maxHealthRecords {
 		check.History = check.History[len(check.History)-maxHealthRecords:]

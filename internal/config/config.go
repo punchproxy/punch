@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/netip"
 	"net/url"
+	"reflect"
 	"regexp"
 	"sort"
 	"strconv"
@@ -115,7 +116,14 @@ type RelayGroup struct {
 	Keep            string           `json:"keep,omitempty"`
 	Remove          string           `json:"remove,omitempty"`
 	Select          string           `json:"select,omitempty"`
+	ExitEligible    *bool            `json:"exit_eligible,omitempty"`
 	Proxies         []map[string]any `json:"proxies,omitempty"`
+}
+
+// ExitAllowed reports whether this group may be selected as the traffic exit.
+// Groups configured before exit eligibility was added remain eligible.
+func (g RelayGroup) ExitAllowed() bool {
+	return g.ExitEligible == nil || *g.ExitEligible
 }
 
 type API struct {
@@ -136,6 +144,9 @@ const (
 
 // ErrNotInitialized indicates Init has not loaded the singleton config yet.
 var ErrNotInitialized = errors.New("config is not initialized")
+
+// ErrConflict indicates the configuration changed after a snapshot was read.
+var ErrConflict = errors.New("configuration changed; reload and retry the update")
 
 var singleton struct {
 	mu    sync.RWMutex
@@ -248,6 +259,25 @@ func Replace(cfg *Config) error {
 	return nil
 }
 
+// ReplaceIfUnchanged saves next only if expected still matches the current
+// configuration. Comparison and persistence hold the same singleton lock.
+func ReplaceIfUnchanged(expected, next *Config) error {
+	singleton.mu.Lock()
+	defer singleton.mu.Unlock()
+	if singleton.store == nil || singleton.cfg == nil {
+		return ErrNotInitialized
+	}
+	if !reflect.DeepEqual(singleton.cfg, expected) {
+		return ErrConflict
+	}
+	updated := cloneConfig(next)
+	if err := Save(singleton.store, updated); err != nil {
+		return err
+	}
+	singleton.cfg = cloneConfig(updated)
+	return nil
+}
+
 // Get returns the string value for a scalar configuration key.
 func Get(key string) (string, error) {
 	singleton.mu.RLock()
@@ -278,6 +308,19 @@ func Set(key, value string) error {
 		return setValue(cfg, key, value)
 	})
 	return err
+}
+
+// WithValue returns an updated, validated copy without changing or persisting cfg.
+func WithValue(cfg *Config, key, value string) (*Config, error) {
+	updated := cloneConfig(cfg)
+	if err := setValue(updated, key, value); err != nil {
+		return nil, err
+	}
+	applyDefaults(updated)
+	if err := validateConfig(updated); err != nil {
+		return nil, err
+	}
+	return updated, nil
 }
 
 // Keys returns the scalar keys accepted by Get and Set.
@@ -515,6 +558,10 @@ func cloneRelayGroups(groups []RelayGroup) []RelayGroup {
 	out := make([]RelayGroup, len(groups))
 	for i, group := range groups {
 		out[i] = group
+		if group.ExitEligible != nil {
+			eligible := *group.ExitEligible
+			out[i].ExitEligible = &eligible
+		}
 		out[i].Proxies = make([]map[string]any, len(group.Proxies))
 		for j, proxy := range group.Proxies {
 			out[i].Proxies[j] = cloneStringAnyMap(proxy)
@@ -686,6 +733,7 @@ func loadRelayGroups(s *Store) ([]RelayGroup, error) {
 			Keep:            row.Keep,
 			Remove:          row.Remove,
 			Select:          row.Select,
+			ExitEligible:    row.ExitEligible,
 		}
 		proxies, err := loadRelayGroupProxies(s, row.Position)
 		if err != nil {
@@ -851,6 +899,7 @@ func replaceRelayGroups(tx *gorm.DB, groups []RelayGroup) error {
 			Keep:            group.Keep,
 			Remove:          group.Remove,
 			Select:          group.Select,
+			ExitEligible:    group.ExitEligible,
 		})
 		for j, proxy := range group.Proxies {
 			raw, err := yaml.Marshal(proxy)

@@ -96,9 +96,21 @@ func (s *Selector) buildGroup(cfg config.RelayGroup, assetManager *assets.Manage
 	}
 
 	dialers := make([]Dialer, 0, len(filtered))
+	relayNames := make(map[string]bool, len(filtered))
 	for _, mapping := range filtered {
+		relayName, _ := mapping["name"].(string)
+		if relayNames[relayName] {
+			return nil, fmt.Errorf("relay group %q has duplicate relay %q", name, relayName)
+		}
+		relayNames[relayName] = true
+		if _, err := DialerProxyGroup(mapping); err != nil {
+			return nil, fmt.Errorf("relay group %q: %w", name, err)
+		}
 		dialer, err := s.buildDialer(name, mapping)
 		if err != nil {
+			if _, configured := mapping["dialer-proxy"]; configured {
+				return nil, fmt.Errorf("relay group %q: %w", name, err)
+			}
 			slog.Warn("skip invalid relay in relay group", "group", name, "error", err)
 			continue
 		}
@@ -208,6 +220,13 @@ func filterRelayMappings(mappings []map[string]any, keepExpr, removeExpr string)
 }
 
 func (s *Selector) buildDialer(groupName string, mapping map[string]any) (Dialer, error) {
+	dependency, err := DialerProxyGroup(mapping)
+	if err != nil {
+		return nil, err
+	}
+	if dependency != "" {
+		return NewDependencyDialer(groupName, mapping, s.resolveRelayDomain)
+	}
 	if s.resolveRelayDomain == nil {
 		return NewDialerFromMapping(mapping)
 	}
@@ -244,5 +263,8 @@ func (s *Selector) buildGroups(cfg config.Relay) ([]*group, map[string]config.Re
 		groups = append(groups, g)
 	}
 	groups = append(groups, s.directGroup())
+	if err := validateDependencyGraph(groups); err != nil {
+		return nil, nil, err
+	}
 	return groups, groupCfgs, nil
 }
