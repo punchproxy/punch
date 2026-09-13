@@ -8,13 +8,27 @@ import (
 )
 
 func (s *Selector) ApplyConfig(relayCfg config.Relay, checkCfg config.Check) error {
+	return s.ApplyConfigWithSave(relayCfg, checkCfg, nil)
+}
+
+// ApplyConfigWithSave validates one graph snapshot, saves its configuration,
+// then installs that same snapshot. A failed save leaves runtime state intact.
+// The save callback must not call back into the selector.
+func (s *Selector) ApplyConfigWithSave(relayCfg config.Relay, checkCfg config.Check, save func() error) error {
 	groups, groupCfgs, err := s.buildGroups(relayCfg)
 	if err != nil {
 		return err
 	}
 
 	s.mu.Lock()
+	if save != nil {
+		if err := save(); err != nil {
+			s.mu.Unlock()
+			return err
+		}
+	}
 	prevActive := s.activeNameLocked()
+	s.assignGenerationsLocked(groups)
 	oldHealth := s.health
 	selections := s.snapshotSelectionsLocked()
 	if selections.ActiveGroup == "" {
@@ -44,6 +58,8 @@ func (s *Selector) ApplyConfig(relayCfg config.Relay, checkCfg config.Check) err
 	s.active.Store(0)
 	s.populateHealthLocked(oldHealth)
 	s.restoreSelections(selections)
+	s.active.Store(int32(s.activeUsableGroupIndexLocked()))
+	s.invalidateChangedPathsLocked()
 	s.saveSelectionsLocked()
 	s.mu.Unlock()
 
@@ -103,6 +119,7 @@ func (s *Selector) populateHealthLocked(previous map[string]*RelayHealth) {
 				Spec:           cloneRelaySpec(g.specs[d.Name()]),
 			}
 			if old := previous[key]; old != nil && old.Type == h.Type && old.Addr == h.Addr {
+				h.pathKey = old.pathKey
 				h.Status = old.Status
 				h.Latency = old.Latency
 				h.URLTestLatency = old.URLTestLatency
@@ -120,6 +137,9 @@ func cloneHealthRecords(records []HealthRecord) []HealthRecord {
 		return nil
 	}
 	out := append([]HealthRecord(nil), records...)
+	for i := range out {
+		out[i].Path = append([]RelayHop(nil), out[i].Path...)
+	}
 	if len(out) > maxHealthRecords {
 		out = out[len(out)-maxHealthRecords:]
 	}

@@ -14,6 +14,12 @@ import (
 )
 
 func (s *Selector) Benchmark() {
+	// A running benchmark already covers recovery for all groups. Avoid
+	// starting another one when several callers observe the same failure.
+	if !s.fullBenchmarkMu.TryLock() {
+		return
+	}
+	defer s.fullBenchmarkMu.Unlock()
 	s.mu.RLock()
 	mode := s.mode
 	outsideURL := s.outsideURL
@@ -36,7 +42,7 @@ func (s *Selector) Benchmark() {
 
 	slog.Debug("start relay benchmark", "mode", mode, "groups", len(groups), "url", outsideURL)
 
-	results := s.runRelayChecks(targets)
+	results := s.runDependencyChecks(targets)
 
 	s.mu.Lock()
 	for _, result := range results {
@@ -107,6 +113,9 @@ func (s *Selector) triggerFullBenchmarkAfterSelectedCheck(target benchmarkTarget
 		return
 	}
 	slog.Warn("selected relay failed repeatedly; running full relay benchmark to fail over", "group", target.group.name, "relay", target.dialer.Name(), "failures", failures)
+	if s.recoverSelectedDependencies(target) {
+		return
+	}
 	s.Benchmark()
 }
 
@@ -114,6 +123,16 @@ func (s *Selector) recordSelectedCheckResult(target benchmarkTarget, failed bool
 	key := s.healthKey(target.group.name, target.dialer.Name())
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if !s.benchmarkTargetCurrentLocked(target) {
+		return 0, false
+	}
+	if target.pathKey != "" {
+		_, activeKey := s.activePathLocked()
+		if activeKey != target.pathKey {
+			return 0, false
+		}
+		key = target.pathKey
+	}
 	if !failed {
 		s.resetSelectedCheckFailuresLocked()
 		return 0, false
@@ -226,7 +245,7 @@ func (s *Selector) selectedBenchmarkTarget() (benchmarkTarget, bool) {
 		return benchmarkTarget{}, false
 	}
 	idx := s.activeDialerIndexLocked(g)
-	return benchmarkTarget{group: g, index: idx, dialer: g.dialers[idx]}, true
+	return s.snapshotBenchmarkTargetLocked(benchmarkTarget{group: g, index: idx, dialer: g.dialers[idx]}), true
 }
 
 func (s *Selector) benchmarkTargets(targets []benchmarkTarget) error {
@@ -235,9 +254,11 @@ func (s *Selector) benchmarkTargets(targets []benchmarkTarget) error {
 }
 
 func (s *Selector) benchmarkTargetsWithResults(targets []benchmarkTarget) ([]benchmarkTargetResult, error) {
+	s.fullBenchmarkMu.Lock()
+	defer s.fullBenchmarkMu.Unlock()
 	prevActive := s.ActiveName()
 
-	results := s.runRelayChecks(targets)
+	results := s.runDependencyChecks(targets)
 
 	// Auto-group selection over the fresh health results (including picking the
 	// best relay after a whole-group benchmark) happens in reevaluation.
@@ -253,10 +274,91 @@ type benchmarkTargetResult struct {
 	check  relayCheckResult
 }
 
+func (s *Selector) runDependencyChecks(targets []benchmarkTarget) []benchmarkTargetResult {
+	var results []benchmarkTargetResult
+	for _, level := range s.dependencyLevels(targets) {
+		results = append(results, s.runRelayChecks(level)...)
+		// Settle upstream choices before testing their consumers. A failed
+		// standalone URL check does not prevent the consumer's actual dial.
+		s.reevaluateGroupSelections(level)
+	}
+	// The root may have looked healthy when its dependencies were checked,
+	// causing their choices to be held for confirmation. If its subsequent
+	// check failed, repair that chain before global selection can choose DIRECT.
+	s.mu.RLock()
+	_, activeKey := s.activePathLocked()
+	s.mu.RUnlock()
+	for _, result := range results {
+		if result.check.err != nil && result.target.pathKey == activeKey && len(result.target.path) > 1 {
+			s.recoverSelectedDependenciesDuringBenchmark(result.target)
+			break
+		}
+	}
+	return results
+}
+
+func (s *Selector) reevaluateGroupSelections(targets []benchmarkTarget) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	names := make(map[string]bool, len(targets))
+	for _, target := range targets {
+		names[target.group.name] = true
+	}
+	activeGroup := s.activeUsableGroupIndexLocked()
+	livePath := make(map[string]bool)
+	if h := s.health[s.activeHealthKeyLocked()]; h != nil && h.Status != HealthDown && h.URLTestLatency > 0 {
+		path, _ := s.activePathLocked()
+		for _, hop := range path {
+			livePath[hop.Group] = true
+		}
+	}
+	changed := false
+	for gi, g := range s.groups {
+		// Leave the live root's member to the existing final confirmation
+		// check before a latency-driven switch.
+		if gi == activeGroup || livePath[g.name] || !names[g.name] || g.mode != "auto" || len(g.dialers) == 0 {
+			continue
+		}
+		cur := s.activeDialerIndexLocked(g)
+		best := cur
+		bestLatency, currentUsable := s.usableLatencyLocked(g.name, g.dialers[cur].Name())
+		currentUsable = currentUsable && s.dependencyCandidateAllowedLocked(g, cur)
+		found := currentUsable
+		for di, d := range g.dialers {
+			if !s.dependencyCandidateAllowedLocked(g, di) {
+				continue
+			}
+			latency, ok := s.usableLatencyLocked(g.name, d.Name())
+			if ok && (!found || latency < bestLatency) {
+				best, bestLatency, found = di, latency, true
+			}
+		}
+		if !found || best == cur {
+			continue
+		}
+		if latency, ok := s.usableLatencyLocked(g.name, g.dialers[cur].Name()); ok && currentUsable && latency-bestLatency <= s.tolerance {
+			continue
+		}
+		g.active.Store(int32(best))
+		changed = true
+	}
+	if changed {
+		s.invalidateChangedPathsLocked()
+		s.saveSelectionsLocked()
+	}
+}
+
 func (s *Selector) runRelayChecks(targets []benchmarkTarget) []benchmarkTargetResult {
 	if len(targets) == 0 {
 		return nil
 	}
+	snapshots := make([]benchmarkTarget, len(targets))
+	s.mu.RLock()
+	for i, target := range targets {
+		snapshots[i] = s.snapshotBenchmarkTargetLocked(target)
+	}
+	s.mu.RUnlock()
+	targets = snapshots
 	s.setRelayCheckStatus(targets, HealthPending)
 	results := make([]benchmarkTargetResult, len(targets))
 	sem := s.relayCheckSemaphore()
@@ -280,8 +382,10 @@ func (s *Selector) runRelayChecks(targets []benchmarkTarget) []benchmarkTargetRe
 func (s *Selector) finishRelayCheck(target benchmarkTarget, result relayCheckResult) {
 	s.mu.Lock()
 	changed := false
-	if h := s.health[s.healthKey(target.group.name, target.dialer.Name())]; h != nil {
+	if h := s.health[s.healthKey(target.group.name, target.dialer.Name())]; h != nil && s.benchmarkTargetCurrentLocked(target) {
 		s.applyRelayCheckResultLocked(h, result)
+		h.pathKey = target.pathKey
+		h.Path = append([]RelayHop(nil), target.path...)
 		appendRelayHealthRecord(h)
 		changed = true
 	}
@@ -332,7 +436,7 @@ func (s *Selector) setRelayCheckStatus(targets []benchmarkTarget, status HealthS
 	s.mu.Lock()
 	changed := false
 	for _, target := range targets {
-		if h := s.health[s.healthKey(target.group.name, target.dialer.Name())]; h != nil {
+		if h := s.health[s.healthKey(target.group.name, target.dialer.Name())]; h != nil && s.benchmarkTargetCurrentLocked(target) {
 			h.Status = status
 			h.Error = ""
 			changed = true
@@ -345,9 +449,11 @@ func (s *Selector) setRelayCheckStatus(targets []benchmarkTarget, status HealthS
 }
 
 type benchmarkTarget struct {
-	group  *group
-	index  int
-	dialer Dialer
+	group   *group
+	index   int
+	dialer  Dialer
+	pathKey string
+	path    []RelayHop
 }
 
 type benchmarkGroup struct {
@@ -371,7 +477,10 @@ func (s *Selector) testRelay(d Dialer) relayCheckResult {
 }
 
 func (s *Selector) testRelayURL(ctx context.Context, d Dialer) (time.Duration, error) {
-	return testURLLatency(ctx, s.outsideURL, d.DialContext)
+	s.mu.RLock()
+	url := s.outsideURL
+	s.mu.RUnlock()
+	return testURLLatency(ctx, url, d.DialContext)
 }
 
 func testURLConnectivity(rawURL string, dialContext DialContextFunc) relayCheckResult {
@@ -468,6 +577,7 @@ func appendRelayHealthRecord(h *RelayHealth) {
 		Time:    h.LastCheckedAt,
 		Status:  h.Status,
 		Latency: h.Latency,
+		Path:    append([]RelayHop(nil), h.Path...),
 	})
 	if len(h.History) > maxHealthRecords {
 		h.History = h.History[len(h.History)-maxHealthRecords:]
@@ -507,6 +617,9 @@ func (s *Selector) computeAutoSelectionsLocked() autoSelections {
 		bestIdx := -1
 		bestLatency := time.Duration(1<<63 - 1)
 		for di, d := range g.dialers {
+			if !s.dependencyCandidateAllowedLocked(g, di) {
+				continue
+			}
 			latency, ok := s.usableLatencyLocked(g.name, d.Name())
 			if !ok {
 				continue
@@ -519,7 +632,7 @@ func (s *Selector) computeAutoSelectionsLocked() autoSelections {
 		if bestIdx < 0 || bestIdx == cur {
 			continue
 		}
-		if curLatency, ok := s.usableLatencyLocked(g.name, g.dialers[cur].Name()); ok && curLatency-bestLatency <= s.tolerance {
+		if curLatency, ok := s.usableLatencyLocked(g.name, g.dialers[cur].Name()); ok && s.dependencyCandidateAllowedLocked(g, cur) && curLatency-bestLatency <= s.tolerance {
 			continue
 		}
 		sel.groupActive[g] = bestIdx
@@ -534,6 +647,9 @@ func (s *Selector) computeAutoSelectionsLocked() autoSelections {
 	for gi, g := range s.groups {
 		if g.name == directGroupName {
 			directGroupIdx = gi
+			continue
+		}
+		if !s.exitEligibleLocked(g) {
 			continue
 		}
 		if len(g.dialers) == 0 {
@@ -582,12 +698,12 @@ func (s *Selector) applyAutoSelectionsLocked(sel autoSelections) {
 	if len(s.groups) > 0 {
 		s.active.Store(int32(sel.activeGroup))
 	}
+	s.invalidateChangedPathsLocked()
 	s.reportAutoRelaySwitchLocked(prevName, prevKey)
 }
 
-// pendingLatencySwitchLocked reports the relay that sel would make active when
-// that change is a latency optimization away from a live relay — the case that
-// needs a confirmation check before switching. Fail-overs need no confirmation.
+// pendingLatencySwitchLocked snapshots the complete proposed path, including
+// upstream-only changes, when switching away from a live path needs confirmation.
 func (s *Selector) pendingLatencySwitchLocked(sel autoSelections) (benchmarkTarget, bool) {
 	if len(s.groups) == 0 {
 		return benchmarkTarget{}, false
@@ -612,13 +728,19 @@ func (s *Selector) pendingLatencySwitchLocked(sel autoSelections) (benchmarkTarg
 	}
 	d := g.dialers[idx]
 	prevKey := s.activeHealthKeyLocked()
-	if s.healthKey(g.name, d.Name()) == prevKey {
+	choices := make(map[string]int, len(sel.groupActive))
+	for candidateGroup, choice := range sel.groupActive {
+		choices[candidateGroup.name] = choice
+	}
+	_, _, nextPathKey := s.resolvePathWithChoicesLocked(g, d, make(map[string]bool), false, choices)
+	_, currentPathKey := s.activePathLocked()
+	if nextPathKey == currentPathKey {
 		return benchmarkTarget{}, false
 	}
 	if h := s.health[prevKey]; prevKey == "" || h == nil || h.Status == HealthDown {
 		return benchmarkTarget{}, false
 	}
-	return benchmarkTarget{group: g, index: idx, dialer: d}, true
+	return s.snapshotBenchmarkTargetWithOverridesLocked(benchmarkTarget{group: g, index: idx, dialer: d}, choices), true
 }
 
 // holdActiveSelectionLocked rewrites sel so the currently active relay stays
@@ -627,6 +749,12 @@ func (s *Selector) holdActiveSelectionLocked(sel *autoSelections) {
 	sel.activeGroup = s.activeGroupIndexLocked()
 	g := s.groups[s.activeUsableGroupIndexLocked()]
 	sel.groupActive[g] = s.activeDialerIndexLocked(g)
+	path, _ := s.activePathLocked()
+	for _, hop := range path {
+		if dependency := s.groupByNameLocked(hop.Group); dependency != nil {
+			sel.groupActive[dependency] = s.activeDialerIndexLocked(dependency)
+		}
+	}
 }
 
 // reevaluateAutoSelections recomputes automatic selections from current health
@@ -645,6 +773,8 @@ func (s *Selector) reevaluateAutoSelections() {
 		return
 	}
 	currentName := s.activeNameLocked()
+	_, currentPathKey := s.activePathLocked()
+	candidateWasCurrent := s.benchmarkTargetCurrentLocked(candidate)
 	var currentLatency int64
 	if h := s.health[s.activeHealthKeyLocked()]; h != nil {
 		currentLatency = h.URLTestLatency
@@ -659,24 +789,33 @@ func (s *Selector) reevaluateAutoSelections() {
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if check.err != nil && !candidateWasCurrent {
+		s.rememberDependencyFailureLocked(candidate.pathKey)
+	}
 	sel = s.computeAutoSelectionsLocked()
 	next, again := s.pendingLatencySwitchLocked(sel)
-	candidateKey := s.healthKey(candidate.group.name, candidate.dialer.Name())
+	_, activePathKey := s.activePathLocked()
+	improved := check.err == nil && (currentLatency <= 0 || time.Duration(currentLatency)*time.Millisecond-check.urlLatency > s.tolerance)
+	accepted := activePathKey == currentPathKey && again && next.pathKey == candidate.pathKey && improved
 	switch {
-	case again && s.healthKey(next.group.name, next.dialer.Name()) == candidateKey:
+	case accepted:
 		// Confirmed: the fresh latency still clears the tolerance; apply switches.
-	case again:
+	case again && next.pathKey != candidate.pathKey:
 		// A different relay became the best candidate mid-check; hold position
 		// until a later pass confirms it.
 		s.holdActiveSelectionLocked(&sel)
 		slog.Debug("relay switch deferred; best candidate changed during confirmation check", "current", currentName, "checked", candidateName, "next", s.displayName(next.group.name, next.dialer.Name()))
 	default:
-		var candidateLatency int64
-		if h := s.health[candidateKey]; h != nil {
-			candidateLatency = h.URLTestLatency
-		}
-		slog.Info("relay switch cancelled after confirmation check", "current", currentName, "current_latency_ms", currentLatency, "candidate", candidateName, "candidate_latency_ms", candidateLatency, "tolerance_ms", s.tolerance.Milliseconds())
+		s.holdActiveSelectionLocked(&sel)
+		slog.Info("relay switch cancelled after confirmation check", "current", currentName, "current_latency_ms", currentLatency, "candidate", candidateName, "candidate_latency_ms", durationMillis(check.urlLatency), "tolerance_ms", s.tolerance.Milliseconds())
 	}
 	s.applyAutoSelectionsLocked(sel)
+	if accepted && !candidateWasCurrent && s.benchmarkTargetCurrentLocked(candidate) {
+		if h := s.health[s.healthKey(candidate.group.name, candidate.dialer.Name())]; h != nil {
+			s.applyRelayCheckResultLocked(h, check)
+			h.pathKey, h.Path = candidate.pathKey, append([]RelayHop(nil), candidate.path...)
+			appendRelayHealthRecord(h)
+		}
+	}
 	s.saveSelectionsLocked()
 }

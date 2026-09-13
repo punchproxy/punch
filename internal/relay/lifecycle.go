@@ -6,6 +6,7 @@ import (
 )
 
 func (s *Selector) Start() {
+	go s.dependencyCheckLoop()
 	go s.Benchmark()
 	go s.CheckSelectedConnectivity()
 	go s.refreshLoop()

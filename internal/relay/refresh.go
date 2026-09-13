@@ -2,6 +2,7 @@ package relay
 
 import (
 	"fmt"
+	"reflect"
 	"strings"
 	"time"
 
@@ -81,9 +82,30 @@ func (s *Selector) reloadGroup(name string, fetch bool) error {
 		s.abortRefresh(name)
 		return err
 	}
+	if newGroup.loadError != "" {
+		s.abortRefresh(name)
+		return fmt.Errorf("reload relay group %q: %s", name, newGroup.loadError)
+	}
 
 	s.mu.Lock()
 	prevActive := s.activeNameLocked()
+	if !reflect.DeepEqual(s.groupCfgs[name], cfg) {
+		s.mu.Unlock()
+		return fmt.Errorf("relay group %q changed during refresh", name)
+	}
+	prospective := append([]*group(nil), s.groups...)
+	for i, g := range prospective {
+		if g.name == name {
+			prospective[i] = newGroup
+		}
+	}
+	if err := validateDependencyGraph(prospective); err != nil {
+		s.mu.Unlock()
+		s.abortRefresh(name)
+		return err
+	}
+	s.nextGeneration++
+	newGroup.generation = s.nextGeneration
 	idx := -1
 	var oldSelected string
 	var oldLastChecked time.Time
@@ -150,6 +172,8 @@ func (s *Selector) reloadGroup(name string, fetch bool) error {
 				Spec:           cloneRelaySpec(newGroup.specs[d.Name()]),
 			}
 			if old := oldHealth[key]; old != nil && old.Type == h.Type && old.Addr == h.Addr {
+				h.pathKey = old.pathKey
+				h.History = cloneHealthRecords(old.History)
 				h.Status = old.Status
 				h.Latency = old.Latency
 				h.URLTestLatency = old.URLTestLatency
@@ -160,6 +184,7 @@ func (s *Selector) reloadGroup(name string, fetch bool) error {
 		}
 		newGroup.active.Store(int32(selectedIdx))
 	}
+	s.invalidateChangedPathsLocked()
 	s.saveSelectionsLocked()
 	s.mu.Unlock()
 

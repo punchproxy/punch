@@ -84,6 +84,9 @@ func TestConfigHandlersApplyFullCheckInterval(t *testing.T) {
 			"name": "local",
 			"type": "direct",
 		}},
+	}, {
+		Type: "inline", Name: "idle", Select: "auto",
+		Proxies: []map[string]any{{"name": "spare", "type": "direct"}},
 	}}
 	if err := config.Replace(cfg); err != nil {
 		t.Fatalf("replace config: %v", err)
@@ -102,15 +105,19 @@ func TestConfigHandlersApplyFullCheckInterval(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("set status = %d body = %s", rec.Code, rec.Body.String())
 	}
-	found := false
+	found, foundIdle := false, false
 	for _, group := range selector.GroupList() {
-		if group.Name == "main" && group.CheckInterval != 120 {
-			t.Fatalf("group check interval = %d, want 120", group.CheckInterval)
+		if group.Name == "main" && group.CheckInterval != int64(cfg.Check.Interval) {
+			t.Fatalf("active group check interval = %d, want %d", group.CheckInterval, cfg.Check.Interval)
+		}
+		if group.Name == "idle" && group.CheckInterval != 120 {
+			t.Fatalf("idle group check interval = %d, want 120", group.CheckInterval)
 		}
 		found = found || group.Name == "main"
+		foundIdle = foundIdle || group.Name == "idle"
 	}
-	if !found {
-		t.Fatalf("main group not found: %#v", selector.GroupList())
+	if !found || !foundIdle {
+		t.Fatalf("expected relay groups not found: %#v", selector.GroupList())
 	}
 }
 

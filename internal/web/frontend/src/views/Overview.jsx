@@ -1,4 +1,5 @@
 import { useStatus } from "../App.jsx";
+import RelayPath from "../RelayPath.jsx";
 import { AreaChart, ConnectivityBars, Donut, ScatterPlot, Sparkline } from "../charts.jsx";
 import { Card, CardHeader, Empty, Pill, StatTile, Tag } from "../components.jsx";
 import { connectLatencyWindowMS, filterConnectLatencySamples, fmtBytes, fmtLatency, fmtNum, fmtRate, fmtUptime, shortName, statusColor } from "../utils.js";
@@ -19,6 +20,7 @@ export default function Overview() {
     { label: "Upload", values: history.map((sample) => ({ time: sample.time, value: sample.upload_bps || 0 })), color: colors.up },
   ];
   const relayGroups = status.relay_groups || [];
+  const activePath = relayGroups.find((group) => group.selected)?.path || [];
   return <>
     <div className="grid cols-4">
       <StatTile label="Active relay" value={<span className="relay-value">{direct ? "DIRECT" : shortName(relay.active_relay)}</span>} detail={<Pill color={direct ? "gray" : relayColor}>{direct ? "direct" : relay.status || "unknown"}</Pill>}/>
@@ -26,6 +28,7 @@ export default function Overview() {
       <StatTile label="Active sessions" value={fmtNum(relay.active_sessions)} detail={`${fmtNum(relay.total_processed_sessions)} total`}/>
       <StatTile label="DNS queries" value={fmtNum(dns.total_queries)} detail={`${hitRatio}% cache hits`}/>
     </div>
+    {activePath.length > 0 && <Card className="active-path-card mt"><RelayPath path={activePath} label="Active path"/></Card>}
     <div className="overview-primary mt">
       <Card className="throughput-card"><CardHeader title="Throughput"/><div className="card-body"><AreaChart series={throughputSeries} formatY={fmtBytes} height={240}/><div className="legend"><span><i style={{background: colors.down}}/>Download<span className="mono muted">{fmtRate(relay.download_bps)}</span></span><span><i style={{background: colors.up}}/>Upload<span className="mono muted">{fmtRate(relay.upload_bps)}</span></span></div></div></Card>
       <Card><CardHeader title="DNS decisions"/><div className="card-body dns-decision-wrap"><Donut segments={[{label:"Relay",value:dns.relay?.requests||0,color:colors.relay},{label:"Direct",value:dns.direct?.requests||0,color:colors.direct},{label:"Reject",value:dns.reject?.requests||0,color:colors.reject}]} label={fmtNum(total)} sub="routed"/><div className="decision-legend"><Decision label="Relay" stat={dns.relay} color={colors.relay} total={total}/><Decision label="Direct" stat={dns.direct} color={colors.direct} total={total}/><Decision label="Reject" stat={dns.reject} color={colors.reject} total={total}/></div></div></Card>
@@ -49,7 +52,7 @@ function GroupRow({ group }) {
   const records = group.history || [];
   const history = records.map((record) => record.latency_ms || 0);
   return <div className="group-row">
-    <div className="spread"><span className="flex"><strong>{group.name}</strong>{group.selected && <Pill color="orange">active</Pill>}</span><span className="mono muted">{fmtLatency(group.current_latency_ms)}</span></div>
+    <div className="spread"><span className="flex relay-group-title"><strong>{group.name}</strong>{group.selected ? <Pill color="orange">exit</Pill> : group.in_use && <Pill color="blue">transit in use</Pill>}{group.exit_eligible === false && <Pill plain>transit only</Pill>}</span><span className="mono muted">{fmtLatency(group.current_latency_ms)}</span></div>
     <div className="spread group-row-sub">
       <span className="mono">{shortName(group.current_relay, group.name) || "—"}{group.current_status ? ` · ${group.current_status}` : ""}</span>
       {history.some((value) => value > 0) ? <Sparkline values={history} times={records.map((record) => record.time)} max={1000} color={color} width={110} height={22} fill={false} formatValue={fmtLatency} label={`${group.name} latency history`}/> : <span className="faint">—</span>}

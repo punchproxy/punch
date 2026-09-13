@@ -16,7 +16,8 @@ func (s *Selector) Active() Dialer {
 	}
 	g := s.groups[s.activeUsableGroupIndexLocked()]
 	idx := s.activeDialerIndexLocked(g)
-	return g.dialers[idx]
+	d, _, _ := s.resolvePathLocked(g, g.dialers[idx], make(map[string]bool), true)
+	return d
 }
 
 func (s *Selector) ActiveName() string {
@@ -42,8 +43,12 @@ func (s *Selector) Select(name string) error {
 			continue
 		}
 		if g.name == name {
+			if !s.exitEligibleLocked(g) {
+				return ErrGroupNotExitEligible
+			}
 			s.active.Store(int32(gi))
 			s.resetSelectedCheckFailuresLocked()
+			s.invalidateChangedPathsLocked()
 			s.saveSelectionsLocked()
 			slog.Debug("manually selected relay group", "group", g.name)
 			s.publishRelayChangeLocked(prevActive)
@@ -51,9 +56,13 @@ func (s *Selector) Select(name string) error {
 		}
 		for di, d := range g.dialers {
 			if s.displayName(g.name, d.Name()) == name || d.Name() == name {
+				if !s.exitEligibleLocked(g) {
+					return ErrGroupNotExitEligible
+				}
 				g.active.Store(int32(di))
 				s.active.Store(int32(gi))
 				s.resetSelectedCheckFailuresLocked()
+				s.invalidateChangedPathsLocked()
 				s.saveSelectionsLocked()
 				slog.Debug("manually selected relay", "group", g.name, "relay", d.Name())
 				s.publishRelayChangeLocked(prevActive)
@@ -65,6 +74,11 @@ func (s *Selector) Select(name string) error {
 }
 
 func (s *Selector) SelectManualRelay(name string) (string, error) {
+	return s.SelectGroupRelay("", name, true)
+}
+
+// SelectGroupRelay selects a member without changing the exit when activate is false.
+func (s *Selector) SelectGroupRelay(groupName, name string, activate bool) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	prevActive := s.activeNameLocked()
@@ -78,6 +92,9 @@ func (s *Selector) SelectManualRelay(name string) (string, error) {
 	var matches []match
 	var autoGroups []string
 	for gi, g := range s.groups {
+		if groupName != "" && g.name != groupName {
+			continue
+		}
 		for di, d := range g.dialers {
 			if d.Name() != name && s.displayName(g.name, d.Name()) != name {
 				continue
@@ -103,9 +120,15 @@ func (s *Selector) SelectManualRelay(name string) (string, error) {
 		return "", fmt.Errorf("%w: %s", ErrRelaySelectionAmbiguous, strings.Join(names, ", "))
 	}
 	selected := matches[0]
+	if activate && !s.exitEligibleLocked(selected.group) {
+		return "", ErrGroupNotExitEligible
+	}
 	selected.group.active.Store(int32(selected.relayIdx))
-	s.active.Store(int32(selected.groupIdx))
+	if activate {
+		s.active.Store(int32(selected.groupIdx))
+	}
 	s.resetSelectedCheckFailuresLocked()
+	s.invalidateChangedPathsLocked()
 	s.saveSelectionsLocked()
 	slog.Debug("manually selected relay", "group", selected.group.name, "relay", selected.relay.Name())
 	s.publishRelayChangeLocked(prevActive)
@@ -123,8 +146,12 @@ func (s *Selector) SelectManualGroup(name string) (string, error) {
 		if len(g.dialers) == 0 || g.name != name {
 			continue
 		}
+		if !s.exitEligibleLocked(g) {
+			return "", ErrGroupNotExitEligible
+		}
 		s.active.Store(int32(gi))
 		s.resetSelectedCheckFailuresLocked()
+		s.invalidateChangedPathsLocked()
 		s.saveSelectionsLocked()
 		slog.Debug("manually selected relay group", "group", g.name)
 		s.publishRelayChangeLocked(prevActive)
@@ -162,5 +189,6 @@ func (s *Selector) activeSelection() (Dialer, string, string) {
 	}
 	g := s.groups[s.activeUsableGroupIndexLocked()]
 	d := g.dialers[s.activeDialerIndexLocked(g)]
-	return d, s.displayName(g.name, d.Name()), d.Type()
+	bound, _, _ := s.resolvePathLocked(g, d, make(map[string]bool), true)
+	return bound, s.displayName(g.name, d.Name()), d.Type()
 }

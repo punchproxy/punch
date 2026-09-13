@@ -8,11 +8,18 @@ func (s *Selector) HealthList() []RelayHealth {
 	defer s.mu.RUnlock()
 	result := make([]RelayHealth, 0, len(s.health))
 	activeGroupIdx := s.activeGroupIndexLocked()
+	activePath, _ := s.activePathLocked()
+	inUse := make(map[string]string, len(activePath))
+	for _, hop := range activePath {
+		inUse[hop.Group] = hop.Relay
+	}
 	for _, g := range s.groups {
 		if len(g.dialers) == 0 {
 			h := s.health[s.healthKey(g.name, "")]
 			if h != nil {
-				result = append(result, *h)
+				row := *h
+				_, row.InUse = inUse[g.name]
+				result = append(result, row)
 			}
 			continue
 		}
@@ -24,9 +31,15 @@ func (s *Selector) HealthList() []RelayHealth {
 				continue
 			}
 			selected := groupSelected && di == activeDialerIdx
+			_, path, _ := s.resolvePathLocked(g, d, make(map[string]bool), false)
+			used := inUse[g.name] == d.Name()
 			recentAborts, totalAborts := s.StreamAbortStats(h.Name)
 			result = append(result, RelayHealth{
 				Name:               h.Name,
+				InUse:              used,
+				GroupSelected:      di == activeDialerIdx,
+				DialerProxy:        dependencyName(d),
+				Path:               path,
 				Group:              h.Group,
 				Type:               h.Type,
 				Addr:               h.Addr,
@@ -34,7 +47,7 @@ func (s *Selector) HealthList() []RelayHealth {
 				Status:             h.Status,
 				Latency:            h.Latency,
 				URLTestLatency:     h.URLTestLatency,
-				CheckInterval:      int64(s.relayCheckIntervalLocked(selected).Seconds()),
+				CheckInterval:      int64(s.relayCheckIntervalLocked(used).Seconds()),
 				LastCheckedAt:      h.LastCheckedAt,
 				LastRefreshedAt:    g.lastRefreshedAt,
 				NextRefreshAt:      g.nextRefreshAt,
@@ -77,7 +90,13 @@ func (s *Selector) GroupList() []GroupStatus {
 
 	result := make([]GroupStatus, 0, len(s.groups))
 	activeGroupIdx := s.activeGroupIndexLocked()
+	activePath, _ := s.activePathLocked()
+	inUse := make(map[string]string, len(activePath))
+	for _, hop := range activePath {
+		inUse[hop.Group] = hop.Relay
+	}
 	for gi, g := range s.groups {
+		_, groupInUse := inUse[g.name]
 		selected := gi == activeGroupIdx && len(g.dialers) > 0
 		cfg := s.groupCfgs[g.name]
 		groupType := cfg.Type
@@ -86,6 +105,8 @@ func (s *Selector) GroupList() []GroupStatus {
 		}
 		status := GroupStatus{
 			Name:            g.name,
+			InUse:           groupInUse,
+			ExitEligible:    s.exitEligibleLocked(g),
 			Type:            groupType,
 			RelayCount:      len(g.dialers),
 			Selected:        selected,
@@ -100,13 +121,16 @@ func (s *Selector) GroupList() []GroupStatus {
 		if len(g.dialers) > 0 {
 			d := g.dialers[s.activeDialerIndexLocked(g)]
 			status.CurrentRelay = d.Name()
+			status.DialerProxy = dependencyName(d)
+			_, status.Path, _ = s.resolvePathLocked(g, d, make(map[string]bool), false)
+			status.CheckInterval = int64(s.relayCheckIntervalLocked(status.InUse).Seconds())
 			if h := s.health[s.healthKey(g.name, d.Name())]; h != nil {
 				status.CurrentStatus = h.Status
 				status.CurrentLatency = h.Latency
 				status.History = cloneHealthRecords(h.History)
 				status.LastCheckedAt = h.LastCheckedAt
 				if s.fullCheckInterval > 0 && !h.LastCheckedAt.IsZero() && g.name != directGroupName {
-					status.NextCheckAt = h.LastCheckedAt.Add(s.fullCheckInterval)
+					status.NextCheckAt = h.LastCheckedAt.Add(time.Duration(status.CheckInterval) * time.Second)
 				}
 				if status.Error == "" {
 					status.Error = h.Error
