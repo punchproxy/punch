@@ -57,10 +57,12 @@ type handler struct {
 	inet6Address []netip.Prefix
 	udp          udpCounters
 
-	closeOnce   sync.Once
-	lifecycleMu sync.Mutex
-	lifecycleWG sync.WaitGroup
-	closing     bool
+	closeOnce       sync.Once
+	lifecycleMu     sync.Mutex
+	lifecycleWG     sync.WaitGroup
+	closing         bool
+	lifecycleCtx    context.Context
+	lifecycleCancel context.CancelFunc
 }
 
 func newHandler(dnsServer *pdns.Server, selector *relay.Selector, sessions *session.Manager, inet4Address, inet6Address []netip.Prefix) *handler {
@@ -86,6 +88,8 @@ func (h *handler) NewConnectionEx(ctx context.Context, conn net.Conn, source M.S
 		return
 	}
 	defer h.endActivity()
+	ctx, finish := h.connectionContext(ctx, conn)
+	defer finish()
 
 	if isDNSDestination(destination) {
 		closeErr = h.handleDNSConn(ctx, conn)
@@ -107,7 +111,8 @@ func (h *handler) NewPacketConnectionEx(ctx context.Context, conn N.PacketConn, 
 		return
 	}
 	defer h.endActivity()
-	defer conn.Close()
+	ctx, finish := h.connectionContext(ctx, conn)
+	defer finish()
 
 	writer := &packetWriteBack{conn: conn}
 	senders := newUDPSenderRegistry()
@@ -133,7 +138,7 @@ func (h *handler) NewPacketConnectionEx(ctx context.Context, conn N.PacketConn, 
 
 		key := destination.String()
 		sender, created := senders.getOrCreate(key, func() *udpSender {
-			return newUDPSender(h, source.String()+"->"+key, writer, source, destination)
+			return newUDPSender(ctx, h, source.String()+"->"+key, writer, source, destination)
 		})
 		if created {
 			sender.Start()
@@ -177,10 +182,10 @@ func (h *handler) stopAccepting() {
 	h.closeOnce.Do(func() {
 		h.lifecycleMu.Lock()
 		h.closing = true
-		h.lifecycleMu.Unlock()
-		if h.sessions != nil {
-			h.sessions.KillAllSessions()
+		if h.lifecycleCancel != nil {
+			h.lifecycleCancel()
 		}
+		h.lifecycleMu.Unlock()
 	})
 }
 
@@ -190,12 +195,33 @@ func (h *handler) beginActivity() bool {
 	if h.closing {
 		return false
 	}
+	if h.lifecycleCtx == nil {
+		h.lifecycleCtx, h.lifecycleCancel = context.WithCancel(context.Background())
+	}
 	h.lifecycleWG.Add(1)
 	return true
 }
 
 func (h *handler) endActivity() {
 	h.lifecycleWG.Done()
+}
+
+// connectionContext cancels in-flight work and closes blocked reads when the
+// handler stops, including DNS connections and UDP associations without sessions.
+// Call only after beginActivity, which initializes the lifecycle context.
+func (h *handler) connectionContext(ctx context.Context, conn io.Closer) (context.Context, func()) {
+	ctx, cancel := context.WithCancel(ctx)
+	stop := context.AfterFunc(h.lifecycleCtx, cancel)
+	closed := make(chan struct{})
+	context.AfterFunc(ctx, func() {
+		_ = conn.Close()
+		close(closed)
+	})
+	return ctx, func() {
+		stop()
+		cancel()
+		<-closed
+	}
 }
 
 func (h *handler) handleTCPConn(ctx context.Context, conn net.Conn, source M.Socksaddr, destination M.Socksaddr) error {
@@ -572,8 +598,8 @@ type udpSender struct {
 	onCleanup     func(*udpSender)
 }
 
-func newUDPSender(h *handler, key string, writer N.PacketWriter, source M.Socksaddr, destination M.Socksaddr) *udpSender {
-	ctx, cancel := context.WithCancel(context.Background())
+func newUDPSender(ctx context.Context, h *handler, key string, writer N.PacketWriter, source M.Socksaddr, destination M.Socksaddr) *udpSender {
+	ctx, cancel := context.WithCancel(ctx)
 	return &udpSender{
 		handler:       h,
 		key:           key,

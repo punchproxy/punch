@@ -115,6 +115,11 @@ punchctl dns trace
 
 That's the loop: `punchctl` to inspect, change, and watch; `punchd` keeps running.
 
+Press Ctrl+C to stop `punchd`. It restores system DNS, removes Punch's routes,
+and closes the TUN device before waiting for services and session history to
+finish. Press Ctrl+C again to exit immediately with code 130, without waiting
+for any cleanup. DNS or route restoration may be unfinished if interrupted.
+
 ## Web dashboard
 
 `punchd` also serves a web dashboard on the **same address as the API** (default

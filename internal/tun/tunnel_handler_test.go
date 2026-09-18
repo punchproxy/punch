@@ -1,6 +1,8 @@
 package tun
 
 import (
+	"context"
+	"net"
 	"net/netip"
 	"sync"
 	"testing"
@@ -11,6 +13,73 @@ import (
 	singbuf "github.com/sagernet/sing/common/buf"
 	M "github.com/sagernet/sing/common/metadata"
 )
+
+type shutdownReadConn struct {
+	net.Conn
+	readStarted chan struct{}
+	readOnce    sync.Once
+}
+
+func (c *shutdownReadConn) Read(p []byte) (int, error) {
+	c.readOnce.Do(func() { close(c.readStarted) })
+	return c.Conn.Read(p)
+}
+
+type shutdownPacketConn struct{ *shutdownReadConn }
+
+func (c *shutdownPacketConn) ReadPacket(*singbuf.Buffer) (M.Socksaddr, error) {
+	var data [1]byte
+	_, err := c.Read(data[:])
+	return M.Socksaddr{}, err
+}
+
+func (c *shutdownPacketConn) WritePacket(buffer *singbuf.Buffer, _ M.Socksaddr) error {
+	defer buffer.Release()
+	_, err := c.Write(buffer.Bytes())
+	return err
+}
+
+func TestHandlerCloseUnblocksIdleConnections(t *testing.T) {
+	for _, network := range []string{"dns-tcp", "udp"} {
+		t.Run(network, func(t *testing.T) {
+			h := newHandler(nil, nil, nil, nil, nil)
+			server, client := net.Pipe()
+			defer server.Close()
+			defer client.Close()
+			conn := &shutdownReadConn{Conn: server, readStarted: make(chan struct{})}
+			flowDone := make(chan struct{})
+			go func() {
+				defer close(flowDone)
+				if network == "dns-tcp" {
+					h.NewConnectionEx(context.Background(), conn, M.Socksaddr{}, M.Socksaddr{Port: 53}, nil)
+				} else {
+					h.NewPacketConnectionEx(context.Background(), &shutdownPacketConn{conn}, M.Socksaddr{}, M.Socksaddr{}, nil)
+				}
+			}()
+			select {
+			case <-conn.readStarted:
+			case <-time.After(time.Second):
+				t.Fatal("connection did not enter its read loop")
+			}
+
+			closeDone := make(chan struct{})
+			go func() {
+				_ = h.Close()
+				close(closeDone)
+			}()
+			select {
+			case <-closeDone:
+			case <-time.After(time.Second):
+				t.Fatal("handler shutdown is stuck on an idle connection without a session")
+			}
+			select {
+			case <-flowDone:
+			case <-time.After(time.Second):
+				t.Fatal("connection callback did not return after shutdown")
+			}
+		})
+	}
+}
 
 type blockingHistoryStore struct {
 	appendStarted chan struct{}
@@ -64,7 +133,7 @@ func newTestUDPPacket() *udpTunPacket {
 
 func TestUDPSenderSendEnqueuesPacket(t *testing.T) {
 	h := &handler{}
-	sender := newUDPSender(h, "test", nil, M.Socksaddr{}, M.Socksaddr{})
+	sender := newUDPSender(context.Background(), h, "test", nil, M.Socksaddr{}, M.Socksaddr{})
 	packet := newTestUDPPacket()
 
 	sender.Send(packet)
@@ -86,7 +155,7 @@ func TestUDPSenderSendEnqueuesPacket(t *testing.T) {
 
 func TestUDPSenderSendDropsClosedPacket(t *testing.T) {
 	h := &handler{}
-	sender := newUDPSender(h, "test", nil, M.Socksaddr{}, M.Socksaddr{})
+	sender := newUDPSender(context.Background(), h, "test", nil, M.Socksaddr{}, M.Socksaddr{})
 	sender.Close()
 	packet := newTestUDPPacket()
 
@@ -100,7 +169,7 @@ func TestUDPSenderSendDropsClosedPacket(t *testing.T) {
 
 func TestUDPSenderSendDropsAfterFullQueueTimeout(t *testing.T) {
 	h := &handler{}
-	sender := newUDPSender(h, "test", nil, M.Socksaddr{}, M.Socksaddr{})
+	sender := newUDPSender(context.Background(), h, "test", nil, M.Socksaddr{}, M.Socksaddr{})
 	for i := 0; i < udpPacketQueueSize; i++ {
 		sender.Send(newTestUDPPacket())
 	}
@@ -122,7 +191,7 @@ func TestUDPSenderSendDropsAfterFullQueueTimeout(t *testing.T) {
 
 func TestUDPSenderDropPendingCountsPendingDrops(t *testing.T) {
 	h := &handler{}
-	sender := newUDPSender(h, "test", nil, M.Socksaddr{}, M.Socksaddr{})
+	sender := newUDPSender(context.Background(), h, "test", nil, M.Socksaddr{}, M.Socksaddr{})
 	sender.Send(newTestUDPPacket())
 	sender.Send(newTestUDPPacket())
 
@@ -138,7 +207,7 @@ func TestUDPSenderRegistryReplacesClosedSender(t *testing.T) {
 	h := &handler{}
 	registry := newUDPSenderRegistry()
 	create := func() *udpSender {
-		return newUDPSender(h, "test", nil, M.Socksaddr{}, M.Socksaddr{})
+		return newUDPSender(context.Background(), h, "test", nil, M.Socksaddr{}, M.Socksaddr{})
 	}
 
 	first, created := registry.getOrCreate("destination", create)
@@ -176,7 +245,7 @@ func TestUDPSenderRegistryCloseWaitsForSenderCleanup(t *testing.T) {
 	h := &handler{}
 	registry := newUDPSenderRegistry()
 	sender, created := registry.getOrCreate("destination", func() *udpSender {
-		return newUDPSender(h, "test", nil, M.Socksaddr{}, M.Socksaddr{})
+		return newUDPSender(context.Background(), h, "test", nil, M.Socksaddr{}, M.Socksaddr{})
 	})
 	if !created {
 		t.Fatal("sender was not created")

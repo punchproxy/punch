@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -72,7 +73,8 @@ func main() {
 		fmt.Fprintf(os.Stderr, "error: open store: %v\n", err)
 		os.Exit(1)
 	}
-	defer st.Close()
+	closeStore := sync.OnceValue(st.Close)
+	defer closeStore()
 
 	// Load configuration into the process-wide config cache.
 	if err := config.Init(st); err != nil {
@@ -244,6 +246,7 @@ func main() {
 	// Wait for shutdown signal
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	defer signal.Stop(sigCh)
 
 	// Also handle SIGHUP for config reload
 	reloadCh := make(chan os.Signal, 1)
@@ -251,11 +254,9 @@ func main() {
 
 	for {
 		select {
-		case sig := <-sigCh:
-			slog.Info("received signal, shutting down", "signal", sig)
+		case <-sigCh:
 			goto shutdown
 		case <-shutdownCh:
-			slog.Info("received API shutdown request")
 			goto shutdown
 		case <-reloadCh:
 			slog.Info("received SIGHUP, reloading config")
@@ -264,29 +265,43 @@ func main() {
 	}
 
 shutdown:
-	// Graceful shutdown in reverse order
-	slog.Info("shutting down...")
+	forced := runShutdown(sigCh, func() error {
+		slog.Info("shutting down; press Ctrl+C again to quit immediately")
+		close(assetRefreshStop)
+		close(fakeIPSaverStop)
+		slog.Info("shutdown: restoring system DNS and routes")
+		return tunEngine.RestoreSystemNetwork()
+	}, func() {
+		slog.Info("shutdown: persisting fake IPs")
+		<-fakeIPSaverDone
+		if err := saveFakeIPs(st, dnsServer.FakeIPPool()); err != nil {
+			slog.Warn("persist fake IPs on shutdown", "error", err)
+		}
 
-	close(assetRefreshStop)
-	close(fakeIPSaverStop)
-	<-fakeIPSaverDone
-	if err := saveFakeIPs(st, dnsServer.FakeIPPool()); err != nil {
-		slog.Warn("persist fake IPs on shutdown", "error", err)
+		slog.Info("shutdown: stopping API server")
+		if err := apiServer.Stop(); err != nil {
+			slog.Error("API shutdown error", "error", err)
+		}
+		slog.Info("shutdown: stopping TUN engine")
+		if err := tunEngine.Stop(); err != nil {
+			slog.Error("TUN shutdown error", "error", err)
+		}
+		slog.Info("shutdown: stopping relay selector")
+		selector.Stop()
+		unregisterMihomoDNS()
+		slog.Info("shutdown: stopping DNS server")
+		if err := dnsServer.Stop(); err != nil {
+			slog.Error("DNS shutdown error", "error", err)
+		}
+		slog.Info("shutdown: closing database")
+		if err := closeStore(); err != nil {
+			slog.Error("database shutdown error", "error", err)
+		}
+		slog.Info("Punch stopped")
+	})
+	if forced {
+		os.Exit(130)
 	}
-
-	if err := apiServer.Stop(); err != nil {
-		slog.Error("API shutdown error", "error", err)
-	}
-	if err := tunEngine.Stop(); err != nil {
-		slog.Error("TUN shutdown error", "error", err)
-	}
-	selector.Stop()
-	unregisterMihomoDNS()
-	if err := dnsServer.Stop(); err != nil {
-		slog.Error("DNS shutdown error", "error", err)
-	}
-
-	slog.Info("Punch stopped")
 }
 
 // resolveDataDir picks the directory that will hold punch.db. Precedence:

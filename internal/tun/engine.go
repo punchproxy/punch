@@ -2,6 +2,7 @@ package tun
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -43,6 +44,7 @@ type Engine struct {
 	dnsOverride             *systemDNSOverride
 	routeMonitor            *interfaceRouteMonitor
 	started                 bool
+	shuttingDown            bool
 }
 
 type runtimeTunOptions struct {
@@ -105,6 +107,9 @@ func (e *Engine) Start() error {
 }
 
 func (e *Engine) startLocked() error {
+	if e.shuttingDown {
+		return net.ErrClosed
+	}
 	if e.started {
 		return nil
 	}
@@ -202,43 +207,63 @@ func (e *Engine) Stop() error {
 	return e.stopLocked()
 }
 
+// RestoreSystemNetwork restores DNS, removes Punch routes, and closes the TUN
+// device without waiting for traffic handlers or session persistence. It also
+// prevents configuration and asset updates from reinstalling routes.
+// Call before Stop during daemon shutdown. The engine cannot restart afterward.
+func (e *Engine) RestoreSystemNetwork() error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.shuttingDown = true
+	if e.tunnel != nil {
+		e.tunnel.stopAccepting()
+	}
+	return e.restoreSystemNetworkLocked()
+}
+
+func (e *Engine) restoreSystemNetworkLocked() error {
+	var errs []error
+	if e.routeMonitor != nil {
+		e.routeMonitor.Stop()
+		e.routeMonitor = nil
+	}
+	if e.dnsOverride != nil {
+		if err := e.dnsOverride.StopAndRestore(); err != nil {
+			errs = append(errs, fmt.Errorf("restore system DNS: %w", err))
+		}
+		e.dnsOverride = nil
+	}
+	if err := cleanupRoutes(e.routeAddress, e.tunAddress); err != nil {
+		errs = append(errs, err)
+	}
+	e.routeAddress = nil
+	if e.tunIf != nil {
+		if err := e.tunIf.Close(); err != nil {
+			if isIgnorableTunCloseError(err) {
+				slog.Debug("ignored TUN close cleanup error", "error", err)
+			} else {
+				errs = append(errs, err)
+			}
+		}
+		e.tunIf = nil
+	}
+	return errors.Join(errs...)
+}
+
 func (e *Engine) stopLocked() error {
 	if !e.started {
 		return nil
 	}
 
-	var firstErr error
 	if e.tunnel != nil {
 		// Reject new callbacks before tearing down the stack. Close below waits
 		// for callbacks already in flight and their session-history writes.
 		e.tunnel.stopAccepting()
 	}
-	if e.routeMonitor != nil {
-		e.routeMonitor.Stop()
-	}
-	if e.dnsOverride != nil {
-		if err := e.dnsOverride.StopAndRestore(); err != nil {
-			slog.Warn("failed to restore system DNS", "error", err)
-			if firstErr == nil {
-				firstErr = err
-			}
-		}
-	}
-	if err := cleanupRoutes(e.routeAddress, e.tunAddress); err != nil && firstErr == nil {
-		firstErr = err
-	}
+	firstErr := e.restoreSystemNetworkLocked()
 	if e.tunStack != nil {
 		if err := e.tunStack.Close(); err != nil && firstErr == nil {
 			firstErr = err
-		}
-	}
-	if e.tunIf != nil {
-		if err := e.tunIf.Close(); err != nil {
-			if isIgnorableTunCloseError(err) {
-				slog.Debug("ignored TUN close cleanup error", "error", err)
-			} else if firstErr == nil {
-				firstErr = err
-			}
 		}
 	}
 	if e.tunnel != nil {
@@ -276,6 +301,9 @@ func (e *Engine) stopLocked() error {
 func (e *Engine) ApplyConfig(cfg config.TUN) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	if e.shuttingDown {
+		return net.ErrClosed
+	}
 
 	cfg = cloneTUNConfig(cfg)
 	if !e.started {
@@ -319,7 +347,7 @@ func (e *Engine) ApplyConfig(cfg config.TUN) error {
 func (e *Engine) IsRunning() bool {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
-	return e.started
+	return e.started && !e.shuttingDown
 }
 
 func (e *Engine) SystemInfo() SystemInfo {
@@ -494,7 +522,7 @@ func (e *Engine) buildRouteAddress(routeEntries []string, fakeRanges ...netip.Pr
 func (e *Engine) onAssetReady(source string) {
 	e.mu.RLock()
 	cfg := cloneTUNConfig(e.cfg)
-	started := e.started
+	started := e.started && !e.shuttingDown
 	affected := routeSourceConfigured(cfg.Routes, source)
 	e.mu.RUnlock()
 
