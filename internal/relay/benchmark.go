@@ -763,7 +763,18 @@ func (s *Selector) holdActiveSelectionLocked(sel *autoSelections) {
 // happens when the fresh latency still beats the current relay by more than
 // the switch tolerance.
 func (s *Selector) reevaluateAutoSelections() {
+	s.reevaluateAutoSelectionsForPath("")
+}
+
+// reevaluateAutoSelectionsForPath only lets a selected-path check change
+// selection while that path is still active. An empty key permits any path.
+func (s *Selector) reevaluateAutoSelectionsForPath(expectedPathKey string) {
 	s.mu.Lock()
+	_, currentPathKey := s.activePathLocked()
+	if expectedPathKey != "" && currentPathKey != expectedPathKey {
+		s.mu.Unlock()
+		return
+	}
 	sel := s.computeAutoSelectionsLocked()
 	candidate, confirm := s.pendingLatencySwitchLocked(sel)
 	if !confirm {
@@ -773,7 +784,6 @@ func (s *Selector) reevaluateAutoSelections() {
 		return
 	}
 	currentName := s.activeNameLocked()
-	_, currentPathKey := s.activePathLocked()
 	candidateWasCurrent := s.benchmarkTargetCurrentLocked(candidate)
 	var currentLatency int64
 	if h := s.health[s.activeHealthKeyLocked()]; h != nil {
@@ -789,17 +799,24 @@ func (s *Selector) reevaluateAutoSelections() {
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	_, activePathKey := s.activePathLocked()
+	if expectedPathKey != "" && activePathKey != expectedPathKey {
+		return
+	}
 	if check.err != nil && !candidateWasCurrent {
 		s.rememberDependencyFailureLocked(candidate.pathKey)
 	}
 	sel = s.computeAutoSelectionsLocked()
 	next, again := s.pendingLatencySwitchLocked(sel)
-	_, activePathKey := s.activePathLocked()
+	currentHealth := s.health[s.activeHealthKeyLocked()]
 	improved := check.err == nil && (currentLatency <= 0 || time.Duration(currentLatency)*time.Millisecond-check.urlLatency > s.tolerance)
 	accepted := activePathKey == currentPathKey && again && next.pathKey == candidate.pathKey && improved
 	switch {
 	case accepted:
 		// Confirmed: the fresh latency still clears the tolerance; apply switches.
+	case !again && activePathKey == currentPathKey && currentHealth != nil && currentHealth.Status == HealthDown:
+		// The active relay failed during confirmation. Apply the newly computed
+		// failover instead of restoring a relay that is now known to be down.
 	case again && next.pathKey != candidate.pathKey:
 		// A different relay became the best candidate mid-check; hold position
 		// until a later pass confirms it.

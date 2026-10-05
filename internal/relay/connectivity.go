@@ -64,17 +64,16 @@ func (s *Selector) CheckSelectedConnectivity() {
 	if outsideChecked {
 		if !outsideFailed {
 			prevActive := s.ActiveName()
-			s.reevaluateAutoSelections()
+			s.reevaluateAutoSelectionsForPath(outsideTarget.pathKey)
 			s.publishRelayChange(prevActive)
 		}
 		s.triggerFullBenchmarkAfterSelectedCheck(outsideTarget, outsideFailed, domesticChecked && domesticFailed)
 	}
 }
 
-// CheckOutsideConnectivity tests outside reachability through whatever relay
-// is currently active. It always writes the result to outsideHealth, even if
-// the active relay changes mid-flight. It also folds the result into the
-// active relay's per-relay health so that the active row stays fresh.
+// CheckOutsideConnectivity tests outside reachability through the active path.
+// Obsolete path results are kept in history but cannot change current health
+// or automatic selection.
 //
 // A failed check never switches relays by itself: the selection holds until
 // the consecutive-failure threshold triggers a full benchmark (see
@@ -101,7 +100,7 @@ func (s *Selector) checkOutsideConnectivity(reevaluate bool) (benchmarkTarget, b
 
 	if result.err == nil {
 		if reevaluate {
-			s.reevaluateAutoSelections()
+			s.reevaluateAutoSelectionsForPath(target.pathKey)
 		}
 		// A green probe on a fresh connection can coexist with live streams
 		// being reset; surface that contrast so unstable relays are visible.

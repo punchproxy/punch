@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"path/filepath"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -164,6 +165,91 @@ func TestDependencyProbeResultRejectedAfterUpstreamSwitch(t *testing.T) {
 	}
 	if failures, trigger := s.recordSelectedCheckResult(target, true); failures != 0 || trigger {
 		t.Fatalf("stale path counted as failure: %d, %v", failures, trigger)
+	}
+}
+
+func TestStaleSuccessfulProbeDoesNotSelectDirect(t *testing.T) {
+	for _, check := range []struct {
+		name string
+		run  func(*Selector)
+	}{
+		{"selected", func(s *Selector) { s.CheckSelectedConnectivity() }},
+		{"outside", func(s *Selector) { s.CheckOutsideConnectivity() }},
+	} {
+		t.Run(check.name, func(t *testing.T) {
+			first := &memoryHealthDialer{testDialer: testDialer{name: "first"}}
+			second := &memoryHealthDialer{testDialer: testDialer{name: "second"}}
+			exit := &healthDependencyDialer{testDialer: testDialer{name: "exit"}, dependency: "transit"}
+			s := newDependencyHealthSelector(t,
+				&group{name: "egress", mode: "manual", dialers: []Dialer{exit}},
+				&group{name: "transit", mode: "manual", dialers: []Dialer{first, second}},
+				&group{name: directGroupName, mode: "manual", dialers: []Dialer{NewDirectDialer(nil)}},
+			)
+			s.mode = "auto"
+			transitOnly := false
+			s.groupCfgs = map[string]config.RelayGroup{"transit": {ExitEligible: &transitOnly}}
+			h := s.health[s.healthKey("egress", "exit")]
+			h.Status, h.URLTestLatency = HealthHealthy, 25
+			var once sync.Once
+			exit.beforeDial = func(Dialer) error {
+				once.Do(func() {
+					if _, err := s.SelectGroupRelay("transit", "second", false); err != nil {
+						t.Error(err)
+					}
+				})
+				return nil
+			}
+			check.run(s)
+			if got := s.ActiveName(); got != "egress / exit" {
+				t.Fatalf("successful probe on obsolete path switched exit to %q", got)
+			}
+			if h.Status != HealthPending || h.URLTestLatency != 0 || h.Path[0].Relay != "second" {
+				t.Fatalf("obsolete probe changed replacement path health: %#v", h)
+			}
+		})
+	}
+}
+
+func TestFailedActiveRelaySwitchesAfterConfirmation(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		candidateFails bool
+		want           string
+	}{
+		{name: "confirmed candidate", want: "candidate"},
+		{name: "failed candidate", candidateFails: true, want: "backup"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			current := &memoryHealthDialer{testDialer: testDialer{name: "current"}}
+			upstream := &memoryHealthDialer{testDialer: testDialer{name: "up"}}
+			candidate := &healthDependencyDialer{testDialer: testDialer{name: "candidate"}, dependency: "transit"}
+			backup := &memoryHealthDialer{testDialer: testDialer{name: "backup"}}
+			s := newDependencyHealthSelector(t,
+				&group{name: "egress", mode: "auto", dialers: []Dialer{current, candidate, backup}},
+				&group{name: "transit", mode: "manual", dialers: []Dialer{upstream}},
+			)
+			s.tolerance = 15 * time.Millisecond
+			for name, latency := range map[string]int64{"current": 200, "candidate": 10, "backup": 100} {
+				h := s.health[s.healthKey("egress", name)]
+				h.Status, h.URLTestLatency = HealthHealthy, latency
+			}
+			candidate.beforeDial = func(Dialer) error {
+				// A selected-path check can observe this failure while another
+				// check is confirming the faster candidate.
+				s.mu.Lock()
+				h := s.health[s.healthKey("egress", "current")]
+				h.Status, h.URLTestLatency = HealthDown, 0
+				s.mu.Unlock()
+				if tc.candidateFails {
+					return errors.New("candidate failed")
+				}
+				return nil
+			}
+			s.reevaluateAutoSelections()
+			if got := s.ActiveName(); got != "egress / "+tc.want {
+				t.Fatalf("active relay = %q, want %q", got, "egress / "+tc.want)
+			}
+		})
 	}
 }
 

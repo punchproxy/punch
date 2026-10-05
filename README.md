@@ -328,10 +328,9 @@ active exit:
 punchctl relays select transit-2 --group transit --activate=false
 ```
 
-The dashboard shows the active path in connection order, marks dependency
-groups and relays as `transit in use`, and includes their relay candidates in
-the default view. Use **Set relay** to change a group's member, **Use as exit**
-to change the exit, and **Allow as exit** to control exit eligibility.
+The dashboard appends `via transit` after a relay's address when it uses that
+group as its `dialer-proxy`, for example
+`exit.example.com:1080 (192.0.2.1:1080) via transit`.
 
 Frequent health checks cover the selected exit through its complete chain and
 the selected relays in its dependency groups. Full checks test dependencies
