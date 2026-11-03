@@ -24,6 +24,7 @@ func TestDNSUpstreamsCommand(t *testing.T) {
 		gotAuth = r.Header.Get("Authorization")
 		_ = json.NewEncoder(w).Encode([]upstreamStats{{
 			URL:            "https://dns.example/dns-query",
+			Disabled:       true,
 			Queries:        12,
 			AverageLatency: 34,
 			LastLatency:    56,
@@ -47,7 +48,7 @@ func TestDNSUpstreamsCommand(t *testing.T) {
 		t.Fatalf("Authorization = %q, want Bearer secret", gotAuth)
 	}
 	text := out.String()
-	for _, want := range []string{"UPSTREAM", "QUERIES", "AVG-LATENCY", "https://dns.example/dns-query", "12", "34ms"} {
+	for _, want := range []string{"UPSTREAM", "DISABLED", "true", "QUERIES", "AVG-LATENCY", "https://dns.example/dns-query", "12", "34ms"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("output missing %q:\n%s", want, text)
 		}
@@ -442,6 +443,7 @@ func TestDNSUpstreamsCreateCommand(t *testing.T) {
 		"--token", "secret",
 		"dns", "upstreams", "create", "https://dns.example/dns-query",
 		"--bootstrap", "1.1.1.1",
+		"--disabled",
 		"--domains", "google.com,full:example.com,keyword:needle,regexp:.+\\.test$",
 	})
 
@@ -456,6 +458,9 @@ func TestDNSUpstreamsCreateCommand(t *testing.T) {
 	}
 	if gotReq.URL != "https://dns.example/dns-query" || gotReq.Bootstrap != "1.1.1.1" {
 		t.Fatalf("request = %+v", gotReq)
+	}
+	if !gotReq.Disabled {
+		t.Fatal("created upstream is enabled, want disabled")
 	}
 	wantDomains := []string{"google.com", "full:example.com", "keyword:needle", "regexp:.+\\.test$"}
 	if strings.Join(gotReq.Domains, "|") != strings.Join(wantDomains, "|") {
@@ -479,6 +484,7 @@ func TestDNSUpstreamsSetCommand(t *testing.T) {
 				URL:       "https://dns.example/dns-query",
 				Bootstrap: "1.1.1.1",
 				Domains:   []string{"google.com"},
+				Disabled:  true,
 			}})
 		case http.MethodPut:
 			putCalled = true
@@ -515,6 +521,9 @@ func TestDNSUpstreamsSetCommand(t *testing.T) {
 	}
 	if strings.Join(putBody.Domains, "|") != "google.com" {
 		t.Fatalf("domains = %#v, want preserved [google.com]", putBody.Domains)
+	}
+	if !putBody.Disabled {
+		t.Fatal("editing bootstrap enabled a disabled upstream")
 	}
 	if !strings.Contains(out.String(), "updated") {
 		t.Fatalf("output = %q", out.String())

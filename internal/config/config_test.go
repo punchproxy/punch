@@ -59,7 +59,7 @@ func TestConfigSaveLoadRoundTrip(t *testing.T) {
 	want.DNS.ListenAddress = "127.0.0.1"
 	want.DNS.CustomPort = 5353
 	want.DNS.Upstream = []Upstream{
-		{URL: "https://dns.example/dns-query", Bootstrap: "1.1.1.1", Domains: []string{"domain:example.com"}},
+		{URL: "https://dns.example/dns-query", Bootstrap: "1.1.1.1", Domains: []string{"domain:example.com"}, Disabled: true},
 		{URL: "tls://1.0.0.1:853"},
 	}
 	want.DNS.CacheSize = 1234

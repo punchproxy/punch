@@ -97,7 +97,7 @@ func NewServer(assetManager *assets.Manager) (*Server, error) {
 		fakeIPPool:         fakePool,
 		disableIPv6FakeIP:  disableIPv6FakeIP,
 		cache:              cache,
-		resolver:           NewResolverGroup(buildUpstreams(cache)),
+		resolver:           NewResolverGroup(buildUpstreams(cfg.DNS.Upstream, cache)),
 		domainMatcher:      dnsrule.NewMatcher(),
 		directIPs:          NewIPSet(),
 		rejectIPs:          NewIPSet(),
@@ -116,14 +116,12 @@ func NewServer(assetManager *assets.Manager) (*Server, error) {
 	return s, nil
 }
 
-func buildUpstreams(cache *Cache) []*UpstreamResolver {
-	cfg, err := config.Snapshot()
-	if err != nil {
-		cfg = &config.Config{}
-	}
+func buildUpstreams(configured []config.Upstream, cache *Cache) []*UpstreamResolver {
 	var upstreams []*UpstreamResolver
-	for _, u := range cfg.DNS.Upstream {
-		upstreams = append(upstreams, NewUpstreamResolverWithCache(u.URL, u.Bootstrap, cache, u.Domains...))
+	for _, u := range configured {
+		resolver := NewUpstreamResolverWithCache(u.URL, u.Bootstrap, cache, u.Domains...)
+		resolver.disabled = u.Disabled
+		upstreams = append(upstreams, resolver)
 	}
 	if len(upstreams) == 0 {
 		upstreams = append(upstreams, NewUpstreamResolverWithCache("8.8.8.8:53", "", cache))

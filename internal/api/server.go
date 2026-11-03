@@ -267,9 +267,22 @@ func (s *Server) handleDNSUpstreams(w http.ResponseWriter, r *http.Request) {
 }
 
 type upstreamRequest struct {
-	URL       string   `json:"url"`
-	Bootstrap string   `json:"bootstrap,omitempty"`
-	Domains   []string `json:"domains,omitempty"`
+	URL       string    `json:"url"`
+	Bootstrap *string   `json:"bootstrap,omitempty"`
+	Domains   *[]string `json:"domains,omitempty"`
+	Disabled  *bool     `json:"disabled,omitempty"`
+}
+
+func (req upstreamRequest) apply(upstream *config.Upstream) {
+	if req.Bootstrap != nil {
+		upstream.Bootstrap = strings.TrimSpace(*req.Bootstrap)
+	}
+	if req.Domains != nil {
+		upstream.Domains = normalizeUpstreamDomains(*req.Domains)
+	}
+	if req.Disabled != nil {
+		upstream.Disabled = *req.Disabled
+	}
 }
 
 func (s *Server) handleCreateDNSUpstream(w http.ResponseWriter, r *http.Request) {
@@ -296,11 +309,9 @@ func (s *Server) handleCreateDNSUpstream(w http.ResponseWriter, r *http.Request)
 		}
 	}
 
-	cfg.DNS.Upstream = append(cfg.DNS.Upstream, config.Upstream{
-		URL:       req.URL,
-		Bootstrap: strings.TrimSpace(req.Bootstrap),
-		Domains:   normalizeUpstreamDomains(req.Domains),
-	})
+	upstream := config.Upstream{URL: req.URL}
+	req.apply(&upstream)
+	cfg.DNS.Upstream = append(cfg.DNS.Upstream, upstream)
 	if err := config.Replace(cfg); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
@@ -335,11 +346,7 @@ func (s *Server) handleUpdateDNSUpstream(w http.ResponseWriter, r *http.Request)
 		if upstream.URL != req.URL {
 			continue
 		}
-		cfg.DNS.Upstream[i] = config.Upstream{
-			URL:       req.URL,
-			Bootstrap: strings.TrimSpace(req.Bootstrap),
-			Domains:   normalizeUpstreamDomains(req.Domains),
-		}
+		req.apply(&cfg.DNS.Upstream[i])
 		updated = true
 		break
 	}

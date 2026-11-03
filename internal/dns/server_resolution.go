@@ -154,13 +154,7 @@ func (s *Server) UpstreamStats() []UpstreamStats {
 }
 
 func (s *Server) UpdateUpstreams(upstreams []config.Upstream) {
-	next := make([]*UpstreamResolver, 0, len(upstreams))
-	for _, upstream := range upstreams {
-		next = append(next, NewUpstreamResolverWithCache(upstream.URL, upstream.Bootstrap, s.cache, upstream.Domains...))
-	}
-	if len(next) == 0 {
-		next = append(next, NewUpstreamResolverWithCache("8.8.8.8:53", "", s.cache))
-	}
+	next := buildUpstreams(upstreams, s.cache)
 
 	s.resolverMu.Lock()
 	s.resolver = NewResolverGroup(next)

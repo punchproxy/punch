@@ -49,6 +49,7 @@ type Upstream struct {
 	URL       string   `json:"url"`
 	Bootstrap string   `json:"bootstrap,omitempty"`
 	Domains   []string `json:"domains,omitempty"`
+	Disabled  bool     `json:"disabled"`
 }
 
 type DNSOptions struct {
@@ -683,7 +684,7 @@ func loadDNSUpstreams(s *Store) ([]Upstream, error) {
 
 	upstreams := make([]Upstream, 0, len(rows))
 	for _, row := range rows {
-		upstream := Upstream{URL: row.URL, Bootstrap: row.Bootstrap}
+		upstream := Upstream{URL: row.URL, Bootstrap: row.Bootstrap, Disabled: row.Disabled}
 		var domainRows []dnsUpstreamDomainModel
 		if err := s.db.Where("upstream_position = ?", row.Position).Order("position").Find(&domainRows).Error; err != nil {
 			return nil, fmt.Errorf("load dns upstream domains: %w", err)
@@ -838,6 +839,7 @@ func replaceDNSUpstreams(tx *gorm.DB, upstreams []Upstream) error {
 			Position:  i,
 			URL:       upstream.URL,
 			Bootstrap: upstream.Bootstrap,
+			Disabled:  upstream.Disabled,
 		})
 		for j, domain := range upstream.Domains {
 			domainRows = append(domainRows, dnsUpstreamDomainModel{

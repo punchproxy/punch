@@ -27,6 +27,7 @@ type upstreamStats struct {
 	LastQueriedAt     string   `json:"last_queried_at,omitempty"`
 	LastQueriedDomain string   `json:"last_queried_domain,omitempty"`
 	Domains           []string `json:"domains,omitempty"`
+	Disabled          bool     `json:"disabled"`
 }
 
 type upstreamRow struct {
@@ -38,12 +39,14 @@ type upstreamRow struct {
 	LastQueriedAt     string    `json:"last_queried_at,omitempty" yaml:"last_queried_at,omitempty"`
 	LastQueriedDomain string    `json:"last_queried_domain,omitempty" yaml:"last_queried_domain,omitempty"`
 	Domains           string    `json:"domains,omitempty" yaml:"domains,omitempty"`
+	Disabled          bool      `json:"disabled" yaml:"disabled"`
 }
 
 type createUpstreamRequest struct {
 	URL       string   `json:"url"`
-	Bootstrap string   `json:"bootstrap,omitempty"`
-	Domains   []string `json:"domains,omitempty"`
+	Bootstrap string   `json:"bootstrap"`
+	Domains   []string `json:"domains"`
+	Disabled  bool     `json:"disabled"`
 }
 
 // updateUpstreamRequest carries flag-level intent: nil pointers mean
@@ -53,6 +56,7 @@ type updateUpstreamRequest struct {
 	URL       string
 	Bootstrap *string
 	Domains   *[]string
+	Disabled  *bool
 }
 
 func newUpstreamsCommand(cfg *commandConfig) *cobra.Command {
@@ -79,6 +83,7 @@ func newUpstreamsCommand(cfg *commandConfig) *cobra.Command {
 
 func newUpstreamCreateCommand(cfg *commandConfig) *cobra.Command {
 	var bootstrap, domains string
+	var disabled bool
 	cmd := &cobra.Command{
 		Use:   "create URL",
 		Short: "Create a DNS upstream",
@@ -88,6 +93,7 @@ func newUpstreamCreateCommand(cfg *commandConfig) *cobra.Command {
 				URL:       args[0],
 				Bootstrap: bootstrap,
 				Domains:   splitDomainMatchers(domains),
+				Disabled:  disabled,
 			}); err != nil {
 				return err
 			}
@@ -97,15 +103,17 @@ func newUpstreamCreateCommand(cfg *commandConfig) *cobra.Command {
 	}
 	cmd.Flags().StringVar(&bootstrap, "bootstrap", "", "bootstrap DNS server for DoH upstream hostnames")
 	cmd.Flags().StringVar(&domains, "domains", "", "comma-separated domain matchers routed to this upstream")
+	cmd.Flags().BoolVar(&disabled, "disabled", false, "save the upstream without using it for DNS queries")
 	return cmd
 }
 
 func newUpstreamSetCommand(cfg *commandConfig) *cobra.Command {
 	var bootstrap, domains string
+	var disabled bool
 	cmd := &cobra.Command{
 		Use:   "set URL",
 		Short: "Update an existing DNS upstream",
-		Long:  "Update bootstrap and/or domain matchers on an existing DNS upstream. Flags that are not provided keep their current values.",
+		Long:  "Update bootstrap, domain matchers, or disabled state on an existing DNS upstream. Flags that are not provided keep their current values.",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(c *cobra.Command, args []string) error {
 			update := updateUpstreamRequest{URL: args[0]}
@@ -117,8 +125,11 @@ func newUpstreamSetCommand(cfg *commandConfig) *cobra.Command {
 				d := splitDomainMatchers(domains)
 				update.Domains = &d
 			}
-			if update.Bootstrap == nil && update.Domains == nil {
-				return fmt.Errorf("nothing to update: provide --bootstrap and/or --domains")
+			if c.Flags().Changed("disabled") {
+				update.Disabled = &disabled
+			}
+			if update.Bootstrap == nil && update.Domains == nil && update.Disabled == nil {
+				return fmt.Errorf("nothing to update: provide --bootstrap, --domains, or --disabled")
 			}
 			if err := updateUpstream(c.Context(), *cfg, update); err != nil {
 				if errors.Is(err, errUpstreamNotFound) {
@@ -132,6 +143,7 @@ func newUpstreamSetCommand(cfg *commandConfig) *cobra.Command {
 	}
 	cmd.Flags().StringVar(&bootstrap, "bootstrap", "", "bootstrap DNS server for DoH upstream hostnames (pass empty string to clear)")
 	cmd.Flags().StringVar(&domains, "domains", "", "comma-separated domain matchers routed to this upstream (pass empty string to clear)")
+	cmd.Flags().BoolVar(&disabled, "disabled", false, "disable the upstream (use --disabled=false to enable it)")
 	return cmd
 }
 
@@ -194,9 +206,7 @@ func createUpstream(ctx context.Context, cfg commandConfig, req createUpstreamRe
 	return nil
 }
 
-// updateUpstream merges the partial update with the upstream's current
-// state, then sends a full replacement. The two-step (GET then PUT) keeps
-// the server's PUT semantics simple — it always replaces.
+// updateUpstream merges flag changes with the upstream's current settings.
 func updateUpstream(ctx context.Context, cfg commandConfig, update updateUpstreamRequest) error {
 	existing, err := fetchUpstreams(ctx, cfg)
 	if err != nil {
@@ -213,12 +223,18 @@ func updateUpstream(ctx context.Context, cfg commandConfig, update updateUpstrea
 		return errUpstreamNotFound
 	}
 
-	body := createUpstreamRequest{URL: update.URL, Bootstrap: current.Bootstrap, Domains: current.Domains}
+	body := createUpstreamRequest{URL: update.URL, Bootstrap: current.Bootstrap, Domains: current.Domains, Disabled: current.Disabled}
 	if update.Bootstrap != nil {
 		body.Bootstrap = strings.TrimSpace(*update.Bootstrap)
 	}
 	if update.Domains != nil {
 		body.Domains = *update.Domains
+	}
+	if body.Domains == nil {
+		body.Domains = []string{}
+	}
+	if update.Disabled != nil {
+		body.Disabled = *update.Disabled
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, cfg.timeout)
@@ -275,8 +291,8 @@ func writeUpstreams(w io.Writer, upstreams []upstreamStats, flags listFlags) err
 		flags.output = ""
 	}
 	printer, err := klo.PrinterFromFlag(flags.output, &klo.Specs{
-		DefaultColumnSpec: "UPSTREAM:{.URL},QUERIES:{.Queries},AVG-LATENCY:{.AverageLatency}",
-		WideColumnSpec:    "UPSTREAM:{.URL},QUERIES:{.Queries},AVG-LATENCY:{.AverageLatency},LAST-LATENCY:{.LastLatency},BOOTSTRAP:{.Bootstrap},LAST-QUERIED:{.LastQueriedAt},LAST-DOMAIN:{.LastQueriedDomain},DOMAINS:{.Domains}",
+		DefaultColumnSpec: "UPSTREAM:{.URL},DISABLED:{.Disabled},QUERIES:{.Queries},AVG-LATENCY:{.AverageLatency}",
+		WideColumnSpec:    "UPSTREAM:{.URL},DISABLED:{.Disabled},QUERIES:{.Queries},AVG-LATENCY:{.AverageLatency},LAST-LATENCY:{.LastLatency},BOOTSTRAP:{.Bootstrap},LAST-QUERIED:{.LastQueriedAt},LAST-DOMAIN:{.LastQueriedDomain},DOMAINS:{.Domains}",
 		GoTemplateArg:     flags.template,
 	})
 	if err != nil {
@@ -294,6 +310,7 @@ func upstreamRows(upstreams []upstreamStats) []upstreamRow {
 	for _, upstream := range upstreams {
 		rows = append(rows, upstreamRow{
 			URL:               upstream.URL,
+			Disabled:          upstream.Disabled,
 			Queries:           upstream.Queries,
 			AverageLatency:    latencyMS(upstream.AverageLatency),
 			LastLatency:       latencyMS(upstream.LastLatency),

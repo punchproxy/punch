@@ -179,7 +179,8 @@ func (c *Cache) lookupForUpstreams(name string, qtype uint16, upstreams []string
 }
 
 func (c *Cache) lookupKeysLocked(name string, qtype uint16, upstreams []string) []string {
-	if len(upstreams) > 0 {
+	// A nil list permits any upstream; an empty list permits none.
+	if upstreams != nil {
 		keys := make([]string, 0, len(upstreams))
 		for _, upstream := range upstreams {
 			keys = append(keys, cacheKey(name, qtype, upstream))

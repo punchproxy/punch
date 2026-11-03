@@ -176,6 +176,7 @@ type dnsUpstreamModel struct {
 	Position  int    `gorm:"column:position;primaryKey;autoIncrement:false"`
 	URL       string `gorm:"column:url;not null"`
 	Bootstrap string `gorm:"column:bootstrap;not null"`
+	Disabled  bool   `gorm:"column:disabled;not null;default:false"`
 }
 
 func (dnsUpstreamModel) TableName() string { return "dns_upstreams" }

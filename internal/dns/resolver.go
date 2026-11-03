@@ -25,12 +25,14 @@ type UpstreamStats struct {
 	LastQueriedAt     string   `json:"last_queried_at,omitempty"`
 	LastQueriedDomain string   `json:"last_queried_domain,omitempty"`
 	Domains           []string `json:"domains,omitempty"`
+	Disabled          bool     `json:"disabled"`
 }
 
 // Upstream represents a DNS upstream server.
 type UpstreamResolver struct {
 	url       string
 	bootstrap string
+	disabled  bool
 	client    *http.Client
 	isDoH     bool
 	domains   []string
@@ -147,6 +149,7 @@ func (u *UpstreamResolver) Stats() UpstreamStats {
 		LastQueriedAt:     lastQueriedAt,
 		LastQueriedDomain: lastDomain,
 		Domains:           append([]string(nil), u.domains...),
+		Disabled:          u.disabled,
 	}
 }
 
@@ -290,13 +293,18 @@ func questionDomain(msg *dns.Msg) string {
 }
 
 func (g *ResolverGroup) selectUpstreams(msg *dns.Msg) []*UpstreamResolver {
-	if len(g.upstreams) == 0 || msg == nil || len(msg.Question) == 0 {
-		return g.upstreams
-	}
-	domain := strings.TrimSuffix(msg.Question[0].Name, ".")
+	domain := questionDomain(msg)
+	var active []*UpstreamResolver
 	var matched []*UpstreamResolver
 	var defaults []*UpstreamResolver
 	for _, upstream := range g.upstreams {
+		if upstream.disabled {
+			continue
+		}
+		active = append(active, upstream)
+		if domain == "" {
+			continue
+		}
 		if upstream.matcher == nil {
 			defaults = append(defaults, upstream)
 			continue
@@ -311,7 +319,7 @@ func (g *ResolverGroup) selectUpstreams(msg *dns.Msg) []*UpstreamResolver {
 	if len(defaults) > 0 {
 		return defaults
 	}
-	return g.upstreams
+	return active
 }
 
 func (u *UpstreamResolver) resolveBootstrapHost(ctx context.Context, host string) ([]string, error) {

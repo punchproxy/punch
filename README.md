@@ -186,6 +186,21 @@ punchctl dns cache flush
 punchctl dns fakeips       # see allocated fake IPs
 ```
 
+Disable an upstream while keeping its settings, then enable it again:
+
+```sh
+punchctl dns upstreams set https://doh.pub/dns-query --disabled
+punchctl dns upstreams set https://doh.pub/dns-query --disabled=false
+```
+
+The dashboard's **DNS → Upstreams** tab also has Enable and Disable buttons.
+Disabled upstreams stay in the list and are saved across restarts. They are
+excluded from DNS queries and cache selection. If all configured upstreams
+are disabled, queries that need an upstream fail until one is enabled.
+The API accepts `PUT /api/dns/upstreams` with
+`{"url":"https://doh.pub/dns-query","disabled":true}`. Omitted settings keep
+their current values.
+
 ### Switch relays
 
 ```sh

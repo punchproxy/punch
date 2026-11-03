@@ -47,7 +47,7 @@ function RuleRow({ row, path, act, remove }) {
 }
 
 function Upstreams() {
-  const [rows, setRows] = useState([]), [error, setError] = useState(null);
+  const [rows, setRows] = useState([]), [error, setError] = useState(null), [toggling, setToggling] = useState(null);
   const toast = useToast(), dialog = useDialog();
   const load = useCallback(async () => { try { setRows(await api.get("/dns/upstreams") || []); setError(null); } catch (next) { setError(next); } }, []);
   useEffect(() => { load(); }, [load]);
@@ -55,12 +55,39 @@ function Upstreams() {
   const edit = async (existing) => {
     const values = await dialog({title:existing ? "Edit upstream" : "Add upstream",fields:[{name:"url",label:"URL",value:existing?.url || "",placeholder:"https://dns.example/dns-query"},{name:"bootstrap",label:"Bootstrap IP (optional)",value:existing?.bootstrap || "",placeholder:"223.5.5.5"},{name:"domains",label:"Scoped domains (comma-separated, optional)",value:(existing?.domains || []).join(", ")}]});
     if (!values?.url) return;
-    const payload = {...values,domains:values.domains ? values.domains.split(",").map((item) => item.trim()).filter(Boolean) : []};
+    const payload = {...values,domains:values.domains ? values.domains.split(",").map((item) => item.trim()).filter(Boolean) : [],disabled:existing?.disabled || false};
     act(() => existing ? api.put("/dns/upstreams",payload) : api.post("/dns/upstreams",payload),"Saved");
   };
   const remove = async (row) => { if (await dialog({title:"Delete upstream?",message:row.url,confirmLabel:"Delete",danger:true})) act(() => api.del(`/dns/upstreams?url=${encodeURIComponent(row.url)}`),"Deleted"); };
+  const toggle = async (row) => {
+    setToggling(row.url);
+    try {
+      await act(() => api.put("/dns/upstreams",{url:row.url,disabled:!row.disabled}),row.disabled ? "Upstream enabled" : "Upstream disabled");
+    } finally {
+      setToggling(null);
+    }
+  };
   if (error && !rows.length) return <ErrorState error={error}/>;
-  return <><div className="toolbar"><div className="spacer"/><button className="btn btn-sm btn-primary" onClick={() => edit(null)}>Add upstream</button></div><Card><div className="table-wrap"><table className="data responsive-table upstreams-table"><thead><tr><th>URL</th><th>Bootstrap</th><th>Domains</th><th>Queries</th><th>Avg latency</th><th>Last</th><th>Actions</th></tr></thead><tbody>{rows.map((row) => <tr key={row.url}><td data-label="URL" className="mono">{row.url}</td><td data-label="Bootstrap" className="mono faint">{row.bootstrap || "—"}</td><td data-label="Domains">{row.domains?.length ? row.domains.map((domain) => <Tag key={domain}>{domain}</Tag>) : <span className="faint">all</span>}</td><td data-label="Queries" className="num">{fmtNum(row.queries)}</td><td data-label="Avg latency" className="num">{fmtLatency(row.average_latency_ms)}</td><td data-label="Last" className="faint nowrap">{row.last_queried_at ? timeAgo(row.last_queried_at) : "—"}</td><td data-label="Actions"><div className="row-actions"><button className="btn btn-sm btn-ghost" onClick={() => edit(row)}>Edit</button><button className="btn btn-sm btn-danger-ghost" onClick={() => remove(row)}>Delete</button></div></td></tr>)}{!rows.length && <tr className="empty-row"><td colSpan="7"><Empty>No upstreams.</Empty></td></tr>}</tbody></table></div></Card></>;
+  return <>
+    <div className="toolbar"><div className="spacer"/><button className="btn btn-sm btn-primary" onClick={() => edit(null)}>Add upstream</button></div>
+    <Card><div className="table-wrap"><table className="data responsive-table upstreams-table">
+      <thead><tr><th>URL</th><th>Status</th><th>Bootstrap</th><th>Domains</th><th>Queries</th><th>Avg latency</th><th>Last</th><th>Actions</th></tr></thead>
+      <tbody>{rows.map((row) => <tr key={row.url}>
+        <td data-label="URL" className="mono">{row.url}</td>
+        <td data-label="Status"><Pill color={row.disabled ? "gray" : "green"}>{row.disabled ? "Disabled" : "Enabled"}</Pill></td>
+        <td data-label="Bootstrap" className="mono faint">{row.bootstrap || "-"}</td>
+        <td data-label="Domains">{row.domains?.length ? row.domains.map((domain) => <Tag key={domain}>{domain}</Tag>) : <span className="faint">all</span>}</td>
+        <td data-label="Queries" className="num">{fmtNum(row.queries)}</td>
+        <td data-label="Avg latency" className="num">{fmtLatency(row.average_latency_ms)}</td>
+        <td data-label="Last" className="faint nowrap">{row.last_queried_at ? timeAgo(row.last_queried_at) : "-"}</td>
+        <td data-label="Actions"><div className="row-actions">
+          <button className="btn btn-sm btn-ghost" disabled={toggling !== null} aria-label={`${row.disabled ? "Enable" : "Disable"} ${row.url}`} onClick={() => toggle(row)}>{row.disabled ? "Enable" : "Disable"}</button>
+          <button className="btn btn-sm btn-ghost" onClick={() => edit(row)}>Edit</button>
+          <button className="btn btn-sm btn-danger-ghost" onClick={() => remove(row)}>Delete</button>
+        </div></td>
+      </tr>)}{!rows.length && <tr className="empty-row"><td colSpan="8"><Empty>No upstreams.</Empty></td></tr>}</tbody>
+    </table></div></Card>
+  </>;
 }
 
 function Cache() {
