@@ -22,6 +22,7 @@ type upstreamStats struct {
 	URL               string   `json:"url"`
 	Bootstrap         string   `json:"bootstrap,omitempty"`
 	Queries           int64    `json:"queries"`
+	Errors            int64    `json:"errors"`
 	AverageLatency    int64    `json:"average_latency_ms"`
 	LastLatency       int64    `json:"last_latency_ms"`
 	LastQueriedAt     string   `json:"last_queried_at,omitempty"`
@@ -33,6 +34,7 @@ type upstreamStats struct {
 type upstreamRow struct {
 	URL               string    `json:"url" yaml:"url"`
 	Queries           int64     `json:"queries" yaml:"queries"`
+	Errors            int64     `json:"errors" yaml:"errors"`
 	AverageLatency    latencyMS `json:"average_latency_ms" yaml:"average_latency_ms"`
 	LastLatency       latencyMS `json:"last_latency_ms" yaml:"last_latency_ms"`
 	Bootstrap         string    `json:"bootstrap,omitempty" yaml:"bootstrap,omitempty"`
@@ -291,8 +293,8 @@ func writeUpstreams(w io.Writer, upstreams []upstreamStats, flags listFlags) err
 		flags.output = ""
 	}
 	printer, err := klo.PrinterFromFlag(flags.output, &klo.Specs{
-		DefaultColumnSpec: "UPSTREAM:{.URL},DISABLED:{.Disabled},QUERIES:{.Queries},AVG-LATENCY:{.AverageLatency}",
-		WideColumnSpec:    "UPSTREAM:{.URL},DISABLED:{.Disabled},QUERIES:{.Queries},AVG-LATENCY:{.AverageLatency},LAST-LATENCY:{.LastLatency},BOOTSTRAP:{.Bootstrap},LAST-QUERIED:{.LastQueriedAt},LAST-DOMAIN:{.LastQueriedDomain},DOMAINS:{.Domains}",
+		DefaultColumnSpec: "UPSTREAM:{.URL},DISABLED:{.Disabled},QUERIES:{.Queries},ERRORS:{.Errors},AVG-LATENCY:{.AverageLatency}",
+		WideColumnSpec:    "UPSTREAM:{.URL},DISABLED:{.Disabled},QUERIES:{.Queries},ERRORS:{.Errors},AVG-LATENCY:{.AverageLatency},LAST-LATENCY:{.LastLatency},BOOTSTRAP:{.Bootstrap},LAST-QUERIED:{.LastQueriedAt},LAST-DOMAIN:{.LastQueriedDomain},DOMAINS:{.Domains}",
 		GoTemplateArg:     flags.template,
 	})
 	if err != nil {
@@ -312,6 +314,7 @@ func upstreamRows(upstreams []upstreamStats) []upstreamRow {
 			URL:               upstream.URL,
 			Disabled:          upstream.Disabled,
 			Queries:           upstream.Queries,
+			Errors:            upstream.Errors,
 			AverageLatency:    latencyMS(upstream.AverageLatency),
 			LastLatency:       latencyMS(upstream.LastLatency),
 			Bootstrap:         formatOptional(upstream.Bootstrap),

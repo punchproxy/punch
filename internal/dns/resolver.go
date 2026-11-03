@@ -3,6 +3,7 @@ package dns
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"math/rand"
@@ -20,6 +21,7 @@ type UpstreamStats struct {
 	URL               string   `json:"url"`
 	Bootstrap         string   `json:"bootstrap,omitempty"`
 	Queries           int64    `json:"queries"`
+	Errors            int64    `json:"errors"`
 	AverageLatency    int64    `json:"average_latency_ms"`
 	LastLatency       int64    `json:"last_latency_ms"`
 	LastQueriedAt     string   `json:"last_queried_at,omitempty"`
@@ -40,6 +42,7 @@ type UpstreamResolver struct {
 	cache     *Cache
 
 	queries           atomic.Int64
+	errors            atomic.Int64
 	totalLatency      atomic.Int64
 	lastLatency       atomic.Int64
 	lastQueriedAt     atomic.Int64
@@ -108,6 +111,14 @@ func (u *UpstreamResolver) Resolve(ctx context.Context, msg *dns.Msg) (*dns.Msg,
 	} else {
 		resp, err = u.resolveUDP(ctx, msg)
 	}
+	if err != nil {
+		// Other upstreams are canceled once the group accepts a response.
+		if !errors.Is(err, context.Canceled) && ctx.Err() != context.Canceled {
+			u.errors.Add(1)
+		}
+	} else if resp != nil && resp.Rcode != dns.RcodeSuccess && resp.Rcode != dns.RcodeNameError {
+		u.errors.Add(1)
+	}
 	return resp, time.Since(start), err
 }
 
@@ -144,6 +155,7 @@ func (u *UpstreamResolver) Stats() UpstreamStats {
 		URL:               u.url,
 		Bootstrap:         u.bootstrap,
 		Queries:           queries,
+		Errors:            u.errors.Load(),
 		AverageLatency:    average,
 		LastLatency:       u.lastLatency.Load(),
 		LastQueriedAt:     lastQueriedAt,

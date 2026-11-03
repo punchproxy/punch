@@ -186,6 +186,11 @@ punchctl dns cache flush
 punchctl dns fakeips       # see allocated fake IPs
 ```
 
+`punchctl dns upstreams` shows accepted replies in `QUERIES` and failed
+requests or DNS error replies in `ERRORS`. Timeouts count as errors; normal
+`NXDOMAIN` replies and canceled requests do not. These counters reset when
+the daemon restarts or the upstream configuration changes.
+
 Disable an upstream while keeping its settings, then enable it again:
 
 ```sh

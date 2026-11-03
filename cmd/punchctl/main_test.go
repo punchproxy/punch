@@ -26,6 +26,7 @@ func TestDNSUpstreamsCommand(t *testing.T) {
 			URL:            "https://dns.example/dns-query",
 			Disabled:       true,
 			Queries:        12,
+			Errors:         7,
 			AverageLatency: 34,
 			LastLatency:    56,
 			LastQueriedAt:  "2026-04-28T12:34:56Z",
@@ -48,7 +49,7 @@ func TestDNSUpstreamsCommand(t *testing.T) {
 		t.Fatalf("Authorization = %q, want Bearer secret", gotAuth)
 	}
 	text := out.String()
-	for _, want := range []string{"UPSTREAM", "DISABLED", "true", "QUERIES", "AVG-LATENCY", "https://dns.example/dns-query", "12", "34ms"} {
+	for _, want := range []string{"UPSTREAM", "DISABLED", "true", "QUERIES", "ERRORS", "AVG-LATENCY", "https://dns.example/dns-query", "12", "7", "34ms"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("output missing %q:\n%s", want, text)
 		}
@@ -289,6 +290,7 @@ func TestDNSUpstreamsCommandJSONOutput(t *testing.T) {
 		_ = json.NewEncoder(w).Encode([]upstreamStats{{
 			URL:            "https://dns.example/dns-query",
 			Queries:        12,
+			Errors:         7,
 			AverageLatency: 34,
 			LastLatency:    56,
 			LastQueriedAt:  "2026-04-28T12:34:56Z",
@@ -308,7 +310,7 @@ func TestDNSUpstreamsCommandJSONOutput(t *testing.T) {
 		t.Fatalf("Execute() error = %v", err)
 	}
 	text := out.String()
-	for _, want := range []string{`"url"`, `"queries"`, `"average_latency_ms"`, `34`, `56`} {
+	for _, want := range []string{`"url"`, `"queries"`, `"errors": 7`, `"average_latency_ms"`, `34`, `56`} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("json output missing %q:\n%s", want, text)
 		}
